@@ -1,0 +1,64 @@
+name: Deploy GENESIS Core Banking diagnostic API
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: genesis-core-banking-development
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: development
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Install application dependencies
+        run: npm install --omit=dev --no-audit --no-fund
+
+      - name: Verify Node.js syntax
+        run: node --check server.js
+
+      - name: Smoke-test diagnostic health endpoint
+        shell: bash
+        run: |
+          PORT=8080 npm start > /tmp/genesis-start.log 2>&1 &
+          APP_PID=$!
+          trap 'kill $APP_PID 2>/dev/null || true' EXIT
+          for i in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:8080/healthz > /tmp/genesis-health.json; then
+              cat /tmp/genesis-health.json
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/genesis-start.log
+          exit 1
+
+      - name: Authenticate to Azure with GitHub OIDC
+        uses: azure/login@v2
+        with:
+          client-id: aab5c083-8b0a-408b-aef7-89611822d66c
+          tenant-id: 12f3ab80-cea3-41dd-bdee-47c009cbc960
+          subscription-id: 24a900e4-ee6b-42c0-87c7-e3425bd74cf8
+
+      - name: Deploy to GENESIS banking development App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: genesis-core-banking-app
+          package: .
