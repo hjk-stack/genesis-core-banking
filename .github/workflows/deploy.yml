@@ -14,8 +14,7 @@ concurrency:
 
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest
-    environment: development
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write
       contents: read
