@@ -33,6 +33,9 @@ jobs:
       - name: Verify Node.js syntax
         run: node --check server.js
 
+      - name: Test financial domain invariants
+        run: npm test
+
       - name: Smoke-test diagnostic health endpoint
         shell: bash
         run: |
