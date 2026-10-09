@@ -1,0 +1,12 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {validateOrder,validateDerivative}=require('../src/markets');
+const {validateAsset,validateTransfer}=require('../src/crypto');
+const {validateVenueConfig,DisabledExchangeAdapter}=require('../src/exchange-adapter');
+const id='123e4567-e89b-12d3-a456-426614174000';
+const o={custodyAccountId:id,assetClass:'equity',venue:'VENUE_TEST',instrument:'STOCK_TEST',side:'buy',type:'limit',quantityAtomic:'10',priceAtomic:'200',clientOrderId:'ORDER_000001'};
+const policy={maxNotionalAtomic:'2000',venueApproved:true,instrumentApproved:true,customerApproved:true};
+test('equity order draft risk checks',()=>{assert.equal(validateOrder(o,policy),true);assert.throws(()=>validateOrder(o,{...policy,maxNotionalAtomic:'1999'}),/RISK_NOTIONAL_LIMIT/);assert.throws(()=>validateOrder({...o,assetClass:'option'},policy),/DERIVATIVES_NOT_AUTHORIZED/)});
+test('derivative contract formats',()=>{assert.equal(validateDerivative({custodyAccountId:id,kind:'option',underlying:'STOCK_TEST',contractReference:'OPT-001',settlementAsset:'USD',expiryDate:'2028-12-31',optionRight:'call'}),true)});
+test('crypto draft safety checks',()=>{assert.equal(validateAsset({network:'ethereum',symbol:'ETH',decimals:18}),true);assert.equal(validateTransfer({custodyAccountId:id,network:'ethereum',symbol:'ETH',decimals:18,amountAtomic:'100',address:'0x0000000000000000000000000000000000000001',idempotencyKey:'TRANSFER_001'}),true);assert.throws(()=>validateAsset({network:'ethereum',symbol:'ETH',decimals:31}),/INVALID_ASSET/)});
+test('exchange routing disabled',async()=>{assert.equal(validateVenueConfig({venue:'VENUE_TEST',protocol:'FIX'}).enabled,false);assert.throws(()=>validateVenueConfig({venue:'VENUE_TEST',protocol:'FIX',enabled:true}),/LIVE_ROUTING_DISABLED/);await assert.rejects(new DisabledExchangeAdapter({venue:'VENUE_TEST',protocol:'FIX'}).submitOrder(),/LIVE_ROUTING_DISABLED/)});
