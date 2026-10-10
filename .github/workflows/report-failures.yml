@@ -1,0 +1,59 @@
+name: Report GENESIS deployment failures
+
+on:
+  workflow_run:
+    workflows:
+      - Deploy GENESIS Core Banking diagnostic API
+    types: [completed]
+
+permissions:
+  actions: read
+  issues: write
+  contents: read
+
+jobs:
+  report:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create failure tracking issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const { data } = await github.rest.actions.listJobsForWorkflowRun({
+              owner, repo, run_id: run.id, per_page: 100
+            });
+            const failed = data.jobs.filter(j => j.conclusion === 'failure');
+            const jobs = failed.map(j => {
+              const steps = j.steps.filter(s => s.conclusion === 'failure')
+                .map(s => '- ' + s.name).join('\n') || '- Unknown failed step';
+              return '**' + j.name + '**\n' + steps + '\n' + j.html_url;
+            }).join('\n\n') || 'No failed job details available';
+            const title = '[GENESIS CI] Deployment failure tracking';
+            const body = [
+              'Automatic deployment-failure report for GENESIS Core Banking.',
+              '',
+              'Workflow run: ' + run.html_url,
+              'Commit: ' + run.head_sha,
+              'Conclusion: ' + run.conclusion,
+              '',
+              'Failed jobs and steps:',
+              jobs,
+              '',
+              'Do not bypass financial-domain tests or security gates.',
+              'This reporting workflow never changes code, deploys applications or handles live transactions.'
+            ].join('\n');
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', per_page: 100
+            });
+            const existing = issues.find(i => i.title === title && !i.pull_request);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: existing.number, body
+              });
+            } else {
+              await github.rest.issues.create({ owner, repo, title, body });
+            }
