@@ -81,7 +81,7 @@ if ! az postgres flexible-server show -g "$RG" -n "$PG_SERVER" --query name -o t
   for version in 17 16; do
     if az postgres flexible-server create -g "$RG" -n "$PG_SERVER" -l "$LOCATION" --version "$version" \
         --tier Burstable --sku-name Standard_B1ms --storage-size 32 --backup-retention 7 \
-        --high-availability Disabled --admin-user "$PG_ADMIN" --admin-password "$DB_PASSWORD" \
+        --admin-user "$PG_ADMIN" --admin-password "$DB_PASSWORD" \
         --public-access 0.0.0.0 --yes -o none; then
       created=true; break
     fi
@@ -92,11 +92,11 @@ elif [ "$SET_DB_PASSWORD" = true ]; then
   az postgres flexible-server update -g "$RG" -n "$PG_SERVER" --admin-password "$DB_PASSWORD" -o none
 fi
 # Azure services only (0.0.0.0); TLS stays mandatory (require_secure_transport default on).
-az postgres flexible-server firewall-rule create -g "$RG" -n "$PG_SERVER" --rule-name AllowAzureServices \
+az postgres flexible-server firewall-rule create -g "$RG" -s "$PG_SERVER" -n AllowAzureServices \
   --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0 -o none
 for db in fineract_tenants fineract_default; do
-  if ! az postgres flexible-server db show -g "$RG" -s "$PG_SERVER" -d "$db" --query name -o tsv >/dev/null 2>&1; then
-    az postgres flexible-server db create -g "$RG" -s "$PG_SERVER" -d "$db" -o none
+  if ! az postgres flexible-server db show -g "$RG" -s "$PG_SERVER" -n "$db" --query name -o tsv >/dev/null 2>&1; then
+    az postgres flexible-server db create -g "$RG" -s "$PG_SERVER" -n "$db" -o none
   fi
 done
 export PG_HOST
