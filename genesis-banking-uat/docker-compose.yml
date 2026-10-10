@@ -1,0 +1,18 @@
+services:
+  tiles:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./portal:/usr/share/nginx/html:ro
+    ports:
+      - '127.0.0.1:8088:80'
+    restart: unless-stopped
+  iso-sandbox:
+    build: ./gateway
+    ports:
+      - '127.0.0.1:8090:8090'
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
