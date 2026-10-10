@@ -4,6 +4,9 @@
 #   - genesis-mifos-uat        Mifos X web app + same-origin proxy to Fineract (only public endpoint)
 #   - genesis-iso-sandbox-uat  ISO 20022 syntax-check gateway, internal ingress only
 #   - a dedicated PostgreSQL Flexible Server for the Fineract UAT tenant
+#   - genesis-fineract-migrate  Container Apps job running Fineract's database migrations
+#     (liquibase-only profile) with no health probes, so a long first migration is
+#     never killed half-way; the app itself starts with migrations disabled.
 #
 # Idempotent: every run creates what is missing and updates what exists.
 # Passwords are generated here, held only as Container App secrets and never
@@ -12,21 +15,39 @@
 #
 # Required env: RG, ENV_NAME, ACR_NAME, PG_SERVER, FINERACT_IMAGE, MIFOS_IMAGE,
 # GATEWAY_IMAGE (images already pushed to the registry). Optional: ALLOWED_IPS
-# (comma-separated CIDRs that keep the web app restricted after setup).
+# (comma-separated CIDRs that keep the web app restricted after setup),
+# RESET_FINERACT_DB=true (drop and recreate the UAT Fineract databases first).
 set -euo pipefail
 
 FINERACT_APP=genesis-fineract-uat
+MIGRATE_JOB=genesis-fineract-migrate
 MIFOS_APP=genesis-mifos-uat
 GATEWAY_APP=genesis-iso-sandbox-uat
 PULL_IDENTITY=genesis-banking-uat-pull
 PG_ADMIN=genesisadmin
+PG_RUNNER_RULE=deploy-runner
 TENANT_TIMEZONE=${TENANT_TIMEZONE:-Europe/Vienna}
 WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
+PG_RULE_ADDED=false
+cleanup() {
+  rm -rf "$WORK"
+  if [ "$PG_RULE_ADDED" = true ]; then
+    az postgres flexible-server firewall-rule delete -g "$RG" -s "$PG_SERVER" -n "$PG_RUNNER_RULE" --yes -o none || true
+  fi
+}
+trap cleanup EXIT
 
 log() { printf '\n==> %s\n' "$*"; }
 exists() { az containerapp show -g "$RG" -n "$1" --query name -o tsv >/dev/null 2>&1; }
+job_exists() { az containerapp job show -g "$RG" -n "$1" --query name -o tsv >/dev/null 2>&1; }
 secret_value() { az containerapp secret show -g "$RG" -n "$1" --secret-name "$2" --query value -o tsv 2>/dev/null || true; }
+# Fineract secrets live on the app and on the migration job, so either one can be recreated.
+fineract_secret() {
+  local v
+  v=$(secret_value "$FINERACT_APP" "$1")
+  [ -n "$v" ] || v=$(az containerapp job secret show -g "$RG" -n "$MIGRATE_JOB" --secret-name "$1" --query value -o tsv 2>/dev/null || true)
+  printf '%s' "$v"
+}
 # Upper, lower and digit guaranteed; 34 characters; no shell or URL special characters.
 new_password() { printf 'G%sa7' "$(openssl rand -base64 64 | tr -dc 'A-Za-z0-9' | head -c 32)"; }
 
@@ -67,8 +88,8 @@ MIFOS_FQDN="$MIFOS_APP.$ENV_DOMAIN"
 
 # ------------------------------------------------------------- PostgreSQL
 export DB_PASSWORD MASTER_PASSWORD
-DB_PASSWORD=$(secret_value "$FINERACT_APP" db-password)
-MASTER_PASSWORD=$(secret_value "$FINERACT_APP" master-password)
+DB_PASSWORD=$(fineract_secret db-password)
+MASTER_PASSWORD=$(fineract_secret master-password)
 SET_DB_PASSWORD=false
 if [ -z "$DB_PASSWORD" ]; then DB_PASSWORD=$(new_password); SET_DB_PASSWORD=true; fi
 if [ -z "$MASTER_PASSWORD" ]; then MASTER_PASSWORD=$(new_password); fi
@@ -104,9 +125,9 @@ PG_HOST=$(az postgres flexible-server show -g "$RG" -n "$PG_SERVER" --query full
 
 # ------------------------------------------------------------ app manifests
 export LOCATION ENV_ID LOGIN_SERVER PULL_ID REGISTRY_MODE PG_ADMIN TENANT_TIMEZONE MIFOS_FQDN
-export FINERACT_APP MIFOS_APP GATEWAY_APP FINERACT_IMAGE MIFOS_IMAGE GATEWAY_IMAGE
+export FINERACT_APP MIGRATE_JOB MIFOS_APP GATEWAY_APP FINERACT_IMAGE MIFOS_IMAGE GATEWAY_IMAGE
 
-# render <app> <file> [runner-ip]: writes the Container App manifest for one app.
+# render <app|job> <file> [runner-ip]: writes the Container Apps manifest for one app or the migration job.
 render() {
   python3 - "$@" <<'PY'
 import json, os, sys
@@ -127,9 +148,7 @@ def probe(kind, path, port, period, failures, delay=0):
     return {"type": kind, "httpGet": {"path": path, "port": port}, "initialDelaySeconds": delay,
             "periodSeconds": period, "failureThreshold": failures, "timeoutSeconds": 5}
 
-if app == e["FINERACT_APP"]:
-    secrets += [{"name": "db-password", "value": e["DB_PASSWORD"]},
-                {"name": "master-password", "value": e["MASTER_PASSWORD"]}]
+def fineract_env(extra):
     pg = e["PG_HOST"]
     env = {
         "FINERACT_NODE_ID": "1",
@@ -154,17 +173,45 @@ if app == e["FINERACT_APP"]:
         "FINERACT_CONTENT_FILESYSTEM_ROOT_FOLDER": "/tmp/fineract",
         "JAVA_TOOL_OPTIONS": "-XX:MaxRAMPercentage=75 -XX:+UseContainerSupport",
     }
+    env.update(extra)
     env_list = [{"name": k, "value": v} for k, v in env.items()]
     env_list += [{"name": "FINERACT_HIKARI_PASSWORD", "secretRef": "db-password"},
                  {"name": "FINERACT_DEFAULT_TENANTDB_PWD", "secretRef": "db-password"},
                  {"name": "FINERACT_DEFAULT_TENANTDB_MASTER_PASSWORD", "secretRef": "master-password"},
                  {"name": "FINERACT_DEFAULT_MASTER_PASSWORD", "secretRef": "master-password"}]
+    return env_list
+
+if app in (e["FINERACT_APP"], e["MIGRATE_JOB"]):
+    secrets += [{"name": "db-password", "value": e["DB_PASSWORD"]},
+                {"name": "master-password", "value": e["MASTER_PASSWORD"]}]
+
+if app == e["MIGRATE_JOB"]:
+    # Runs every pending Liquibase changeset, then exits. No probes, so nothing kills it
+    # while it holds the migration lock; replicaTimeout bounds it instead.
+    container = {"name": "fineract-migrate", "image": e["FINERACT_IMAGE"],
+                 "env": fineract_env({"SPRING_PROFILES_ACTIVE": "liquibase-only"}),
+                 "resources": {"cpu": 2.0, "memory": "4Gi"}}
+    doc = {"location": e["LOCATION"],
+           "properties": {"environmentId": e["ENV_ID"],
+                          "configuration": {"triggerType": "Manual", "replicaTimeout": 5400,
+                                            "replicaRetryLimit": 0,
+                                            "manualTriggerConfig": {"parallelism": 1,
+                                                                    "replicaCompletionCount": 1},
+                                            "secrets": secrets, "registries": [registry]},
+                          "template": {"containers": [container]}}}
+    if identity:
+        doc["identity"] = identity
+    with open(out, "w") as f:
+        json.dump(doc, f, indent=2)
+    sys.exit(0)
+
+if app == e["FINERACT_APP"]:
     health = "/fineract-provider/actuator/health"
-    container = {"name": "fineract", "image": e["FINERACT_IMAGE"], "env": env_list,
+    # Migrations run in the migration job, so the app only starts against a ready schema.
+    container = {"name": "fineract", "image": e["FINERACT_IMAGE"],
+                 "env": fineract_env({"FINERACT_LIQUIBASE_ENABLED": "false"}),
                  "resources": {"cpu": 1.0, "memory": "2Gi"},
-                 # First start runs every Liquibase migration: 60 s + 10 x 90 s = ~16 minutes
-                 # (10 is the maximum failure threshold, so the period carries the window).
-                 "probes": [probe("Startup", health, 8080, 90, 10, 60),
+                 "probes": [probe("Startup", health, 8080, 30, 10, 60),
                             probe("Liveness", health + "/liveness", 8080, 30, 5),
                             probe("Readiness", health + "/readiness", 8080, 15, 3)]}
     # allowInsecure: the Mifos proxy calls http://genesis-fineract-uat inside the environment.
@@ -218,6 +265,98 @@ apply() { # apply <app> <manifest>
     az containerapp create -g "$RG" -n "$1" --yaml "$2" -o none
   fi
 }
+
+apply_job() { # apply_job <job> <manifest>
+  if job_exists "$1"; then
+    az containerapp job update -g "$RG" -n "$1" --yaml "$2" -o none
+  else
+    az containerapp job create -g "$RG" -n "$1" --yaml "$2" -o none
+  fi
+}
+
+# psql_each_db <sql>: runs one statement in both Fineract databases from this runner.
+psql_each_db() {
+  command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null; }
+  if [ "$PG_RULE_ADDED" != true ]; then
+    local ip
+    ip=$(curl -fsS https://api.ipify.org)
+    az postgres flexible-server firewall-rule create -g "$RG" -s "$PG_SERVER" -n "$PG_RUNNER_RULE" \
+      --start-ip-address "$ip" --end-ip-address "$ip" -o none
+    PG_RULE_ADDED=true
+  fi
+  local db attempt
+  for db in fineract_tenants fineract_default; do
+    for attempt in 1 2 3 4 5 6; do
+      if PGPASSWORD="$DB_PASSWORD" psql "host=$PG_HOST port=5432 dbname=$db user=$PG_ADMIN sslmode=require connect_timeout=20" \
+          -v ON_ERROR_STOP=1 -qAt -c "$1"; then
+        break
+      fi
+      [ "$attempt" = 6 ] && { echo "::error::Could not reach $db from the runner."; exit 1; }
+      sleep 10   # firewall rule propagation
+    done
+  done
+}
+
+# Executions still Running or Processing (anything not yet terminal) may be migrating.
+active_migrations() {
+  job_exists "$MIGRATE_JOB" || { echo 0; return; }
+  az containerapp job execution list -g "$RG" -n "$MIGRATE_JOB" \
+    --query "length([?properties.status=='Running' || properties.status=='Processing'])" -o tsv
+}
+require_no_active_migration() {
+  if [ "$(active_migrations)" != 0 ]; then
+    echo "::error::A Fineract migration execution is still active (for example from a cancelled run); not touching the databases. Rerun once it has finished."
+    exit 1
+  fi
+}
+
+# Checked before any database change (reset, lock release or a new migration).
+require_no_active_migration
+
+if [ "${RESET_FINERACT_DB:-false}" = true ]; then
+  log "Resetting the UAT Fineract databases (requested)"
+  exists "$FINERACT_APP" && az containerapp delete -g "$RG" -n "$FINERACT_APP" --yes -o none
+  for db in fineract_tenants fineract_default; do
+    az postgres flexible-server db delete -g "$RG" -s "$PG_SERVER" -n "$db" --yes -o none || true
+    az postgres flexible-server db create -g "$RG" -s "$PG_SERVER" -n "$db" -o none
+  done
+  # A fresh database brings back the seed administrator, so lock the web app again.
+  az containerapp secret remove -g "$RG" -n "$MIFOS_APP" --secret-names admin-rotated -o none 2>/dev/null || true
+fi
+
+log "Fineract database migrations ($MIGRATE_JOB)"
+render "$MIGRATE_JOB" "$WORK/migrate.yaml"
+apply_job "$MIGRATE_JOB" "$WORK/migrate.yaml"
+# An app from an earlier version of this script migrates on its own start and can be killed
+# by its health probes while holding the migration lock; replace it with the migration-free app.
+if exists "$FINERACT_APP" && [ "$(az containerapp show -g "$RG" -n "$FINERACT_APP" \
+    --query "properties.template.containers[0].env[?name=='FINERACT_LIQUIBASE_ENABLED'].value | [0]" -o tsv)" != false ]; then
+  echo "Removing the self-migrating Fineract app; it is recreated after the migration."
+  az containerapp delete -g "$RG" -n "$FINERACT_APP" --yes -o none
+fi
+require_no_active_migration
+# Nothing can hold the lock legitimately now: release one left by a killed migration.
+psql_each_db "DO \$\$ BEGIN IF to_regclass('public.databasechangeloglock') IS NOT NULL THEN
+  UPDATE databasechangeloglock SET locked = false, lockgranted = NULL, lockedby = NULL WHERE locked; END IF; END \$\$;"
+EXECUTION=$(az containerapp job start -g "$RG" -n "$MIGRATE_JOB" --query name -o tsv)
+echo "Started migration execution $EXECUTION"
+status=""
+for _ in $(seq 1 180); do
+  status=$(az containerapp job execution show -g "$RG" -n "$MIGRATE_JOB" --job-execution-name "$EXECUTION" \
+    --query properties.status -o tsv 2>/dev/null || true)
+  case "$status" in
+    Succeeded) break ;;
+    Failed|Stopped|Degraded) break ;;
+  esac
+  sleep 30
+done
+if [ "$status" != Succeeded ]; then
+  echo "::error::Fineract migration ended with status '${status:-unknown}'."
+  az containerapp job logs show -g "$RG" -n "$MIGRATE_JOB" --execution "$EXECUTION" \
+    --container fineract-migrate --tail 300 --format text 2>/dev/null | tail -300 || true
+  exit 1
+fi
+echo "Migrations finished."
 
 log "Fineract ($FINERACT_IMAGE)"
 render "$FINERACT_APP" "$WORK/fineract.yaml"
