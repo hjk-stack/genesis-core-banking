@@ -224,7 +224,7 @@ if app == e["FINERACT_APP"]:
     ingress = {"external": False, "targetPort": 8080, "transport": "http", "allowInsecure": True}
 elif app == e["MIFOS_APP"]:
     url = "https://" + e["MIFOS_FQDN"]
-    env_list = [{"name": "FINERACT_UPSTREAM", "value": "http://" + e["FINERACT_APP"]},
+    env_list = [{"name": "FINERACT_UPSTREAM", "value": "http://" + e["FINERACT_FQDN"]},
                 {"name": "FINERACT_API_URLS", "value": url},
                 {"name": "FINERACT_API_URL", "value": url}]
     container = {"name": "mifos", "image": e["MIFOS_IMAGE"], "env": env_list,
@@ -367,6 +367,11 @@ echo "Migrations finished."
 log "Fineract ($FINERACT_IMAGE)"
 render "$FINERACT_APP" "$WORK/fineract.yaml"
 apply "$FINERACT_APP" "$WORK/fineract.yaml"
+# The web app proxies to Fineract's environment-internal FQDN rather than the bare app name.
+FINERACT_FQDN=$(az containerapp show -g "$RG" -n "$FINERACT_APP" --query properties.configuration.ingress.fqdn -o tsv)
+[ -n "$FINERACT_FQDN" ] || { echo "::error::Fineract has no internal ingress address."; exit 1; }
+export FINERACT_FQDN
+echo "Fineract internal address: $FINERACT_FQDN"
 
 log "ISO 20022 sandbox gateway ($GATEWAY_IMAGE)"
 render "$GATEWAY_APP" "$WORK/gateway.yaml"
@@ -397,14 +402,28 @@ apply "$MIFOS_APP" "$WORK/mifos.yaml"
 BASE="https://$MIFOS_FQDN/fineract-provider"
 log "Waiting for Fineract behind $BASE (first start runs all database migrations)"
 up=false
-for _ in $(seq 1 80); do
-  health=$(curl -fsS -m 10 "$BASE/actuator/health" 2>/dev/null || true)
-  if grep -q '"status":"UP"' <<<"$health"; then up=true; break; fi
+code=""
+for attempt in $(seq 1 80); do
+  code=$(curl -sS -o "$WORK/health.out" -w '%{http_code}' -m 10 "$BASE/actuator/health" 2>"$WORK/health.err" || true)
+  health=$(cat "$WORK/health.out" 2>/dev/null || true)
+  if [ "$code" = 200 ] && grep -q '"status":"UP"' <<<"$health"; then up=true; break; fi
+  # Every 2 minutes, show what the web app actually answers.
+  if [ $((attempt % 8)) = 1 ]; then
+    echo "Not up yet: HTTP ${code:-none} $(head -c 200 "$WORK/health.out" 2>/dev/null) $(head -c 200 "$WORK/health.err")"
+  fi
   sleep 15
 done
 if [ "$up" != true ]; then
-  echo "::error::Fineract did not report UP within 20 minutes."
-  az containerapp logs show -g "$RG" -n "$FINERACT_APP" --tail 200 --format text 2>/dev/null | tail -200 || true
+  echo "::error::Fineract did not report UP through the web app within 20 minutes (last answer: HTTP ${code:-none})."
+  for app in "$FINERACT_APP" "$MIFOS_APP"; do
+    echo "--- $app revisions"
+    az containerapp revision list -g "$RG" -n "$app" \
+      --query '[].{revision:name,active:properties.active,running:properties.runningState,health:properties.healthState,replicas:properties.replicas}' -o table || true
+  done
+  echo "--- $MIFOS_APP log (nginx)"
+  az containerapp logs show -g "$RG" -n "$MIFOS_APP" --tail 60 --format text 2>/dev/null | tail -60 || true
+  echo "--- $FINERACT_APP log"
+  az containerapp logs show -g "$RG" -n "$FINERACT_APP" --tail 60 --format text 2>/dev/null | tail -60 || true
   exit 1
 fi
 
@@ -460,7 +479,7 @@ done
   echo "| Component | Address | Access |"
   echo "|---|---|---|"
   echo "| Mifos X web app | https://$MIFOS_FQDN | public, Fineract sign-in (user \`mifos\`, tenant \`default\`) |"
-  echo "| Apache Fineract 1.15.0 API | http://$FINERACT_APP (inside environment) | internal only, proxied by the web app |"
+  echo "| Apache Fineract 1.15.0 API | http://$FINERACT_FQDN (inside environment) | internal only, proxied by the web app |"
   echo "| ISO 20022 sandbox gateway | http://$GATEWAY_APP (inside environment) | internal only |"
   echo "| PostgreSQL | $PG_HOST | Azure services only, TLS required |"
   echo ""
