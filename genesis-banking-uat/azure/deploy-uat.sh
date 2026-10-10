@@ -297,6 +297,22 @@ psql_each_db() {
   done
 }
 
+# Executions still Running or Processing (anything not yet terminal) may be migrating.
+active_migrations() {
+  job_exists "$MIGRATE_JOB" || { echo 0; return; }
+  az containerapp job execution list -g "$RG" -n "$MIGRATE_JOB" \
+    --query "length([?properties.status=='Running' || properties.status=='Processing'])" -o tsv
+}
+require_no_active_migration() {
+  if [ "$(active_migrations)" != 0 ]; then
+    echo "::error::A Fineract migration execution is still active (for example from a cancelled run); not touching the databases. Rerun once it has finished."
+    exit 1
+  fi
+}
+
+# Checked before any database change (reset, lock release or a new migration).
+require_no_active_migration
+
 if [ "${RESET_FINERACT_DB:-false}" = true ]; then
   log "Resetting the UAT Fineract databases (requested)"
   exists "$FINERACT_APP" && az containerapp delete -g "$RG" -n "$FINERACT_APP" --yes -o none
@@ -318,12 +334,7 @@ if exists "$FINERACT_APP" && [ "$(az containerapp show -g "$RG" -n "$FINERACT_AP
   echo "Removing the self-migrating Fineract app; it is recreated after the migration."
   az containerapp delete -g "$RG" -n "$FINERACT_APP" --yes -o none
 fi
-running=$(az containerapp job execution list -g "$RG" -n "$MIGRATE_JOB" \
-  --query "length([?properties.status=='Running'])" -o tsv)
-if [ "$running" != 0 ]; then
-  echo "::error::A migration execution is already running; not starting a second one."
-  exit 1
-fi
+require_no_active_migration
 # Nothing can hold the lock legitimately now: release one left by a killed migration.
 psql_each_db "DO \$\$ BEGIN IF to_regclass('public.databasechangeloglock') IS NOT NULL THEN
   UPDATE databasechangeloglock SET locked = false, lockgranted = NULL, lockedby = NULL WHERE locked; END IF; END \$\$;"
