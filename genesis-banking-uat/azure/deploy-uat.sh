@@ -162,8 +162,9 @@ if app == e["FINERACT_APP"]:
     health = "/fineract-provider/actuator/health"
     container = {"name": "fineract", "image": e["FINERACT_IMAGE"], "env": env_list,
                  "resources": {"cpu": 1.0, "memory": "2Gi"},
-                 # First start runs every Liquibase migration: allow up to ~11 minutes.
-                 "probes": [probe("Startup", health, 8080, 60, 10, 60),
+                 # First start runs every Liquibase migration: 60 s + 10 x 90 s = ~16 minutes
+                 # (10 is the maximum failure threshold, so the period carries the window).
+                 "probes": [probe("Startup", health, 8080, 90, 10, 60),
                             probe("Liveness", health + "/liveness", 8080, 30, 5),
                             probe("Readiness", health + "/readiness", 8080, 15, 3)]}
     # allowInsecure: the Mifos proxy calls http://genesis-fineract-uat inside the environment.
@@ -181,11 +182,13 @@ elif app == e["MIFOS_APP"]:
     secrets.append({"name": "admin-password", "value": e["ADMIN_PASSWORD"]})
     if e.get("ADMIN_ROTATED") == "yes":
         secrets.append({"name": "admin-rotated", "value": "yes"})
-    rules = []
     if runner_ip:
-        rules.append({"name": "setup-runner", "ipAddressRange": runner_ip + "/32", "action": "Allow"})
-    for i, cidr in enumerate(filter(None, (c.strip() for c in e.get("ALLOWED_IPS", "").split(",")))):
-        rules.append({"name": f"allowed-{i + 1}", "ipAddressRange": cidr, "action": "Allow"})
+        # Setup phase: nobody but this runner until the seed password is replaced.
+        rules = [{"name": "setup-runner", "ipAddressRange": runner_ip + "/32", "action": "Allow"}]
+    else:
+        cidrs = filter(None, (c.strip() for c in e.get("ALLOWED_IPS", "").split(",")))
+        rules = [{"name": f"allowed-{i + 1}", "ipAddressRange": cidr, "action": "Allow"}
+                 for i, cidr in enumerate(cidrs)]
     ingress["ipSecurityRestrictions"] = rules
 elif app == e["GATEWAY_APP"]:
     container = {"name": "iso-sandbox", "image": e["GATEWAY_IMAGE"],
@@ -231,6 +234,12 @@ ADMIN_ROTATED=$(secret_value "$MIFOS_APP" admin-rotated)
 # Stored with the app before Fineract is changed, so a failed run can always finish the rotation.
 [ -n "$ADMIN_PASSWORD" ] || ADMIN_PASSWORD=$(new_password)
 echo "::add-mask::$ADMIN_PASSWORD"
+export ALLOWED_IPS
+if [ "${ALLOWED_IPS_FROM_INPUT:-false}" != true ] && exists "$MIFOS_APP"; then
+  # No operator input on this run (e.g. a push): keep the restrictions already on the app.
+  ALLOWED_IPS=$(az containerapp show -g "$RG" -n "$MIFOS_APP" \
+    --query "join(',', properties.configuration.ingress.ipSecurityRestrictions[?name!='setup-runner'].ipAddressRange || \`[]\`)" -o tsv)
+fi
 RUNNER_IP=""
 if [ "$ADMIN_ROTATED" != yes ]; then
   # The seed administrator password may still be active: only this runner may reach the web app.
@@ -255,11 +264,14 @@ if [ "$up" != true ]; then
 fi
 
 auth() { # auth <password>: 0 when mifos/<password> signs in
-  python3 - "$1" <<'PY' | curl -sS -o /dev/null -w '%{http_code}' -m 30 -X POST "$BASE/api/v1/authentication" \
-      -H 'Content-Type: application/json' -H 'Fineract-Platform-TenantId: default' --data @- | grep -qx 200
+  local code
+  code=$(python3 - "$1" <<'PY' | curl -sS -o /dev/null -w '%{http_code}' -m 30 -X POST "$BASE/api/v1/authentication" \
+      -H 'Content-Type: application/json' -H 'Fineract-Platform-TenantId: default' --data @- || true
 import json, sys
 print(json.dumps({"username": "mifos", "password": sys.argv[1]}))
 PY
+)
+  [ "$code" = 200 ]
 }
 
 log "Fineract administrator password"
@@ -284,9 +296,11 @@ else
 fi
 
 if [ -n "$RUNNER_IP" ]; then
+  # Only now: drop the runner-only rule and apply the configured CIDRs (or none = open).
   log "Opening the web app"
-  az containerapp secret set -g "$RG" -n "$MIFOS_APP" --secrets "admin-rotated=yes" -o none
-  az containerapp ingress access-restriction remove -g "$RG" -n "$MIFOS_APP" --rule-name setup-runner -o none
+  ADMIN_ROTATED=yes
+  render "$MIFOS_APP" "$WORK/mifos.yaml"
+  apply "$MIFOS_APP" "$WORK/mifos.yaml"
 fi
 
 # ------------------------------------------------------------------ report

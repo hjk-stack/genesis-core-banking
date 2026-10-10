@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       allowed_ips:
-        description: 'Optional comma-separated CIDRs that alone may open the web app (empty = open, Fineract sign-in required)'
+        description: 'Comma-separated CIDRs that alone may open the web app; empty = open to all (Fineract sign-in required). Pushes keep the current setting.'
         required: false
         default: ''
 
@@ -152,6 +152,8 @@ jobs:
         env:
           SERVER: ${{ steps.acr.outputs.server }}
           ALLOWED_IPS: ${{ github.event.inputs.allowed_ips }}
+          # Only a manual run carries operator input; pushes keep the app's current restrictions.
+          ALLOWED_IPS_FROM_INPUT: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
           TAG="${GITHUB_SHA::12}"

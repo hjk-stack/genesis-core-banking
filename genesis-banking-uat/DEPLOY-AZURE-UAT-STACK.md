@@ -18,7 +18,7 @@ Test-only environment. No live settlement, SWIFT connectivity, card issuing or r
 
 - Pull requests: builds all three images and smoke-tests the gateway and web-app proxy. No Azure access.
 - Push to `main` touching `genesis-banking-uat/**` or the workflow, or a manual run: builds, pushes and mounts the stack. Every run is idempotent.
-- Manual runs accept `allowed_ips` (comma-separated CIDRs) to keep the web app restricted to those addresses.
+- Manual runs accept `allowed_ips` (comma-separated CIDRs) to keep the web app restricted to those addresses; an empty value opens it. Push runs keep whatever restriction the app already has. The CIDRs are applied only after the seed administrator password has been replaced.
 
 ## Secrets
 
