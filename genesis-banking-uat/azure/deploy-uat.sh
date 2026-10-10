@@ -120,6 +120,12 @@ for db in fineract_tenants fineract_default; do
     az postgres flexible-server db create -g "$RG" -s "$PG_SERVER" -n "$db" -o none
   fi
 done
+# Azure only lets users create allow-listed extensions; Fineract's migrations need uuid-ossp.
+pg_extensions=$(az postgres flexible-server parameter show -g "$RG" -s "$PG_SERVER" -n azure.extensions --query value -o tsv)
+if ! grep -qix 'uuid-ossp' <<<"${pg_extensions//,/$'\n'}"; then
+  az postgres flexible-server parameter set -g "$RG" -s "$PG_SERVER" -n azure.extensions \
+    --value "${pg_extensions:+$pg_extensions,}UUID-OSSP" -o none
+fi
 export PG_HOST
 PG_HOST=$(az postgres flexible-server show -g "$RG" -n "$PG_SERVER" --query fullyQualifiedDomainName -o tsv)
 
