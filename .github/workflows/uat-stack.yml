@@ -70,10 +70,14 @@ jobs:
           docker run -d --name mifos --network uat-smoke -p 127.0.0.1:8088:80 genesis-mifos:local
           for i in $(seq 1 20); do curl -fsS http://127.0.0.1:8088/healthz >/dev/null 2>&1 && break; sleep 1; done
           (cd genesis-banking-uat && bash smoke-test.sh)
-          curl -fsS http://127.0.0.1:8088/fineract-provider/actuator/health | grep -q '"status":"UP"'
+          # Read each body fully before matching (grep -q in a pipe trips pipefail with curl exit 23).
+          health=$(curl -fsS http://127.0.0.1:8088/fineract-provider/actuator/health)
+          grep -q '"status":"UP"' <<<"$health"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8088/fineract-provider/actuator/prometheus)" = 404
-          curl -fsS http://127.0.0.1:8088/assets/env.js | grep -q "fineractPlatformTenantId'] = 'default'"
-          curl -fsS http://127.0.0.1:8088/ | grep -qi '<html'
+          envjs=$(curl -fsS http://127.0.0.1:8088/assets/env.js)
+          grep -q "fineractPlatformTenantId'] = 'default'" <<<"$envjs"
+          index=$(curl -fsS http://127.0.0.1:8088/)
+          grep -qi '<html' <<<"$index"
 
       - name: Authenticate to Azure with GitHub OIDC
         if: github.event_name != 'pull_request'

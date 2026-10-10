@@ -244,7 +244,8 @@ BASE="https://$MIFOS_FQDN/fineract-provider"
 log "Waiting for Fineract behind $BASE (first start runs all database migrations)"
 up=false
 for _ in $(seq 1 80); do
-  if curl -fsS -m 10 "$BASE/actuator/health" 2>/dev/null | grep -q '"status":"UP"'; then up=true; break; fi
+  health=$(curl -fsS -m 10 "$BASE/actuator/health" 2>/dev/null || true)
+  if grep -q '"status":"UP"' <<<"$health"; then up=true; break; fi
   sleep 15
 done
 if [ "$up" != true ]; then
