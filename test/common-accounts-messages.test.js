@@ -34,7 +34,7 @@ test('FIN MT103 has unverified origin and no posting',()=>{
  assert.equal(m.iso20022Mapping,'pacs.008');
  assert.equal(m.settlement.currency,'EUR');assert.equal(m.settlement.amount,'1000.00');
  assert.equal(m.externalAuthenticity,'unverified');assert.equal(m.bookingState,'unposted');
- assert.throws(()=>normalizeFIN('MT103',{...fields,'32A':'261031EUR100,00'}),/INVALID_VALUE_DATE/);
+ assert.throws(()=>normalizeFIN('MT103',{...fields,'32A':'261032EUR100,00'}),/INVALID_VALUE_DATE/);
 });
 
 test('FIN MT202 COV carries related reference and does not generate a separate credit',()=>{
