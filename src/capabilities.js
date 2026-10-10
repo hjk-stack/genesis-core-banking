@@ -8,6 +8,7 @@ const modules=[
  ['stocks','Stocks and bonds','draft_only'],
  ['derivatives','Derivative trading','draft_only'],
  ['exchanges','Stock exchange connectors','disabled'],
+ ['exchange_core','GENESIS Exchange matching engine (stocks, crypto, tokens, derivatives)','uat_simulation'],
  ['crypto','Crypto and smart contracts','draft_only'],
  ['cards','Card issuance','draft_only'],
  ['acquiring','Merchant acquiring','draft_only'],
