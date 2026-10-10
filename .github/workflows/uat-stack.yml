@@ -1,0 +1,157 @@
+name: GENESIS banking UAT stack
+
+# Builds and mounts the isolated banking UAT stack into Azure Container Apps
+# (resource group genesis-banking-rg): Apache Fineract 1.15.0, the Mifos X web
+# app, the ISO 20022 sandbox gateway and a dedicated PostgreSQL server.
+# Pull requests only build and smoke-test the images; main and manual runs
+# also deploy. No live payment rails, card issuing or settlement are enabled.
+
+on:
+  pull_request:
+    paths:
+      - 'genesis-banking-uat/**'
+      - '.github/workflows/uat-stack.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'genesis-banking-uat/**'
+      - '.github/workflows/uat-stack.yml'
+  workflow_dispatch:
+    inputs:
+      allowed_ips:
+        description: 'Optional comma-separated CIDRs that alone may open the web app (empty = open, Fineract sign-in required)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: genesis-banking-uat
+  cancel-in-progress: false
+
+env:
+  FINERACT_VERSION: '1.15.0'
+  RG: genesis-banking-rg
+  ENV_NAME: genesis-banking-uat-env
+  ACR_NAME: genesisbankingacr
+  PG_SERVER: genesis-fineract-uat-24a900e4
+
+jobs:
+  uat:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build Mifos web app and ISO gateway images
+        run: |
+          docker build -t genesis-mifos:local genesis-banking-uat/mifos
+          docker build -t genesis-iso-sandbox:local genesis-banking-uat/gateway
+
+      - name: Smoke-test gateway and web-app proxy
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker network create uat-smoke
+          docker run -d --name genesis-iso-sandbox --network uat-smoke -p 127.0.0.1:8090:8090 genesis-iso-sandbox:local
+          # Stand-in for Fineract so the proxy route can be checked without a database.
+          docker run -d --name genesis-fineract-uat --network uat-smoke python:3.12-alpine \
+            python -c "from http.server import *
+          class H(BaseHTTPRequestHandler):
+              def do_GET(s):
+                  b=b'{\"status\":\"UP\"}'; s.send_response(200); s.send_header('Content-Length',str(len(b))); s.end_headers(); s.wfile.write(b)
+          HTTPServer(('0.0.0.0',80),H).serve_forever()"
+          sleep 3
+          docker run -d --name mifos --network uat-smoke -p 127.0.0.1:8088:80 genesis-mifos:local
+          for i in $(seq 1 20); do curl -fsS http://127.0.0.1:8088/healthz >/dev/null 2>&1 && break; sleep 1; done
+          (cd genesis-banking-uat && bash smoke-test.sh)
+          curl -fsS http://127.0.0.1:8088/fineract-provider/actuator/health | grep -q '"status":"UP"'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8088/fineract-provider/actuator/prometheus)" = 404
+          curl -fsS http://127.0.0.1:8088/assets/env.js | grep -q "fineractPlatformTenantId'] = 'default'"
+          curl -fsS http://127.0.0.1:8088/ | grep -qi '<html'
+
+      - name: Authenticate to Azure with GitHub OIDC
+        if: github.event_name != 'pull_request'
+        uses: azure/login@v2
+        with:
+          client-id: aab5c083-8b0a-408b-aef7-89611822d66c
+          tenant-id: 12f3ab80-cea3-41dd-bdee-47c009cbc960
+          subscription-id: 24a900e4-ee6b-42c0-87c7-e3425bd74cf8
+
+      - name: Prepare container registry
+        id: acr
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          az config set extension.use_dynamic_install=yes_without_prompt >/dev/null
+          az extension add --name containerapp --upgrade --only-show-errors
+          if ! az acr show -n "$ACR_NAME" -g "$RG" --query name -o tsv >/dev/null 2>&1; then
+            az acr create -n "$ACR_NAME" -g "$RG" --sku Basic --admin-enabled false -o none
+          fi
+          az acr login -n "$ACR_NAME"
+          echo "server=$(az acr show -n "$ACR_NAME" -g "$RG" --query loginServer -o tsv)" >> "$GITHUB_OUTPUT"
+          if az acr repository show-tags -n "$ACR_NAME" --repository fineract -o tsv 2>/dev/null | grep -qx "$FINERACT_VERSION"; then
+            echo "fineract_built=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fineract_built=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out Apache Fineract ${{ env.FINERACT_VERSION }}
+        if: github.event_name == 'pull_request' || steps.acr.outputs.fineract_built != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: apache/fineract
+          ref: ${{ env.FINERACT_VERSION }}
+          path: fineract
+
+      - name: Set up Java 21
+        if: github.event_name == 'pull_request' || steps.acr.outputs.fineract_built != 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '21'
+
+      - name: Build Fineract image from source
+        if: github.event_name == 'pull_request' || steps.acr.outputs.fineract_built != 'true'
+        working-directory: fineract
+        run: |
+          ./gradlew --no-daemon :fineract-provider:jibDockerBuild -x test
+          docker image inspect fineract:latest --format 'Built {{.Id}}'
+
+      - name: Push images
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          SERVER: ${{ steps.acr.outputs.server }}
+          FINERACT_BUILT: ${{ steps.acr.outputs.fineract_built }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_SHA::12}"
+          if [ "$FINERACT_BUILT" != true ]; then
+            docker tag fineract:latest "$SERVER/fineract:$FINERACT_VERSION"
+            docker push "$SERVER/fineract:$FINERACT_VERSION"
+          fi
+          docker tag genesis-mifos:local "$SERVER/genesis-mifos:$TAG"
+          docker tag genesis-iso-sandbox:local "$SERVER/genesis-iso-sandbox:$TAG"
+          docker push "$SERVER/genesis-mifos:$TAG"
+          docker push "$SERVER/genesis-iso-sandbox:$TAG"
+
+      - name: Mount UAT stack in Azure Container Apps
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          SERVER: ${{ steps.acr.outputs.server }}
+          ALLOWED_IPS: ${{ github.event.inputs.allowed_ips }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_SHA::12}"
+          export FINERACT_IMAGE="$SERVER/fineract:$FINERACT_VERSION"
+          export MIFOS_IMAGE="$SERVER/genesis-mifos:$TAG"
+          export GATEWAY_IMAGE="$SERVER/genesis-iso-sandbox:$TAG"
+          bash genesis-banking-uat/azure/deploy-uat.sh
