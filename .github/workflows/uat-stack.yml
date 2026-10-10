@@ -22,6 +22,11 @@ on:
         description: 'Comma-separated CIDRs that alone may open the web app; empty = open to all (Fineract sign-in required). Pushes keep the current setting.'
         required: false
         default: ''
+      reset_fineract_db:
+        description: 'Drop and recreate the UAT Fineract databases before migrating (test data is lost)'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -40,7 +45,8 @@ env:
 jobs:
   uat:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    # Fineract build (~7 min) + first migration (job allows up to 90 min) + app start.
+    timeout-minutes: 150
     permissions:
       id-token: write
       contents: read
@@ -154,6 +160,7 @@ jobs:
           ALLOWED_IPS: ${{ github.event.inputs.allowed_ips }}
           # Only a manual run carries operator input; pushes keep the app's current restrictions.
           ALLOWED_IPS_FROM_INPUT: ${{ github.event_name == 'workflow_dispatch' }}
+          RESET_FINERACT_DB: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.reset_fineract_db == 'true' }}
         run: |
           set -euo pipefail
           TAG="${GITHUB_SHA::12}"
