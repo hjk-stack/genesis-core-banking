@@ -50,12 +50,23 @@ fineract_secret() {
 }
 # Upper, lower and digit guaranteed; 34 characters; no shell or URL special characters.
 new_password() { printf 'G%sa7' "$(openssl rand -base64 64 | tr -dc 'A-Za-z0-9' | head -c 32)"; }
-# Fineract's administrator policy: 12-50 characters, upper, lower, digit, special, no space.
-admin_password() { printf '%s@' "$(new_password)"; }
+# Fineract 1.15's "strong" administrator policy (tenant changelog 0152): 12-50 characters with an
+# upper and lower case letter, a digit and a special character, no space, and no character twice
+# in a row ("aa"). A random string has such a pair about 40% of the time, so draw until one fits.
 admin_password_valid() {
   local p=$1
   [ "${#p}" -ge 12 ] && [ "${#p}" -le 50 ] && [[ $p =~ [[:upper:]] ]] && [[ $p =~ [[:lower:]] ]] &&
-    [[ $p =~ [[:digit:]] ]] && [[ $p =~ [^[:alnum:]] ]] && ! [[ $p =~ [[:space:]] ]]
+    [[ $p =~ [[:digit:]] ]] && [[ $p =~ [^[:alnum:]] ]] && ! [[ $p =~ [[:space:]] ]] &&
+    ! printf '%s' "$p" | LC_ALL=C grep -q '\(.\)\1'
+}
+admin_password() {
+  local p
+  for _ in $(seq 1 200); do
+    p="$(new_password)@"
+    if admin_password_valid "$p"; then printf '%s' "$p"; return 0; fi
+  done
+  echo "::error::Could not generate an administrator password that meets Fineract's policy." >&2
+  return 1
 }
 
 LOCATION=$(az group show -n "$RG" --query location -o tsv)
@@ -460,7 +471,10 @@ PY
     -u "mifos:password" -H 'Content-Type: application/json' -H 'Fineract-Platform-TenantId: default' \
     --data @"$WORK/pw.json")
   rm -f "$WORK/pw.json"
-  [ "$code" = 200 ] || { echo "::error::Password change returned HTTP $code: $(head -c 400 "$WORK/pw.out")"; exit 1; }
+  # Fineract's own reason in full (its validation messages never contain the password).
+  [ "$code" = 200 ] || { echo "::error::Password change returned HTTP $code: $(python3 -c 'import json,sys
+try: print("; ".join(e.get("developerMessage","") for e in json.load(open(sys.argv[1])).get("errors",[])))
+except Exception: print(open(sys.argv[1]).read()[:400])' "$WORK/pw.out")"; exit 1; }
   auth "$ADMIN_PASSWORD" || { echo "::error::New administrator password does not sign in."; exit 1; }
   echo "Seed administrator password replaced."
 else
