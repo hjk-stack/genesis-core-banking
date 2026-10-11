@@ -50,6 +50,13 @@ fineract_secret() {
 }
 # Upper, lower and digit guaranteed; 34 characters; no shell or URL special characters.
 new_password() { printf 'G%sa7' "$(openssl rand -base64 64 | tr -dc 'A-Za-z0-9' | head -c 32)"; }
+# Fineract's administrator policy: 12-50 characters, upper, lower, digit, special, no space.
+admin_password() { printf '%s@' "$(new_password)"; }
+admin_password_valid() {
+  local p=$1
+  [ "${#p}" -ge 12 ] && [ "${#p}" -le 50 ] && [[ $p =~ [[:upper:]] ]] && [[ $p =~ [[:lower:]] ]] &&
+    [[ $p =~ [[:digit:]] ]] && [[ $p =~ [^[:alnum:]] ]] && ! [[ $p =~ [[:space:]] ]]
+}
 
 LOCATION=$(az group show -n "$RG" --query location -o tsv)
 log "Resource group $RG ($LOCATION)"
@@ -382,7 +389,9 @@ export ADMIN_PASSWORD ADMIN_ROTATED
 ADMIN_PASSWORD=$(secret_value "$MIFOS_APP" admin-password)
 ADMIN_ROTATED=$(secret_value "$MIFOS_APP" admin-rotated)
 # Stored with the app before Fineract is changed, so a failed run can always finish the rotation.
-[ -n "$ADMIN_PASSWORD" ] || ADMIN_PASSWORD=$(new_password)
+# A stored password Fineract's policy rejects was never applied, so it is safe to replace.
+if [ "$ADMIN_ROTATED" != yes ] && ! admin_password_valid "$ADMIN_PASSWORD"; then ADMIN_PASSWORD=""; fi
+[ -n "$ADMIN_PASSWORD" ] || ADMIN_PASSWORD=$(admin_password)
 echo "::add-mask::$ADMIN_PASSWORD"
 export ALLOWED_IPS
 if [ "${ALLOWED_IPS_FROM_INPUT:-false}" != true ] && exists "$MIFOS_APP"; then
