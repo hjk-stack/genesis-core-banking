@@ -1,0 +1,30 @@
+name: Test GENESIS banking engineering changes
+
+on:
+  pull_request:
+  push:
+    branches:
+      - 'avis-engineer/**'
+      - 'codex/engineer-bank-ci'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+      - name: Install application dependencies
+        run: npm install --omit=dev --no-audit --no-fund
+      - name: Verify Node.js syntax
+        run: node --check server.js
+      - name: Test financial domain invariants
+        run: npm test
