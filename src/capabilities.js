@@ -3,6 +3,7 @@ const modules=[
  ['customers','Customer accounts','foundation'],
  ['ledger','Double-entry ledger','foundation'],
  ['payments','Payment instructions','draft_only'],
+ ['payment_server','Payment Server — correspondent IP-to-IP and FIN routing','adapter_required'],
  ['wallets','Banking wallets','foundation'],
  ['custody','Custodial accounts','draft_only'],
  ['stocks','Stocks and bonds','draft_only'],
