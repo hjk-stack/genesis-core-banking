@@ -5,6 +5,7 @@ const path=require('node:path');
 const {getCapabilities}=require('./src/capabilities');
 const {catalog}=require('./src/common-accounts');
 const {finTemplates}=require('./src/message-adapters');
+const {paymentServerSummary}=require('./src/payment-server');
 const port=Number(process.env.PORT||8080);
 const dashboard=path.join(__dirname,'public','dashboard.html');
 const workbench=path.join(__dirname,'public','message-workbench.html');
@@ -15,6 +16,7 @@ const server=http.createServer((req,res)=>{
  if(pathname==='/healthz')return reply(200,{service:'genesis-core-banking',status:'ok',release:'0.4.0',mode:'diagnostic-only'});
  if(pathname==='/api/capabilities')return reply(200,getCapabilities());
  if(pathname==='/api/common-accounts')return reply(200,catalog());
+ if(pathname==='/api/payment-server/status')return reply(200,paymentServerSummary());
  if(pathname==='/api/message-templates')return reply(200,{mode:'formatting_and_validation_only',financialPosting:false,templates:finTemplates()});
  if(pathname==='/api/iban-range')return reply(200,{range:'GENESIS-IBAN-BASE',capacity:100000,allocated:0,issued:0,status:'internal_reservation_schema_only',liveBankIdentifiersConfigured:false});
  if(pathname==='/message-workbench'){
