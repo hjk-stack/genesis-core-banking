@@ -11,7 +11,7 @@ const modules=[
  ['exchanges','Stock exchange connectors','disabled'],
  ['crypto','Crypto and smart contracts','draft_only'],
  ['cards','Card issuance','draft_only'],
- ['acquiring','Merchant acquiring','draft_only'],
+ ['acquiring','AVISPay own acquiring BIN/MIT + optional external processors','adapter_required'],
  ['reconciliation','Financial reconciliation','not_implemented'],
  ['common_accounts','COMMON account warehouse (20 templates)','schema_only'],
  ['suspense','Suspense accounts (120 templates)','schema_only'],
