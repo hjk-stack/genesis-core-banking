@@ -47,8 +47,8 @@ test('review validates the receiver and builds a FIN message without reserving o
 test('internal numbers autofill BIC, registered name and address and execute only at final confirmation',async()=>{
  const details=await core.checkReceiver(actor,{receiverAccount:receiver.abiqIban.slice(-12),currency:'EUR'});
  assert.equal(details.account,receiver.abiqIban);assert.equal(details.bic,'AVIPTN64XXX');assert.equal(details.receiverName,'Internal Receiver');assert.deepEqual(details.address,address);
- const before=await bal(receiver),r=await core.preparePayment(actor,input({receiverAccount:receiver.abiqIban.slice(-12),receiverBic:'',receiverName:'Wrong supplied name'}),key());
- assert.equal(r.mode,'INTERNAL');assert.equal(r.instruction.receiverName,'Internal Receiver');assert.equal(await bal(receiver),before);
+ const before=await bal(receiver),r=await core.preparePayment(actor,input({receiverAccount:receiver.abiqIban.slice(-12),receiverBic:'',receiverName:'Wrong supplied name',address:{...address,street:'Wrong supplied address'}}),key());
+ assert.equal(r.mode,'INTERNAL');assert.equal(r.instruction.receiverName,'Internal Receiver');assert.deepEqual(r.instruction.address,address);assert.equal(await bal(receiver),before);
  const result=await confirm(r);assert.equal(result.current_status,'COMPLETED');assert.equal(await bal(receiver),'12.500000000000000000');
  await confirm(r);assert.equal(await bal(receiver),'12.500000000000000000');
  assert.equal((await core.list(actor,'transferrequests')).length,0);

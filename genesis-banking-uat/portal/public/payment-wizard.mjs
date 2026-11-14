@@ -26,7 +26,7 @@ export function createPaymentWizard({api,accounts,refresh,notice}){
  }
  const values=()=>Object.fromEntries(new FormData(q('form')));
  function source(){const a=accounts().find(a=>a.abiq_iban===els().from.value);q('[data-balance]').textContent=a?`Available balance: ${amount(a.available_balance)} ${a.currency_code}`:'Select the account to display its balance.';q('[data-currency]').textContent=a?.currency_code||'';return a;}
- function resetReceiver(){lookupSeq++;receiverKey='';for(const n of ['receiverName','street','city','postalCode','country'])els()[n].value='';els().receiverName.readOnly=false;q('[data-receiver-note]').textContent='';}
+ function resetReceiver(){lookupSeq++;receiverKey='';for(const n of ['receiverName','street','city','postalCode','country']){els()[n].value='';els()[n].readOnly=false;}els().receiverName.readOnly=false;q('[data-receiver-note]').textContent='';}
  async function lookup({quiet=false}={}){
   clearTimeout(lookupTimer);
   const a=source(),v=values(),seq=++lookupSeq;
@@ -41,6 +41,7 @@ export function createPaymentWizard({api,accounts,refresh,notice}){
     for(const n of ['street','city','postalCode','country'])els()[n].value=r.address?.[n]||'';
    }
    receiverKey=key;els().receiverName.readOnly=Boolean(r.receiverBridgeId);
+   for(const n of ['street','city','postalCode','country'])els()[n].readOnly=Boolean(r.receiverBridgeId&&r.addressSource==='REGISTERED');
    q('[data-receiver-note]').textContent=r.receiverBridgeId?'Internal AVISPay account · receiver details loaded':r.receiverName?'Saved receiver details loaded':'';
    return r;
   }catch(e){if(seq===lookupSeq&&!quiet)throw e;return null;}

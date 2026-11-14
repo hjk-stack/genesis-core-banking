@@ -9,7 +9,7 @@ function setup(handler){
  dom=new JSDOM('<!doctype html><body></body>',{url:'https://bank.invalid',pretendToBeVisual:true});globalThis.document=dom.window.document;globalThis.FormData=dom.window.FormData;
  dom.window.HTMLDialogElement.prototype.showModal=function(){this.open=true;};dom.window.HTMLDialogElement.prototype.close=function(){this.open=false;};
  const calls=[],notices=[];let refreshes=0;
- wizard=createPaymentWizard({api:async(path,body,key)=>{calls.push({path,body,key});if(handler)return handler(path,body,key);if(path==='payments/check-receiver')return {account:'TN62AVIP000978000011000102',bic:'AVIPTN64XXX',receiverName:'Internal Receiver',address,receiverBridgeId:'receiver'};
+ wizard=createPaymentWizard({api:async(path,body,key)=>{calls.push({path,body,key});if(handler)return handler(path,body,key);if(path==='payments/check-receiver')return {account:'TN62AVIP000978000011000102',bic:'AVIPTN64XXX',receiverName:'Internal Receiver',address,addressSource:'REGISTERED',receiverBridgeId:'receiver'};
   if(path==='payments/review')return {id:'request',messageHash:'review-hash',message:'<message>exact</message>',format:'ISO20022',mode:'INTERNAL',instruction:body};
   if(path==='payments/transfer')return {current_status:'COMPLETED',delivery_mode:'INTERNAL'};
  },accounts:()=>[account],refresh:async()=>refreshes++,notice:s=>notices.push(s)});wizard.open();return {calls,notices,refreshes:()=>refreshes};
@@ -24,7 +24,7 @@ test('sliding popup preserves inputs, displays exact available balance and waits
  assert.match(q('[data-balance]').textContent,/1,234,567,890,123,456.12 EUR/);assert.equal(q('[data-back]').hidden,true);
  await next();assert.match(q('.payment-track').className,/step-1/);assert.equal(fields().from.value,account.abiq_iban);assert.equal(fields().amount.value,'12.50');
  fill('receiverBic','OTHERGB2LXXX');fill('receiverAccount','000011000102');assert.equal(fields().receiverBic.value,'');await next();assert.match(q('.payment-track').className,/step-2/);
- assert.equal(fields().receiverBic.value,'AVIPTN64XXX');assert.equal(fields().receiverName.value,'Internal Receiver');assert.equal(fields().receiverName.readOnly,true);assert.equal(fields().street.value,address.street);assert.equal(fields().city.value,address.city);
+ assert.equal(fields().receiverBic.value,'AVIPTN64XXX');assert.equal(fields().receiverName.value,'Internal Receiver');assert.equal(fields().receiverName.readOnly,true);assert.equal(fields().street.value,address.street);assert.equal(fields().city.value,address.city);assert.equal(fields().street.readOnly,true);assert.equal(fields().country.readOnly,true);
  back();await next();assert.equal(fields().street.value,address.street);await next();fill('reference','Invoice & parts');await next();
  assert.match(q('.payment-track').className,/step-4/);assert.equal(q('[data-message]').textContent,'<message>exact</message>');assert.equal(q('[data-next]').textContent,'Transfer');
  assert.equal(state.calls.filter(c=>c.path==='payments/transfer').length,0);
@@ -41,6 +41,6 @@ test('field errors return to their panel and prevent advancing or posting a paym
 test('double submit while lookup is in flight advances one panel only',async()=>{
  let resolve;setup(()=>new Promise(r=>resolve=r));fill('from',account.abiq_iban);fill('amount','1');await next();fill('receiverAccount','000011000102');
  const pending=next();await next();assert.equal(q('[data-next]').disabled,true);assert.equal(q('.payment-close').disabled,true);
- resolve({account:'TN62AVIP000978000011000102',bic:'AVIPTN64XXX',receiverName:'Internal Receiver',address,receiverBridgeId:'receiver'});await pending;
+ resolve({account:'TN62AVIP000978000011000102',bic:'AVIPTN64XXX',receiverName:'Internal Receiver',address,addressSource:'REGISTERED',receiverBridgeId:'receiver'});await pending;
  assert.match(q('.payment-track').className,/step-2/);assert.equal(q('[data-next]').disabled,false);
 });

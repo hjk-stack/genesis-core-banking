@@ -24,7 +24,8 @@ export class PaymentRegister extends FxBankingServer {
  }
  async preparePayment(actor,input,key){
   // Directory IO precedes the short database transaction; final routing is checked again inside it.
-  const payee=await this.checkReceiver(actor,input),address=postalAddress(input.address);
+  const payee=await this.checkReceiver(actor,input);
+  const address=postalAddress(payee.receiverBridgeId&&payee.addressSource==='REGISTERED'?payee.address:input.address);
   const receiverName=payee.receiverBridgeId?payee.receiverName:text(input.receiverName,'receiverName',140);
   const reference=text(input.reference,'reference',128),amount=decimal(money(input.amount,6),6);
   if(!new RegExp(input.currency==='JPY'?'^[0-9]{1,18}$':'^[0-9]{1,18}(\\.[0-9]{1,2})?$').test(input.amount))fault('INVALID_AMOUNT','amount');
