@@ -7,7 +7,7 @@ import pg from 'pg';
 import {fault,text} from './src/core.mjs';
 import {migrate} from './src/migrate.mjs';
 import {FxBankingServer} from './src/fx.mjs';
-import {CardManagement} from './src/card-management.mjs';
+import {AccountManagement} from './src/account-management.mjs';
 import {CustomerAccess} from './src/customer-access.mjs';
 import {processAvis8583} from './src/pos-switch.mjs';
 import {authenticateMessage,connectorCredentials,dispatchPayment,recoverPaymentDeliveries} from './src/payment-transport.mjs';
@@ -79,7 +79,7 @@ const messages={
  CSRF:'Refresh the page and submit again.',TOO_MANY_ATTEMPTS:'Please wait before trying to sign in again.'
 };
 export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={}}) {
- const core=new CardManagement(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map();
+ const core=new AccountManagement(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map();
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  return http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
@@ -109,7 +109,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const reply=await buildPacs002({messageId:randomBytes(16).toString('hex'),uetr:original.uetr,senderBic:p.local_bic,receiverBic:p.peer_bic,status:receipt.status,bankReference:receipt.id.replaceAll('-','')});
     res.setHeader('content-type','application/xml');return res.end(reply);
    }
-   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/styles.css'].includes(path)){
+   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/styles.css'].includes(path)){
     const file=path==='/'?'index.html':path==='/card-message'?'public/card-message.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     res.setHeader('content-type',(path==='/'||path==='/card-message')?'text/html; charset=utf-8':path.endsWith('css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8');return res.end(body);
@@ -160,6 +160,9 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     return send(res,200,sessionData());
    }
    if(path==='/api/workspaces'&&req.method==='GET'){if(!session.is_admin)fault('FORBIDDEN',null,403);return send(res,200,{rows:(await pool.query("SELECT user_id,full_name FROM avis_core_v2.sovereign_users WHERE account_role='CUSTOMER' ORDER BY user_id")).rows});}
+   if(req.method==='GET'&&/^\/api\/accounts\/[0-9a-f-]{36}$/.test(path))return send(res,200,await invoke('accountDetails',{accountId:path.split('/').at(-1),before:url.searchParams.get('before')}));
+   if(req.method==='GET'&&/^\/api\/accounts\/[0-9a-f-]{36}\/movements\/[0-9]+$/.test(path))return send(res,200,await invoke('movementDetails',{accountId:path.split('/').at(-3),entryId:path.split('/').at(-1)}));
+   if(req.method==='GET'&&/^\/api\/backoffice-accounts\/[0-9a-f-]{36}\/statement$/.test(path))return send(res,200,await invoke('accountStatement',{accountId:path.split('/').at(-2),before:url.searchParams.get('before')}));
    if(req.method==='GET'&&/^\/api\/cards\/[0-9a-f-]{36}$/.test(path))return send(res,200,await invoke('managedCardDetails',{cardId:path.split('/').at(-1)}));
    if(req.method==='GET'&&/^\/api\/payment-requests\/[0-9a-f-]{36}$/.test(path))return send(res,200,await (actor.admin?core:customerAccess).paymentRequest(actor,path.split('/').at(-1)));
    if(req.method==='GET'&&path.startsWith('/api/views/'))return send(res,200,{rows:await (actor.admin?core:customerAccess).list(actor,path.split('/').at(-1))});
@@ -190,6 +193,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     'offline/keys':'configureOffline','offline/allowances':'issueOfflineAllowance','offline/sync':'settleOfflineBatch','offline/close':'closeOfflineAllowance',
     'checkouts/capture':'captureCheckout','checkouts/release':'releaseCheckout','checkouts/refund':'refundCheckout',
     cards:'registerCard',terminals:'registerTerminal','cards/authorize':'authorizeCard','cards/capture':'settleCard','cards/reverse':'settleCard'};
+   routes['accounts/open']='openAccount';
    const action=path.slice(5),method=routes[action];if(!method)fault('NOT_FOUND',null,404);
    const result=await invoke(method,body,req.headers['idempotency-key'],action==='cards/reverse');
    if(action==='fx/execute'&&result.status==='EXPIRED')fault('FX_QUOTE_EXPIRED','quoteId',409);
