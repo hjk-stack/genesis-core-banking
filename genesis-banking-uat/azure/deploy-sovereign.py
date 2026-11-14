@@ -79,12 +79,12 @@ def apply_authorized_opening(revision, container):
                     break
             if not ready and process.poll() is not None:
                 break
-        if not receipt or receipt.get('creditedAccounts') != 6 or receipt.get('requestId') != 'uat-opening-2026-11-14-six-accounts':
+        if not receipt or receipt.get('creditedAccounts') != 7 or receipt.get('requestId') != 'uat-opening-2026-11-14-seven-accounts':
             code = re.search(r'AVIS_UAT_OPENING_FAILED ([A-Z0-9_]+)', output)
             raise RuntimeError('UAT opening entries not confirmed' + (': ' + code.group(1) if code else ''))
         if not re.fullmatch(r'[0-9a-f-]{36}', receipt.get('journalId', '')):
             raise RuntimeError('Invalid UAT opening receipt')
-        print('Authorized UAT opening journal: ' + receipt['journalId'] + '; six accounts credited once')
+        print('Authorized UAT opening journal: ' + receipt['journalId'] + '; seven accounts credited once')
         return receipt
     finally:
         if process.poll() is None:
@@ -227,12 +227,13 @@ def main():
         # future deployments after users have spent or transferred their funds.
         entries = api(opener, base, '/api/views/transactions')['rows']
         opening = [row for row in entries if row['journal_id'] == receipt['journalId']]
-        if len(opening) == 9:
-            for currency in ['EUR', 'USD', 'GBP']:
+        if len(opening) == 11:
+            for currency in ['EUR', 'USD', 'GBP', 'CHF']:
                 group = [row for row in opening if row['currency_code'] == currency]
                 debit = sum(Decimal(row['amount']) for row in group if row['direction'] == 'DEBIT')
                 credit = sum(Decimal(row['amount']) for row in group if row['direction'] == 'CREDIT')
-                if debit != Decimal('2000') or credit != Decimal('2000'):
+                expected_opening = Decimal('1000') if currency == 'CHF' else Decimal('2000')
+                if debit != expected_opening or credit != expected_opening:
                     raise RuntimeError('Opening journal currency totals mismatch')
         print('Verified the authorized UAT opening request; existing balances are never reset on replay')
         api(opener, base, '/api/logout', {}, login['csrf'])

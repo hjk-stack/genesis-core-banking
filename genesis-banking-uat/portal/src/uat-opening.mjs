@@ -3,11 +3,11 @@ import pg from 'pg';
 import {SovereignCore,fault} from './core.mjs';
 
 // Helmut's explicit 2026-11-14 instruction: 1,000 opening units in each of
-// the existing six UAT funding accounts. Never exposed as an HTTP operation.
-export const OPENING_REQUEST='uat-opening-2026-11-14-six-accounts';
+// the existing seven UAT funding accounts. Never exposed as an HTTP operation.
+export const OPENING_REQUEST='uat-opening-2026-11-14-seven-accounts';
 const actor={id:'operator-request:helmut:2026-11-14:uat-opening',admin:true};
-const currencies=['EUR','USD','GBP'];
-const holders=[{id:'1',name:'AVISPay PLC',role:'INSTITUTION'},{id:'2',name:'Frontend user',role:'CUSTOMER'}];
+const currencies=['EUR','USD','GBP','CHF'];
+const holders=[{id:'1',name:'AVISPay PLC',role:'INSTITUTION',currencies:['EUR','USD','GBP']},{id:'2',name:'Frontend user',role:'CUSTOMER',currencies:['EUR','USD','GBP']},{id:'3',name:'AVISPay PLC',role:'CUSTOMER',currencies:['CHF']}];
 export async function applyAuthorizedUatOpening(pool,env=process.env){
  if(env.CONTAINER_APP_NAME!=='genesis-banking-uat'||
     env.CONTAINER_APP_ENV_DNS_SUFFIX!=='orangemushroom-9faae382.italynorth.azurecontainerapps.io'||
@@ -18,10 +18,10 @@ export async function applyAuthorizedUatOpening(pool,env=process.env){
    u.full_name,u.account_role,a.owner_type,a.wallet_scope,a.account_category,a.available_balance::text,a.locked_balance::text
    FROM avis_core_v2.abiq_routing_bridge b JOIN avis_core_v2.sovereign_users u USING(user_id)
    JOIN avis_core_v2.ledger_accounts a ON a.account_id=b.ledger_account_id
-   WHERE b.user_id IN (1,2) AND b.participant_code='AVIP' AND b.currency_code=ANY($1::text[])
-   ORDER BY a.account_id FOR UPDATE OF a,b,u`,[currencies])).rows;
-  if(rows.length!==6)fault('UAT_OPENING_ACCOUNT_SET');
-  for(const h of holders)for(const currency of currencies){
+   WHERE b.participant_code='AVIP' AND (b.user_id::text || ':' || b.currency_code)=ANY($1::text[])
+   ORDER BY a.account_id FOR UPDATE OF a,b,u`,[holders.flatMap(h=>h.currencies.map(c=>h.id+':'+c))])).rows;
+  if(rows.length!==7)fault('UAT_OPENING_ACCOUNT_SET');
+  for(const h of holders)for(const currency of h.currencies){
    const r=rows.find(r=>r.user_id===h.id&&r.currency_code===currency);
    if(!r||r.full_name!==h.name||r.account_role!==h.role||r.status!=='ACTIVE'||
       r.owner_type!=='USER'||r.wallet_scope!=='FUNDING'||r.account_category!=='LIABILITY')fault('UAT_OPENING_ACCOUNT_SET');
@@ -33,8 +33,9 @@ export async function applyAuthorizedUatOpening(pool,env=process.env){
    const offset=await core.system(db,'TREASURY',currency,'UAT_OPENING_20261114','ASSET');
    const prior=(await db.query('SELECT available_balance::text,locked_balance::text,account_category FROM avis_core_v2.ledger_accounts WHERE account_id=$1 FOR UPDATE',[offset])).rows[0];
    if(prior.account_category!=='ASSET'||!/^0(?:\.0+)?$/.test(prior.available_balance)||!/^0(?:\.0+)?$/.test(prior.locked_balance))fault('UAT_OPENING_OFFSET_NOT_EMPTY');
-   entries.push({accountId:offset,direction:'DEBIT',amount:'2000'});
-   for(const r of rows.filter(r=>r.currency_code===currency))entries.push({accountId:r.ledger_account_id,direction:'CREDIT',amount:'1000'});
+   const recipients=rows.filter(r=>r.currency_code===currency);
+   entries.push({accountId:offset,direction:'DEBIT',amount:String(recipients.length*1000)});
+   for(const r of recipients)entries.push({accountId:r.ledger_account_id,direction:'CREDIT',amount:'1000'});
   }
   const journalId=await core.post(db,actor,k,'UAT_OPENING_BALANCE',OPENING_REQUEST,entries);
   return {journalId,requestId:OPENING_REQUEST,accounts:rows.map(r=>({accountId:r.ledger_account_id,abiq:r.abiq_iban,currency:r.currency_code,credited:'1000'}))};
@@ -50,7 +51,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
    sum(CASE e.direction WHEN 'CREDIT' THEN e.amount ELSE 0 END)::text AS credits
    FROM avis_core_v2.ledger_entries e JOIN avis_core_v2.ledger_accounts a USING(account_id)
    WHERE e.journal_id=$1 GROUP BY a.currency_code`,[result.journalId])).rows;
-  if(posted.length!==3||posted.some(r=>!currencies.includes(r.currency_code)||r.entries!==3||Number(r.debits)!==2000||Number(r.credits)!==2000))fault('UAT_OPENING_RECEIPT_MISMATCH');
+  if(posted.length!==4||posted.some(r=>{const n=result.accounts.filter(a=>a.currency===r.currency_code).length;return !n||r.entries!==n+1||Number(r.debits)!==n*1000||Number(r.credits)!==n*1000;}))fault('UAT_OPENING_RECEIPT_MISMATCH');
   await pool.end();
   console.log('AVIS_UAT_OPENING_OK '+JSON.stringify({journalId:result.journalId,requestId:result.requestId,creditedAccounts:result.accounts.length}));
  }catch(e){

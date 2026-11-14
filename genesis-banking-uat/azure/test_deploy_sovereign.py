@@ -29,7 +29,7 @@ class OpeningConsoleTests(unittest.TestCase):
         return result, calls, captured.getvalue()
 
     def test_reads_receipt_from_real_terminal_without_echoing_console_diagnostics(self):
-        receipt = {'journalId': '11111111-1111-4111-8111-111111111111', 'requestId': 'uat-opening-2026-11-14-six-accounts', 'creditedAccounts': 6}
+        receipt = {'journalId': '11111111-1111-4111-8111-111111111111', 'requestId': 'uat-opening-2026-11-14-seven-accounts', 'creditedAccounts': 7}
         result, calls, output = self.execute('private-console-fixture\nAVIS_UAT_OPENING_OK ' + json.dumps(receipt) + '\n')
         self.assertEqual(result, receipt)
         self.assertNotIn('private-console-fixture', output)
