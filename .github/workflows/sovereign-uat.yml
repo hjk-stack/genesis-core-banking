@@ -1,0 +1,74 @@
+name: AVISPay sovereign UAT
+on:
+  pull_request:
+    paths: ['genesis-banking-uat/portal/**', 'genesis-banking-uat/azure/deploy-sovereign.py', '.github/workflows/sovereign-uat.yml']
+  push:
+    branches: [main]
+    paths: ['genesis-banking-uat/portal/**', 'genesis-banking-uat/azure/deploy-sovereign.py', '.github/workflows/sovereign-uat.yml']
+  workflow_dispatch:
+    inputs:
+      deploy_existing_uat:
+        description: 'Update only the existing genesis-banking-uat application'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: avispay_ci
+          POSTGRES_PASSWORD: avispay_ci
+          POSTGRES_DB: avispay_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U avispay_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+      - name: Install application and test dependencies
+        working-directory: genesis-banking-uat/portal
+        run: npm ci --no-audit --no-fund
+      - name: Verify sovereign banking on PostgreSQL
+        working-directory: genesis-banking-uat/portal
+        env:
+          TEST_DATABASE_URL: postgres://avispay_ci:avispay_ci@localhost:5432/avispay_ci
+        run: npm test
+      - name: Build banking application container
+        run: docker build -t avispay-sovereign:ci genesis-banking-uat/portal
+  deploy:
+    needs: verify
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.deploy_existing_uat)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    concurrency:
+      group: avispay-existing-uat-application
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: aab5c083-8b0a-408b-aef7-89611822d66c
+          tenant-id: 12f3ab80-cea3-41dd-bdee-47c009cbc960
+          subscription-id: 24a900e4-ee6b-42c0-87c7-e3425bd74cf8
+      - name: Build and push application to the existing registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp show -g genesis-banking-rg -n genesis-banking-uat -o none
+          SERVER=$(az acr show -g genesis-banking-rg -n genesisbankingacr --query loginServer -o tsv)
+          az acr login -n genesisbankingacr
+          docker build -t "$SERVER/avispay-sovereign:$GITHUB_SHA" genesis-banking-uat/portal
+          docker push "$SERVER/avispay-sovereign:$GITHUB_SHA"
+          echo "AVISPAY_IMAGE=$SERVER/avispay-sovereign:$GITHUB_SHA" >> "$GITHUB_ENV"
+      - name: Update existing application and verify authenticated banking reads
+        run: python3 genesis-banking-uat/azure/deploy-sovereign.py

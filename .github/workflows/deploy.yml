@@ -3,6 +3,11 @@ name: Deploy GENESIS Core Banking diagnostic API
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'genesis-banking-uat/**'
+      - '.github/workflows/sovereign-uat.yml'
+      - '.github/workflows/uat-stack.yml'
+      - 'docs/sovereign-uat.md'
   workflow_dispatch:
 
 permissions:
@@ -64,3 +69,4 @@ jobs:
         with:
           app-name: genesis-core-banking-app
           package: .
+
