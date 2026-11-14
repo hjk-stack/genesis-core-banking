@@ -79,7 +79,7 @@ export class CardPaymentServer extends PaymentServer {
  }
  async list(actor,view){
   if(!actor?.admin)fault('FORBIDDEN',null,403);
-  if(view==='offlinegrants')return (await this.pool.query(`SELECT g.grant_id,c.last_four_digits,g.allowance::text,g.spent::text,g.max_transactions,g.used_transactions,g.expires_at,g.settle_by,g.status FROM avis_core_v2.offline_card_grants g JOIN avis_core_v2.avis_cards c USING(card_id) ORDER BY issued_at DESC LIMIT 300`)).rows;
+  if(view==='offlinegrants')return (await this.pool.query(`SELECT g.grant_id,c.last_four_digits,g.allowance::text,g.spent::text,g.max_transactions,g.used_transactions,g.expires_at,g.settle_by,g.status FROM avis_core_v2.offline_card_grants g JOIN avis_core_v2.avis_cards c USING(card_id) ORDER BY g.issued_at DESC LIMIT 300`)).rows;
   return super.list(actor,view);
  }
 }
