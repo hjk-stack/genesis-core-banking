@@ -28,7 +28,7 @@ after(async()=>{await browser?.close();if(server)await new Promise(r=>server.clo
 for(const width of [390,1440])test(`all five payment steps remain inside the popup at ${width}px`,async()=>{
  const page=await browser.newPage({viewport:{width,height:1000}});
  try{
-  await page.goto(base);await page.locator('#open').click();
+  page.on('pageerror',e=>console.error(e.message));await page.goto(base);await page.locator('#open').click();assert.equal(await page.locator('dialog').isVisible(),true);
   const visible=async name=>{
    const input=page.getByLabel(name,{exact:true});await input.waitFor({state:'visible'});
    // Let the entry animation finish, then check actual browser clipping, not DOM presence.
