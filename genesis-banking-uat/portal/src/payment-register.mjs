@@ -43,7 +43,7 @@ export class PaymentRegister extends FxBankingServer {
     receiverName,address,reference,createdAt:now};
    const p={messageId:id.replaceAll('-',''),uetr,endToEndId:id.replaceAll('-',''),amount,currency:input.currency,
     senderBic:profile?.local_bic||ABIQ_ISSUER.abiqCode,receiverBic:profile?.peer_bic||payee.bic,creditorBic:payee.bic,
-    debtorName:holder.full_name,debtorIban:bank?.account_type==='IBAN'?bank.account_number:input.from,
+    debtorName:holder.full_name,debtorIban:bank?.account_number||input.from,
     debtorAccountType:bank?.account_type==='IBAN'?'IBAN':'OTHER',creditorIban:payee.account,
     creditorAccountType:payee.accountType==='IBAN'?'IBAN':'OTHER',creditorName:receiverName,creditorAddress:address,
     reference,date:now.slice(0,10),createdAt:now};

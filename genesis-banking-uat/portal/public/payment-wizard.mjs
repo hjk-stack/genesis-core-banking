@@ -90,7 +90,7 @@ export function createPaymentWizard({api,accounts,refresh,notice}){
    review=null;reviewKey='';clearErrors();
    if(['receiverAccount','receiverBic','from'].includes(e.target.name)){
     if(e.target.name==='from'){resetReceiver();source();}
-    else resetReceiver();
+    else{if(e.target.name==='receiverAccount')els().receiverBic.value='';resetReceiver();}
     clearTimeout(lookupTimer);lookupTimer=setTimeout(()=>void lookup({quiet:true}),400);
    }
   };

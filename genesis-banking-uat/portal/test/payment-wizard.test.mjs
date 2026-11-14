@@ -23,7 +23,7 @@ test('sliding popup preserves inputs, displays exact available balance and waits
  const state=setup();fill('from',account.abiq_iban);fill('amount','12.50');
  assert.match(q('[data-balance]').textContent,/1,234,567,890,123,456.12 EUR/);assert.equal(q('[data-back]').hidden,true);
  await next();assert.match(q('.payment-track').className,/step-1/);assert.equal(fields().from.value,account.abiq_iban);assert.equal(fields().amount.value,'12.50');
- fill('receiverAccount','000011000102');await next();assert.match(q('.payment-track').className,/step-2/);
+ fill('receiverBic','OTHERGB2LXXX');fill('receiverAccount','000011000102');assert.equal(fields().receiverBic.value,'');await next();assert.match(q('.payment-track').className,/step-2/);
  assert.equal(fields().receiverBic.value,'AVIPTN64XXX');assert.equal(fields().receiverName.value,'Internal Receiver');assert.equal(fields().receiverName.readOnly,true);assert.equal(fields().street.value,address.street);assert.equal(fields().city.value,address.city);
  back();await next();assert.equal(fields().street.value,address.street);await next();fill('reference','Invoice & parts');await next();
  assert.match(q('.payment-track').className,/step-4/);assert.equal(q('[data-message]').textContent,'<message>exact</message>');assert.equal(q('[data-next]').textContent,'Transfer');
