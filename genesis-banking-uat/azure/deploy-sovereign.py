@@ -6,6 +6,11 @@ import json
 import os
 import re
 import subprocess
+import pty
+import select
+import fcntl
+import struct
+import termios
 import time
 import urllib.request
 
@@ -38,6 +43,58 @@ def api(opener, base, path, body=None, csrf=None):
     request = urllib.request.Request(base + path, data=None if body is None else json.dumps(body).encode(), headers=headers)
     with opener.open(request, timeout=30) as response:
         return json.load(response)
+
+def apply_authorized_opening(revision, container):
+    """Run the fixed, idempotent UAT request inside the existing application."""
+    replicas = az('containerapp', 'replica', 'list', '-g', RG, '-n', APP, '--revision', revision)
+    if not replicas:
+        raise RuntimeError('No running UAT replica for opening entries')
+    args = ['az', 'containerapp', 'exec', '-g', RG, '-n', APP, '--revision', revision,
+            '--replica', replicas[0]['name'], '--container', container,
+            '--command', 'node /app/src/uat-opening.mjs', '--only-show-errors']
+    # Azure CLI's console requires a terminal. No credential is placed in the
+    # command or copied out of the container; output is limited to its receipt.
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 120, 0, 0))
+    process = subprocess.Popen(args, stdin=slave, stdout=slave, stderr=slave,
+                               env={**os.environ, 'TERM': 'xterm'}, start_new_session=True)
+    os.close(slave)
+    output = ''
+    receipt = None
+    try:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            ready = select.select([master], [], [], 1)[0]
+            if ready:
+                try:
+                    chunk = os.read(master, 8192)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                output = (output + chunk.decode('utf-8', errors='replace'))[-65536:]
+                match = re.search(r'AVIS_UAT_OPENING_OK (\{[^\r\n]+\})', output)
+                if match:
+                    receipt = json.loads(match.group(1))
+                    break
+            if not ready and process.poll() is not None:
+                break
+        if not receipt or receipt.get('creditedAccounts') != 7 or receipt.get('requestId') != 'uat-opening-2026-11-14-seven-accounts':
+            code = re.search(r'AVIS_UAT_OPENING_FAILED ([A-Z0-9_]+)', output)
+            raise RuntimeError('UAT opening entries not confirmed' + (': ' + code.group(1) if code else ''))
+        if not re.fullmatch(r'[0-9a-f-]{36}', receipt.get('journalId', '')):
+            raise RuntimeError('Invalid UAT opening receipt')
+        print('Authorized UAT opening journal: ' + receipt['journalId'] + '; seven accounts credited once')
+        return receipt
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        os.close(master)
 
 def main():
     sha = os.environ['GITHUB_SHA']
@@ -164,13 +221,28 @@ def main():
             raise RuntimeError('Published FX data did not pass source, coverage and date verification')
         dates = sorted({row['source_date'][:10] for row in rates})
         print('Verified ECB reference data: ' + str(len(rates)) + ' currencies; publication ' + ', '.join(dates))
+        stage = 'authorized UAT opening balances'
+        receipt = apply_authorized_opening(APP + '--bank-' + sha[:12], containers[0]['name'])
+        # Verify the immutable posting rather than replenishing balances on
+        # future deployments after users have spent or transferred their funds.
+        entries = api(opener, base, '/api/views/transactions')['rows']
+        opening = [row for row in entries if row['journal_id'] == receipt['journalId']]
+        if len(opening) == 11:
+            for currency in ['EUR', 'USD', 'GBP', 'CHF']:
+                group = [row for row in opening if row['currency_code'] == currency]
+                debit = sum(Decimal(row['amount']) for row in group if row['direction'] == 'DEBIT')
+                credit = sum(Decimal(row['amount']) for row in group if row['direction'] == 'CREDIT')
+                expected_opening = Decimal('1000') if currency == 'CHF' else Decimal('2000')
+                if debit != expected_opening or credit != expected_opening:
+                    raise RuntimeError('Opening journal currency totals mismatch')
+        print('Verified the authorized UAT opening request; existing balances are never reset on replay')
         api(opener, base, '/api/logout', {}, login['csrf'])
         print('Verified application release ' + sha)
         print('Authenticated account, ledger, payment, routing, clearing, offline, FX and audit reads passed')
         print('Existing application URL: ' + base)
         with open(os.environ.get('GITHUB_STEP_SUMMARY', os.devnull), 'a') as summary:
             summary.write(f'AVISPay application release `{sha}` verified on [{APP}]({base}).\n\n')
-            summary.write('Existing resources preserved. Authenticated read verification passed. No financial transaction was submitted.\n')
+            summary.write('Existing resources preserved. Authenticated reads passed. The authorized UAT opening request is recorded once; no external payment was submitted.\n')
     except Exception as error:
         print('Release verification stage: ' + stage)
         print('Error type: ' + type(error).__name__ + '; HTTP status: ' + str(getattr(error, 'code', 'n/a')))
