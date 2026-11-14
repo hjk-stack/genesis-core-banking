@@ -233,7 +233,7 @@ export class SovereignCore {
   const queries={
    accounts:`SELECT b.abiq_iban,b.currency_code,b.participant_code,p.abiq_bic,lpad(b.account_series::text,5,'0') || b.customer_number::text AS account_number,b.customer_number::text AS customer_number,b.user_id,u.full_name,u.account_type,u.account_role,a.available_balance::text,a.locked_balance::text,b.status
     FROM avis_core_v2.abiq_routing_bridge b JOIN avis_core_v2.sovereign_users u USING(user_id) JOIN avis_core_v2.abiq_network_participants p USING(participant_code) JOIN avis_core_v2.ledger_accounts a ON a.account_id=b.ledger_account_id ORDER BY u.user_id,b.account_series NULLS LAST,b.currency_code LIMIT 300`,
-   customers:'SELECT u.user_id,u.full_name,u.account_type,u.account_role,u.created_at,n.customer_number::text AS customer_number FROM avis_core_v2.sovereign_users u LEFT JOIN avis_core_v2.abiq_customer_numbers n USING(user_id) ORDER BY u.user_id DESC LIMIT 300',
+   customers:'SELECT u.user_id,u.full_name,u.account_type,u.account_role,u.postal_address,u.created_at,n.customer_number::text AS customer_number FROM avis_core_v2.sovereign_users u LEFT JOIN avis_core_v2.abiq_customer_numbers n USING(user_id) ORDER BY u.user_id DESC LIMIT 300',
    issuer:"SELECT i.abiq_code,i.country_code,i.participant_code,p.institution_name FROM avis_core_v2.abiq_issuers i JOIN avis_core_v2.abiq_network_participants p USING(participant_code) WHERE p.is_active",
    currencies:'SELECT currency_code,iso_numeric_partition,account_series FROM avis_core_v2.abiq_currencies ORDER BY account_series',
    ledger:`SELECT a.account_id,a.owner_type,a.user_id,

@@ -46,13 +46,19 @@ export class PaymentServer extends SovereignCore {
   if(!p)fault('CONNECTOR_NOT_FOUND','profileId');return p;
  }
  async initiatePayment(actor,input,key){
-  const amount=decimal(money(input.amount,6),6),creditorIban=normalizeIban(input.creditorIban);
-  return this.operation(actor,'CREATE_BANK_PAYMENT',input,key,async(db,k)=>{
+  return this.operation(actor,'CREATE_BANK_PAYMENT',input,key,(db,k)=>this.reserveBankPayment(db,actor,k,input));
+ }
+ async reserveBankPayment(db,actor,k,input,prepared=null){
+  const amount=decimal(money(input.amount,6),6),creditorIban=prepared?input.creditorIban:normalizeIban(input.creditorIban);
    const p=await this.profile(db,input.profileId),payer=await this.route(db,input.from,input.currency,'from');
    if(p.currency_code!==input.currency)fault('CURRENCY_MISMATCH','currency');
    const account=(await db.query(`SELECT r.account_number,u.full_name FROM avis_core_v2.abiq_bank_routes r JOIN avis_core_v2.abiq_routing_bridge b USING(bridge_id) JOIN avis_core_v2.sovereign_users u USING(user_id) WHERE r.bridge_id=$1 AND r.connector_code=$2 AND r.account_type='IBAN'`,[payer.bridge_id,p.profile_id])).rows[0];
    if(!account)fault('BANK_ROUTE_REQUIRED','from');
-   const id=randomUUID(),uetr=randomUUID(),xml=await buildPacs008({messageId:id.replaceAll('-',''),uetr,endToEndId:input.reference,amount,currency:input.currency,senderBic:p.local_bic,receiverBic:p.peer_bic,debtorName:account.full_name,debtorIban:account.account_number,creditorName:input.creditorName,creditorIban,reference:input.reference});
+   const id=prepared?.id||randomUUID(),uetr=prepared?.uetr||randomUUID(),xml=prepared?.xml||await buildPacs008({messageId:id.replaceAll('-',''),uetr,endToEndId:input.reference,amount,currency:input.currency,senderBic:p.local_bic,receiverBic:p.peer_bic,debtorName:account.full_name,debtorIban:account.account_number,creditorName:input.creditorName,creditorIban,reference:input.reference});
+   if(prepared){
+    const reviewed=await readIso20022(xml);
+    if(reviewed.debtorIban!==account.account_number||reviewed.creditorIban!==creditorIban||reviewed.amount!==amount||reviewed.currency!==input.currency||reviewed.senderBic!==p.local_bic||reviewed.receiverBic!==p.peer_bic||reviewed.uetr!==uetr)fault('PAYMENT_REVIEW_CHANGED','review');
+   }
    // Lock both balances in the same order used by post_journal. Reserve external cash as well as customer funds.
    await db.query('SELECT account_id FROM avis_core_v2.ledger_accounts WHERE account_id=ANY($1::uuid[]) ORDER BY account_id FOR UPDATE',[[p.ledger_account_id,payer.ledger_account_id]]);
    const reserved=await db.query(`UPDATE avis_core_v2.ledger_accounts SET locked_balance=locked_balance+$2::numeric WHERE account_id=$1 AND available_balance-locked_balance >=$2::numeric RETURNING account_id`,[p.ledger_account_id,amount]);
@@ -62,7 +68,6 @@ export class PaymentServer extends SovereignCore {
    await db.query(`INSERT INTO avis_core_v2.interbank_ip_transfers(transfer_id,uetr,direction,cash_account_id,user_id,journal_id,debtor_iban,creditor_iban,currency_code,amount,raw_iso_payload,profile_id,source_account_id,cash_reserved) VALUES($1,$2,'OUTBOUND',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true)`,[id,uetr,p.cash_account_id,payer.user_id,journalId,account.account_number,creditorIban,input.currency,amount,JSON.stringify({xml,creditorName:input.creditorName,reference:input.reference}),p.profile_id,payer.ledger_account_id]);
    await db.query('INSERT INTO avis_core_v2.payment_outbox(transfer_id,content,content_type) VALUES($1,$2,$3)',[id,xml,'application/xml']);
    return {id,uetr,journalId,status:'PDNG'};
-  });
  }
  // Called only after transport authentication; browser operators cannot synthesize peer events.
  async receive(profileId,xml){
