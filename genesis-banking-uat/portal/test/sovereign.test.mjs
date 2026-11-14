@@ -104,8 +104,10 @@ test('HTTP authentication, origin, CSRF and persisted session enforce operator a
  const result=await fetch(base+'/api/customers',{method:'POST',headers:{cookie,origin:base,'content-type':'application/json','x-csrf-token':session.csrf,'idempotency-key':'http-account'},body});assert.equal(result.status,200);assert.equal((await result.json()).accounts.length,1);
 });
 test('existing identity service requires authenticated administrator permission',async()=>{
- await assert.rejects(authenticateFineract('a','b','https://bank.invalid',async()=>({ok:true,json:async()=>({isAuthenticated:true,permissions:['READ_CLIENT']})})),/OPERATOR_ACCESS_REQUIRED/);
- const operator=await authenticateFineract('a','b','https://bank.invalid',async()=>({ok:true,json:async()=>({isAuthenticated:true,userId:42,permissions:['ALL_FUNCTIONS']})}));assert.equal(operator.id,'fineract:42');
+ await assert.rejects(authenticateFineract('a','b','https://bank.invalid',async()=>({ok:true,json:async()=>({authenticated:true,permissions:['READ_CLIENT']})})),/OPERATOR_ACCESS_REQUIRED/);
+ // Fineract's published authentication response uses authenticated, not isAuthenticated.
+ const operator=await authenticateFineract('a','b','http://genesis-fineract-uat',async()=>({ok:true,json:async()=>({authenticated:true,userId:42,permissions:['ALL_FUNCTIONS']})}));assert.equal(operator.id,'fineract:42');
+ for(const data of [{authenticated:false},{isAuthenticated:true},{authenticated:true,isTwoFactorAuthenticationRequired:true}])await assert.rejects(authenticateFineract('a','b','https://bank.invalid',async()=>({ok:true,json:async()=>({...data,permissions:['ALL_FUNCTIONS']})})),/OPERATOR_ACCESS_REQUIRED/);
 });
 test('operational UI has no integration placeholders and dialogs have close controls',async()=>{
  const html=await readFile(new URL('../index.html',import.meta.url),'utf8'),js=await readFile(new URL('../public/app.mjs',import.meta.url),'utf8');
