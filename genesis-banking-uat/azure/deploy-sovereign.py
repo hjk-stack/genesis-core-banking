@@ -132,6 +132,18 @@ def main():
                 if int(expanded) % 97 != 1:
                     raise RuntimeError('ABIQ checksum mismatch')
         print('Verified ABIQ issuer, corporate user 1, frontend user 2 and EUR/USD/GBP customer numbering and checksums')
+        stage = 'ledger account details verification'
+        ledger = api(opener, base, '/api/views/ledger')['rows']
+        for uid in ['1', '2']:
+            for currency in ['EUR', 'USD', 'GBP']:
+                account = next(a for a in accounts if str(a['user_id']) == uid and a['currency_code'] == currency and a['participant_code'] == 'AVIP')
+                scopes = [row for row in ledger if str(row['user_id']) == uid and row['currency_code'] == currency and row['sub_account_code'] == 'ABIQ:AVIP' and row['network'] is None]
+                if {row['wallet_scope'] for row in scopes} != {'FUNDING', 'MARGIN', 'CUSTODY'} or len(scopes) != 3:
+                    raise RuntimeError('Ledger account scopes mismatch')
+                for row in scopes:
+                    if row['account_reference'] != account['abiq_iban'] or row['owner_class'] != holders[uid]['account_role'] or row['account_holder'] != holders[uid]['full_name']:
+                        raise RuntimeError('Ledger account details mismatch')
+        print('Verified ABIQ references, institution/customer roles and all three ledger scopes')
         stage = 'published FX data verification'
         expected_fx = {'EUR', 'GBP', 'CHF', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'HUF', 'RON', 'USD', 'SGD', 'JPY'}
         # Startup refresh is asynchronous. Read public price metadata only; never submit a conversion.

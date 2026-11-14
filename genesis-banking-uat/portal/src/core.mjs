@@ -236,7 +236,21 @@ export class SovereignCore {
    customers:'SELECT u.user_id,u.full_name,u.account_type,u.account_role,u.created_at,n.customer_number::text AS customer_number FROM avis_core_v2.sovereign_users u LEFT JOIN avis_core_v2.abiq_customer_numbers n USING(user_id) ORDER BY u.user_id DESC LIMIT 300',
    issuer:"SELECT i.abiq_code,i.country_code,i.participant_code,p.institution_name FROM avis_core_v2.abiq_issuers i JOIN avis_core_v2.abiq_network_participants p USING(participant_code) WHERE p.is_active",
    currencies:'SELECT currency_code,iso_numeric_partition,account_series FROM avis_core_v2.abiq_currencies ORDER BY account_series',
-   ledger:`SELECT a.account_id,a.owner_type,a.user_id,u.full_name AS account_holder,a.sub_account_code,a.currency_code,a.network,a.wallet_scope,a.account_category,a.available_balance::text,a.locked_balance::text FROM avis_core_v2.ledger_accounts a LEFT JOIN avis_core_v2.sovereign_users u USING(user_id) ORDER BY a.owner_type,a.currency_code LIMIT 500`,
+   ledger:`SELECT a.account_id,a.owner_type,a.user_id,
+    CASE WHEN a.owner_type='USER' THEN u.account_role ELSE a.owner_type END AS owner_class,
+    COALESCE(u.full_name,issuer.institution_name) AS account_holder,
+    b.abiq_iban,COALESCE(b.abiq_iban,a.sub_account_code) AS account_reference,
+    a.sub_account_code,a.currency_code,a.network,a.wallet_scope,a.account_category,a.available_balance::text,a.locked_balance::text
+    FROM avis_core_v2.ledger_accounts a
+    LEFT JOIN avis_core_v2.sovereign_users u USING(user_id)
+    LEFT JOIN avis_core_v2.abiq_network_participants issuer ON issuer.participant_code='AVIP'
+    LEFT JOIN avis_core_v2.abiq_routing_bridge b ON b.ledger_account_id=a.account_id OR
+     (a.owner_type='USER' AND a.wallet_scope IN ('MARGIN','CUSTODY') AND a.network IS NULL
+      AND a.user_id=b.user_id AND a.currency_code=b.currency_code AND a.sub_account_code='ABIQ:' || b.participant_code)
+    LEFT JOIN avis_core_v2.abiq_currencies c ON c.currency_code=a.currency_code
+    ORDER BY CASE WHEN u.account_role='INSTITUTION' THEN 0 WHEN a.owner_type<>'USER' THEN 1 ELSE 2 END,
+     a.user_id,a.owner_type,c.account_series NULLS LAST,a.currency_code,b.participant_code,a.sub_account_code,
+     CASE a.wallet_scope WHEN 'FUNDING' THEN 0 WHEN 'MARGIN' THEN 1 ELSE 2 END,a.account_id LIMIT 500`,
    transactions:`SELECT j.journal_id,j.created_at,j.event_type,j.reference_id,e.direction,e.amount::text,a.currency_code,a.owner_type,b.abiq_iban
     FROM avis_core_v2.ledger_entries e JOIN avis_core_v2.ledger_journals j USING(journal_id) JOIN avis_core_v2.ledger_accounts a USING(account_id)
     LEFT JOIN avis_core_v2.abiq_routing_bridge b ON b.ledger_account_id=a.account_id ORDER BY e.entry_id DESC LIMIT 300`,

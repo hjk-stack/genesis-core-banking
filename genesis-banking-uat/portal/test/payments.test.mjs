@@ -40,7 +40,14 @@ test('received payment does not credit customer until authenticated settlement; 
  await assert.rejects(core.receive(profile.id,await status(p,'RJCT')),/TRANSFER_ALREADY_CLOSED/);
 });
 test('outbound reserves customer and clearing liquidity; ACSP acknowledgment never settles',async()=>{
- const t=await outbound('30');assert.equal((await balance(account.accountId)).available_balance,'70.000000000000000000');assert.equal((await balance(cash.accountId)).locked_balance,'30.000000000000000000');
+ const t=await outbound('30');
+ const visible=(await core.list(actor,'bankpayments')).find(p=>p.transfer_id===t.id);
+ assert.equal(visible.creditor_name,'External receiver');assert.equal(visible.creditor_iban,externalIban);
+ assert.equal(visible.payment_reference,(await pool.query('SELECT reference_id FROM avis_core_v2.ledger_journals WHERE journal_id=$1',[t.journalId])).rows[0].reference_id);
+ assert.equal(visible.delivery,'QUEUED');
+ const preserved=(await pool.query('SELECT t.raw_iso_payload,o.content FROM avis_core_v2.interbank_ip_transfers t JOIN avis_core_v2.payment_outbox o USING(transfer_id) WHERE t.transfer_id=$1',[t.id])).rows[0];
+ assert.equal(preserved.raw_iso_payload.xml,preserved.content);
+ assert.equal((await balance(account.accountId)).available_balance,'70.000000000000000000');assert.equal((await balance(cash.accountId)).locked_balance,'30.000000000000000000');
  await core.receive(profile.id,await status(t,'ACSP'));assert.equal((await balance(cash.accountId)).available_balance,'100.000000000000000000');
  await core.receive(profile.id,await status(t,'ACCC'));assert.equal((await balance(cash.accountId)).available_balance,'70.000000000000000000');assert.equal((await balance(cash.accountId)).locked_balance,'0.000000000000000000');
  await assert.rejects(core.receive(profile.id,await status(t,'RJCT')),/TRANSFER_ALREADY_CLOSED/);
