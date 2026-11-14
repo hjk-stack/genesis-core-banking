@@ -12,8 +12,8 @@ correspondent availability move an otherwise funded instruction to manual pickup
 A changed bank destination still requires a new review. A response lost after
 sending remains subject to reconciliation and is never blindly resent.
 
-Crypto selectors show only the selected holder's funding balances, by asset and
-network. Internal transfers credit the receiving user's matching asset/network.
+Crypto selectors use wallet holdings directly, by asset and network. Customer
+workspaces expose only their authenticated holder's accounts and holdings. Internal transfers credit the receiving user's matching asset/network.
 External crypto and external card loads debit into an outgoing suspense account
 and appear in Administration with pickup ownership. They are manual instructions
 in this release, not asserted blockchain broadcasts or processor settlements.
@@ -26,7 +26,7 @@ existing crypto funding stock. Purchase exchanges fiat and crypto in one journal
 checks the reviewed price, and cannot oversell the stock. No token inventory,
 market price, blockchain transaction, external cash or provider connection is seeded.
 
-AVIS cards have a separate stored-value purse. Loading debits the selected bank
+New AVIS cards share a separate stored-value purse per holder and currency. Loading debits the selected bank
 account and credits that purse. POS authorization, reversal and signed offline
 allowances retain the actual debit account for correct refunds. New cards are
 AVIS proprietary prepaid card references; this operation does not allocate a
@@ -34,7 +34,8 @@ Visa or Mastercard PAN.
 
 Offline coded debit reserves the specified amount and creates a random six-digit
 code plus a separate 256-bit redemption token. Both are required to redeem.
-Five incorrect codes lock the debit, the code expires after seven days, and an
+Five incorrect codes lock the debit. New codes have a selected start and end time
+with a validity of at most 48 hours; earlier grants retain their original dates. An
 unused/locked debit can be cancelled back to its original funding account.
 Concurrent redemption can post only one credit. This code flow supplements the
 existing signed offline terminal batch protocol.

@@ -2,6 +2,8 @@ import {createHash,randomBytes,randomInt,randomUUID,timingSafeEqual} from 'node:
 import {PaymentRegister} from './payment-register.mjs';
 import {fault,text,money,decimal} from './core.mjs';
 import {seal,unseal,fingerprint} from './transfer-secrets.mjs';
+import {sharedCardAccount,codeWindow} from './card-accounts.mjs';
+import {postalAddress} from './beneficiaries.mjs';
 const hash=s=>createHash('sha256').update(s).digest('hex');
 const line=(accountId,direction,amount)=>({accountId,direction,amount});
 const uuid=value=>/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(value||'');
@@ -35,15 +37,24 @@ export class TransferMethods extends PaymentRegister {
   });
  }
  async preparePayment(actor,input,key){
-  input=Object.fromEntries(['method','from','currency','amount','receiverAccount','receiverBic','receiverName','address','reference','cryptoAccount','cryptoDestination','receiverUserId','cryptoAddress','destinationTag','cardDestination','cardId','externalCardId','offlineDebit'].filter(k=>Object.hasOwn(input,k)).map(k=>[k,input[k]]));
+  input=Object.fromEntries(['method','from','currency','amount','receiverAccount','receiverBic','receiverName','address','reference','cryptoAccount','cryptoDestination','receiverUserId','cryptoAddress','destinationTag','cardDestination','cardId','externalCardId','offlineDebit','sourceCardId','codeStart','codeEnd'].filter(k=>Object.hasOwn(input,k)).map(k=>[k,input[k]]));
   if(!input.method||input.method==='BANK')return super.preparePayment(actor,input,key);
   if(!['CRYPTO','CARD','CODED_CARD'].includes(input.method))fault('INVALID_FIELD','method');
   if(input.offlineDebit!==undefined&&typeof input.offlineDebit!=='boolean')fault('INVALID_FIELD','offlineDebit');
   const reference=text(input.reference,'reference',128);
   return this.operation(actor,'REVIEW_ASSET_TRANSFER',input,key,async db=>{
-   const bank=await this.route(db,input.from,input.currency,'from');
-   let source=bank.ledger_account_id,asset=input.currency,network=null,mode='INTERNAL',target=null,card=null,external=null,receiverName='',destinationLabel='';
-   if(input.method!=='CRYPTO'&&!new RegExp(input.currency==='JPY'?'^[0-9]{1,18}$':'^[0-9]{1,18}(\\.[0-9]{1,2})?$').test(input.amount))fault('INVALID_AMOUNT','amount');
+   let bank,sourceCard=null;
+   if(input.sourceCardId&&['CARD','CODED_CARD'].includes(input.method)){
+    sourceCard=(await db.query(`SELECT c.*,a.currency_code,COALESCE(c.stored_value_account_id,c.funding_account_id) AS debit_account_id FROM avis_core_v2.avis_cards c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.funding_account_id WHERE c.card_id=$1 AND c.status='ACTIVE' AND c.card_rail_mode<>'GLOBAL_SCHEME_ONLY' AND (c.expires_at IS NULL OR c.expires_at>now())`,[input.sourceCardId])).rows[0];
+    if(!sourceCard)fault('SELECT_AVIS_CARD','sourceCardId');
+    bank={user_id:sourceCard.user_id,ledger_account_id:sourceCard.debit_account_id,currency_code:sourceCard.currency_code};
+   }else if(input.method==='CRYPTO'&&!input.from){
+    const holding=(await db.query("SELECT * FROM avis_core_v2.ledger_accounts WHERE account_id=$1 AND owner_type='USER' AND network IS NOT NULL AND wallet_scope='FUNDING' AND account_category='LIABILITY'",[input.cryptoAccount])).rows[0];
+    if(!holding)fault('CRYPTO_HOLDING_REQUIRED','cryptoAccount');bank={user_id:holding.user_id,ledger_account_id:holding.account_id,currency_code:holding.currency_code};
+   }else bank=await this.route(db,input.from,input.currency,'from');
+   const currency=bank.currency_code||input.currency;
+   let source=bank.ledger_account_id,asset=currency,network=null,mode='INTERNAL',target=null,card=null,external=null,receiverName='',destinationLabel='';
+   if(input.method!=='CRYPTO'&&!new RegExp(currency==='JPY'?'^[0-9]{1,18}$':'^[0-9]{1,18}(\\.[0-9]{1,2})?$').test(input.amount))fault('INVALID_AMOUNT','amount');
    const amount=decimal(money(input.amount));
    const holder=(await db.query('SELECT full_name FROM avis_core_v2.sovereign_users WHERE user_id=$1',[bank.user_id])).rows[0];
    if(input.method==='CRYPTO'){
@@ -67,6 +78,15 @@ export class TransferMethods extends PaymentRegister {
      if(input.destinationTag&&BigInt(input.destinationTag)>4294967295n)fault('INVALID_FIELD','destinationTag');
      receiverName=text(input.receiverName,'receiverName',140);destinationLabel=address;mode='MANUAL';
     }else fault('INVALID_FIELD','cryptoDestination');
+   }else if(sourceCard){
+    card=sourceCard;
+    if(input.offlineDebit){fingerprint('key-check',this.secretEnv);receiverName=holder.full_name;destinationLabel='Card debit secured by code';}
+    else{
+     const payee=await this.checkReceiver(actor,{...input,currency});
+     receiverName=payee.receiverName||text(input.receiverName,'receiverName',140);destinationLabel=payee.account;
+     input={...input,receiverAccount:payee.account,receiverBic:payee.bic,address:postalAddress(payee.address||input.address)};
+     if(payee.receiverBridgeId){target=(await this.route(db,payee.account,currency,'receiverAccount')).ledger_account_id;if(target===source)fault('SAME_ACCOUNT','receiverAccount');}else mode='MANUAL';
+    }
    }else{
     if(input.cardDestination==='EXISTING'){
      if(!uuid(input.cardId))fault('SELECT_AVIS_CARD','cardId');
@@ -86,11 +106,13 @@ export class TransferMethods extends PaymentRegister {
     // Validate the existing key before accepting a new card/code instruction.
     if(input.cardDestination==='NEW'||input.offlineDebit||input.method==='CODED_CARD')fingerprint('key-check',this.secretEnv);
    }
-   const id=randomUUID(),instruction={method:input.method,from:input.from,sourceUserId:String(bank.user_id),currency:asset,network,amount,receiverName,
+   const offlineDebit=sourceCard?input.offlineDebit===true:input.method==='CODED_CARD'||input.offlineDebit===true;
+   const window=offlineDebit?codeWindow(input):{};
+   const id=randomUUID(),instruction={method:input.method,from:input.from||(sourceCard?(sourceCard.display_number||'Card ending '+sourceCard.last_four_digits):'Wallet '+asset+' · '+network),sourceUserId:String(bank.user_id),currency:asset,network,amount,receiverName,
     destinationLabel,reference,createdAt:new Date().toISOString(),cryptoDestination:input.cryptoDestination||null,
     receiverUserId:input.cryptoDestination==='INTERNAL'?String(input.receiverUserId):null,
     cryptoAddress:input.cryptoDestination==='EXTERNAL'?input.cryptoAddress:null,destinationTag:input.destinationTag||null,
-    cardDestination:input.cardDestination||null,offlineDebit:input.method==='CODED_CARD'||input.offlineDebit===true};
+    cardDestination:input.cardDestination||null,offlineDebit,sourceCardId:sourceCard?.card_id||null,receiverAccount:input.receiverAccount||null,receiverBic:input.receiverBic||null,address:input.address||null,...window};
    const message=JSON.stringify({protocol:'AVIS_TRANSFER_V1',requestId:id,...instruction},null,2),messageHash=hash(message);
    await db.query(`INSERT INTO avis_core_v2.asset_transfer_requests(request_id,actor_id,payment_method,source_account_id,source_user_id,currency_code,network,amount,
     target_account_id,card_id,external_card_id,instruction,message_content,message_hash,delivery_mode)
@@ -110,9 +132,16 @@ export class TransferMethods extends PaymentRegister {
    if(Date.now()-Date.parse(r.instruction.createdAt)>86400000)fault('PAYMENT_REVIEW_CHANGED','review',409);
    const source=(await db.query('SELECT * FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[r.source_account_id])).rows[0];
    if(source.owner_type!=='USER'||source.wallet_scope!=='FUNDING'||source.account_category!=='LIABILITY'||String(source.user_id)!==String(r.source_user_id)||source.currency_code!==r.currency_code||source.network!==r.network)fault('PAYMENT_REVIEW_CHANGED','review',409);
+   if(r.instruction.sourceCardId){
+    const card=(await db.query(`SELECT c.card_id FROM avis_core_v2.avis_cards c WHERE c.card_id=$1 AND c.user_id=$2 AND c.status='ACTIVE' AND (c.expires_at IS NULL OR c.expires_at>now()) AND COALESCE(c.stored_value_account_id,c.funding_account_id)=$3 FOR SHARE`,[r.instruction.sourceCardId,r.source_user_id,r.source_account_id])).rows[0];
+    if(!card)fault('SELECT_AVIS_CARD','sourceCardId');
+   }
    let to,cardId=r.card_id,delivery=null,status='COMPLETED';
    if(r.delivery_mode==='MANUAL'){
     to=await this.networkAccount(db,'SUSPENSE_OUTBOUND',r.currency_code,r.network,r.request_id);status='OUTGOING';
+   }else if(r.instruction.sourceCardId){
+    if(r.instruction.offlineDebit){({to,delivery}=await this.reserveCodedDebit(db,r,cardId));}
+    else{const target=await this.route(db,r.instruction.receiverAccount,r.currency_code,'receiverAccount');if(target.ledger_account_id!==r.target_account_id)fault('PAYMENT_REVIEW_CHANGED','review');to=target.ledger_account_id;}
    }else if(r.payment_method==='CRYPTO'){
     to=await this.networkAccount(db,'USER',r.currency_code,r.network,'CRYPTO',r.instruction.receiverUserId);
    }else{
@@ -125,15 +154,11 @@ export class TransferMethods extends PaymentRegister {
       VALUES($1,$2,$3,'PREPAID',$4,'ACTIVE','AVIS_PROPRIETARY_ONLY',$5)`,[cardId,r.source_user_id,token,lastFour,r.source_account_id]);
      delivery={cardReference:token,lastFour,holder:r.instruction.receiverName,currency:r.currency_code,amount:r.amount};
     }
-    const purse=await this.networkAccount(db,'USER',r.currency_code,null,'CARD:'+cardId,r.source_user_id);
+    const purse=await sharedCardAccount(this,db,r.source_user_id,r.currency_code);
     await db.query('UPDATE avis_core_v2.avis_cards SET stored_value_account_id=$2 WHERE card_id=$1',[cardId,purse]);
     to=purse;
     if(r.instruction.offlineDebit){
-     to=await this.networkAccount(db,'SUSPENSE_CARD_FX',r.currency_code,null,r.request_id);
-     const token=randomBytes(32).toString('base64url'),code=String(randomInt(0,1000000)).padStart(6,'0'),expiresAt=new Date(Date.now()+7*86400000).toISOString();
-     await db.query(`INSERT INTO avis_core_v2.coded_card_debits(request_id,card_id,token_hash,code_hash,hold_account_id,amount,currency_code,expires_at)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[r.request_id,cardId,hash(token),fingerprint(r.request_id+':'+code,this.secretEnv),to,r.amount,r.currency_code,expiresAt]);
-     delivery={...delivery,holder:r.instruction.receiverName,currency:r.currency_code,amount:r.amount,redemptionToken:token,code,expiresAt};
+     ({to,delivery}=await this.reserveCodedDebit(db,r,cardId,delivery));
     }
    }
    const journalId=await this.post(db,actor,k,'TRANSFER_'+r.payment_method,r.instruction.reference,[line(r.source_account_id,'DEBIT',r.amount),line(to,'CREDIT',r.amount)]);
@@ -144,17 +169,25 @@ export class TransferMethods extends PaymentRegister {
   });
   return this.paymentRequest(actor,result.id);
  }
+ async reserveCodedDebit(db,r,cardId,delivery=null){
+  const to=await this.networkAccount(db,'SUSPENSE_CARD_FX',r.currency_code,null,r.request_id);
+  const token=randomBytes(32).toString('base64url'),code=String(randomInt(0,1000000)).padStart(6,'0');
+  const {validFrom,expiresAt}=codeWindow({codeStart:r.instruction.validFrom,codeEnd:r.instruction.expiresAt});
+  await db.query(`INSERT INTO avis_core_v2.coded_card_debits(request_id,card_id,token_hash,code_hash,hold_account_id,amount,currency_code,valid_from,expires_at)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,[r.request_id,cardId,hash(token),fingerprint(r.request_id+':'+code,this.secretEnv),to,r.amount,r.currency_code,validFrom,expiresAt]);
+  return {to,delivery:{...delivery,holder:r.instruction.receiverName,currency:r.currency_code,amount:r.amount,redemptionToken:token,code,validFrom,expiresAt}};
+ }
  async paymentRequest(actor,id){
   if(!actor?.admin)fault('FORBIDDEN',null,403);
   const r=(await this.pool.query('SELECT * FROM avis_core_v2.asset_transfer_requests WHERE request_id=$1',[id])).rows[0];
   if(!r)return super.paymentRequest(actor,id);
   if(r.status==='REVIEW'&&r.actor_id!==actor.id)fault('PAYMENT_REQUEST_NOT_FOUND','requestId',404);
   const {sealed_delivery,...safe}=r;
-  return {...fields(safe),hasDelivery:Boolean(sealed_delivery)&&actor.id===r.actor_id};
+  return {...fields(safe),hasDelivery:Boolean(sealed_delivery)&&(actor.id===r.actor_id||String(actor.customerUserId)===String(r.source_user_id))};
  }
  async cardDelivery(actor,input){
   if(!actor?.admin)fault('FORBIDDEN',null,403);
-  const r=(await this.pool.query("SELECT * FROM avis_core_v2.asset_transfer_requests WHERE request_id=$1 AND actor_id=$2 AND status='COMPLETED'",[input.requestId,actor.id])).rows[0];
+  const r=(await this.pool.query("SELECT * FROM avis_core_v2.asset_transfer_requests WHERE request_id=$1 AND (actor_id=$2 OR source_user_id=$3::bigint) AND status='COMPLETED'",[input.requestId,actor.id,actor.customerUserId||null])).rows[0];
   if(!r?.sealed_delivery)fault('PAYMENT_REQUEST_NOT_FOUND','requestId',404);
   return {requestId:r.request_id,...unseal(r.sealed_delivery,'delivery:'+r.request_id,this.secretEnv)};
  }
@@ -165,6 +198,9 @@ export class TransferMethods extends PaymentRegister {
   const result=await this.operation(actor,'REDEEM_CODED_CARD',safe,key,async(db,k)=>{
    const g=(await db.query('SELECT * FROM avis_core_v2.coded_card_debits WHERE token_hash=$1 FOR UPDATE',[hash(token)])).rows[0];
    if(!g||g.status!=='ACTIVE'||new Date(g.expires_at).getTime()<=Date.now())return {error:'CARD_CODE_CLOSED'};
+   if(new Date(g.valid_from).getTime()>Date.now())return {error:'CARD_CODE_NOT_STARTED'};
+   const card=(await db.query('SELECT status,expires_at FROM avis_core_v2.avis_cards WHERE card_id=$1 FOR SHARE',[g.card_id])).rows[0];
+   if(card.status!=='ACTIVE'||(card.expires_at&&new Date(card.expires_at).getTime()<=Date.now()))return {error:'CARD_CODE_BLOCKED'};
    if(!same(g.code_hash,fingerprint(g.request_id+':'+code,this.secretEnv))){
     await db.query("UPDATE avis_core_v2.coded_card_debits SET attempts=attempts+1,status=CASE WHEN attempts+1>=5 THEN 'LOCKED' ELSE status END WHERE request_id=$1",[g.request_id]);return {error:'INVALID_CARD_CODE'};
    }
@@ -281,7 +317,7 @@ export class TransferMethods extends PaymentRegister {
    FROM avis_core_v2.avis_cards c JOIN avis_core_v2.sovereign_users u USING(user_id) JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.funding_account_id
    LEFT JOIN avis_core_v2.ledger_accounts p ON p.account_id=c.stored_value_account_id WHERE c.status='ACTIVE' ORDER BY c.created_at DESC LIMIT 300`)).rows;
   if(view==='externalcards')return (await this.pool.query('SELECT card_id,user_id,holder_name,last_four FROM avis_core_v2.external_payment_cards ORDER BY created_at DESC LIMIT 300')).rows;
-  if(view==='codedcards')return (await this.pool.query(`SELECT g.request_id,c.last_four_digits,g.amount::text,g.currency_code,g.expires_at,g.status FROM avis_core_v2.coded_card_debits g JOIN avis_core_v2.avis_cards c USING(card_id) ORDER BY g.expires_at DESC LIMIT 300`)).rows;
+  if(view==='codedcards')return (await this.pool.query(`SELECT g.request_id,c.user_id,c.last_four_digits,g.amount::text,g.currency_code,g.valid_from,g.expires_at,g.status FROM avis_core_v2.coded_card_debits g JOIN avis_core_v2.avis_cards c USING(card_id) ORDER BY g.expires_at DESC LIMIT 300`)).rows;
   if(view==='cryptooffers')return (await this.pool.query(`SELECT o.offer_id,o.unit_price::text,s.currency_code AS asset,s.network,s.available_balance::text,p.currency_code AS fiat
    FROM avis_core_v2.crypto_sale_offers o JOIN avis_core_v2.ledger_accounts s ON s.account_id=o.stock_account_id JOIN avis_core_v2.ledger_accounts p ON p.account_id=o.proceeds_account_id WHERE o.is_active ORDER BY o.created_at DESC LIMIT 300`)).rows;
   if(view==='paymentregister'||view==='transferrequests'||view==='transferalerts'){
