@@ -103,6 +103,18 @@ test('HTTP authentication, origin, CSRF and persisted session enforce operator a
  assert.equal((await fetch(base+'/api/customers',{method:'POST',headers:{cookie,origin:base,'content-type':'application/json','idempotency-key':'http-account'},body})).status,403);
  const result=await fetch(base+'/api/customers',{method:'POST',headers:{cookie,origin:base,'content-type':'application/json','x-csrf-token':session.csrf,'idempotency-key':'http-account'},body});assert.equal(result.status,200);assert.equal((await result.json()).accounts.length,1);
 });
+test('administrator session restore in another tab preserves active forms',async()=>{
+ const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:'operator',password:'fixture-password'})});
+ const cookie=login.headers.get('set-cookie').split(';')[0],initial=await login.json();
+ const restored=await Promise.all([1,2].map(async()=>{
+  const response=await fetch(base+'/api/session',{headers:{cookie}});assert.equal(response.status,200);return response.json();
+ }));
+ for(const session of restored)assert.equal(session.csrf,initial.csrf,'opening a second tab must not invalidate the first tab');
+ const response=await fetch(base+'/api/customers',{method:'POST',headers:{cookie,origin:base,'content-type':'application/json','x-csrf-token':initial.csrf,'idempotency-key':'multi-tab-account'},body:JSON.stringify({fullName:'Multiple tab account',accountType:'PERSONAL',currencies:['EUR']})});
+ assert.equal(response.status,200);assert.equal((await response.json()).accounts.length,1);
+ const logout=await fetch(base+'/api/logout',{method:'POST',headers:{cookie,origin:base,'content-type':'application/json','x-csrf-token':restored[1].csrf},body:'{}'});assert.equal(logout.status,200);
+ assert.equal((await fetch(base+'/api/session',{headers:{cookie}})).status,401);
+});
 test('existing identity service requires authenticated administrator permission',async()=>{
  await assert.rejects(authenticateFineract('a','b','https://bank.invalid',async()=>({ok:true,json:async()=>({authenticated:true,permissions:['READ_CLIENT']})})),/OPERATOR_ACCESS_REQUIRED/);
  // Fineract's published authentication response uses authenticated, not isAuthenticated.
