@@ -14,7 +14,7 @@ const digest=v=>createHash('sha256').update(v).digest('hex');
 export async function authenticateFineract(username,password,baseUrl,fetcher=fetch) {
  if(!baseUrl||!/^https?:\/\//.test(baseUrl))fault('SIGN_IN_SERVICE',null,503);
  const base=new URL(baseUrl);
- if(base.protocol!=='https:'&&!base.hostname.endsWith('.internal'))fault('SIGN_IN_SERVICE',null,503);
+ if(base.protocol!=='https:'&&!(base.protocol==='http:'&&base.hostname==='genesis-fineract-uat'))fault('SIGN_IN_SERVICE',null,503);
  const response=await fetcher(new URL('/fineract-provider/api/v1/authentication',base),{
   method:'POST',headers:{'content-type':'application/json','fineract-platform-tenantid':'default'},
   body:JSON.stringify({username,password}),signal:AbortSignal.timeout(15000),redirect:'error'});
@@ -59,13 +59,14 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
   try {
    const url=new URL(req.url,'http://localhost'),path=url.pathname;
    if(req.method==='GET'&&path==='/healthz')return send(res,200,{status:'ok',release});
+   if(req.method==='GET'&&path==='/readyz'){await pool.query('SELECT 1');return send(res,200,{status:'ready',release});}
    const ingress=/^\/network\/([A-Z0-9_]{1,35})\/(iso20022|iso8583|offline-batch)$/.exec(path);
    if(ingress&&req.method==='POST'){
     const contentType={iso20022:'application/xml',iso8583:'application/octet-stream','offline-batch':'application/json'}[ingress[2]];
     if(!req.headers['content-type']?.startsWith(contentType))fault('INVALID_FIELD',null,415);
     const parts=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>65535)fault('INVALID_FIELD',null,413);parts.push(chunk);}
     const raw=Buffer.concat(parts),p=await core.profile(pool,ingress[1]),credentials=connectorCredentials(p.credential_reference);
-    await authenticateMessage(pool,p.profile_id,req.method,path,raw,req.headers,credentials.hmacSecret);
+    await authenticateMessage(pool,p.profile_id,req.method,path+url.search,raw,req.headers,credentials.hmacSecret);
     if(ingress[2]==='iso8583'){
      const response=await processAvis8583(core,{id:'connector:'+p.profile_id,admin:true},raw,{allowedTerminals:credentials.allowedTerminals||[]});
      res.setHeader('content-type','application/octet-stream');return res.end(response);
