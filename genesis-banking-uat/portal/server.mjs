@@ -11,6 +11,9 @@ import {authenticateMessage,connectorCredentials,dispatchPayment,recoverPaymentD
 import {buildPacs002,readIso20022} from './src/iso20022.mjs';
 
 const digest=v=>createHash('sha256').update(v).digest('hex');
+// A session-bound token stays valid across tabs and is renewed at every login.
+// The random HttpOnly session secret cannot be recovered from this digest.
+const sessionCsrf=token=>digest('avispay:csrf:v1:'+token);
 export async function authenticateFineract(username,password,baseUrl,fetcher=fetch) {
  if(!baseUrl||!/^https?:\/\//.test(baseUrl))fault('SIGN_IN_SERVICE',null,503);
  const base=new URL(baseUrl);
@@ -108,7 +111,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     if(attempts.size>=10000&&!previous)fault('TOO_MANY_ATTEMPTS',null,429);
     attempts.set(bucket,previous&&now-previous.since<60000?{since:previous.since,count:previous.count+1}:{since:now,count:1});
     const actor=await authenticate(username,password);if(!actor?.admin)fault('FORBIDDEN',null,403);
-    const token=randomBytes(32).toString('base64url'),csrf=randomBytes(32).toString('base64url');
+    const token=randomBytes(32).toString('base64url'),csrf=sessionCsrf(token);
     await pool.query('DELETE FROM avis_core_v2.operator_sessions WHERE expires_at<now()');
     await pool.query("INSERT INTO avis_core_v2.operator_sessions(token_hash,csrf_hash,actor_id,username,expires_at) VALUES($1,$2,$3,$4,now()+interval '1 hour')",[digest(token),digest(csrf),actor.id,actor.username]);
     res.setHeader('Set-Cookie',`avis_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600${secureCookies?'; Secure':''}`);
@@ -120,8 +123,10 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(!session)fault('UNAUTHORIZED',null,401);
    const actor={id:session.actor_id,username:session.username,admin:true};
    if(path==='/api/session'&&req.method==='GET'){
-    // Refresh CSRF token without exposing the session cookie.
-    const csrf=randomBytes(32).toString('base64url');await pool.query('UPDATE avis_core_v2.operator_sessions SET csrf_hash=$2 WHERE token_hash=$1',[digest(token),digest(csrf)]);
+    // Restore the same token in every tab. Adopt sessions issued before this
+    // release once; new sessions need no write when restoring the workspace.
+    const csrf=sessionCsrf(token);
+    if(session.csrf_hash!==digest(csrf))await pool.query('UPDATE avis_core_v2.operator_sessions SET csrf_hash=$2 WHERE token_hash=$1',[digest(token),digest(csrf)]);
     return send(res,200,{username:actor.username,csrf});
    }
    if(req.method==='GET'&&path.startsWith('/api/views/'))return send(res,200,{rows:await core.list(actor,path.split('/').at(-1))});
