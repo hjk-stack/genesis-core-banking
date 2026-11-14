@@ -70,11 +70,13 @@ def main():
     env = [f'PGHOST={pg_host}', 'PGPORT=5432', f'PGUSER={pg_user}', f'PGDATABASE={database}',
            'PGPASSWORD=secretref:avispay-db-password', 'FINERACT_URL=http://genesis-fineract-uat',
            'AVIS_OFFLINE_SIGNING_KEY=secretref:avispay-offline-key', f'PORT={port}', f'RELEASE_SHA={sha}']
+    stage = 'application update'
     try:
         az('containerapp', 'update', '-g', RG, '-n', APP, '--image', image,
            '--container-name', containers[0]['name'], '--set-env-vars', *env,
            '--revision-suffix', 'bank-' + sha[:12])
         after = app(APP)
+        stage = 'configuration preservation'
         for field in ['managedEnvironmentId', 'workloadProfileName']:
             if before['properties'].get(field) != after['properties'].get(field):
                 raise RuntimeError('Deployment changed an environment property')
@@ -85,6 +87,7 @@ def main():
             raise RuntimeError('Deployment changed identity or resource allocation')
         base = 'https://' + after['properties']['configuration']['ingress']['fqdn']
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        stage = 'application readiness'
         for attempt in range(60):
             try:
                 health = api(opener, base, '/readyz')
@@ -96,8 +99,10 @@ def main():
         else:
             raise RuntimeError('New application did not become ready')
         # Existing administrator sign-in; read records only. Never create or fund test customers here.
+        stage = 'administrator authentication'
         login = api(opener, base, '/api/login', {'username': 'mifos', 'password': secret('genesis-mifos-uat', 'admin-password')})
         for view in ['accounts', 'ledger', 'bankpayments', 'bankroutes', 'clearing', 'offlinegrants', 'audit']:
+            stage = 'authenticated read ' + view
             result = api(opener, base, '/api/views/' + view)
             if not isinstance(result.get('rows'), list):
                 raise RuntimeError('Authenticated banking read failed')
@@ -108,7 +113,11 @@ def main():
         with open(os.environ.get('GITHUB_STEP_SUMMARY', os.devnull), 'a') as summary:
             summary.write(f'AVISPay application release `{sha}` verified on [{APP}]({base}).\n\n')
             summary.write('Existing resources preserved. Authenticated read verification passed. No financial transaction was submitted.\n')
-    except Exception:
+    except Exception as error:
+        print('Release verification stage: ' + stage)
+        print('Error type: ' + type(error).__name__ + '; HTTP status: ' + str(getattr(error, 'code', 'n/a')))
+        if isinstance(error, RuntimeError):
+            print(str(error))  # Only this module's fixed, credential-free diagnostics.
         # Additive migrations remain; restoring the old image never rolls back financial data.
         az('containerapp', 'update', '-g', RG, '-n', APP, '--image', containers[0]['image'])
         raise RuntimeError('Release verification failed; previous application image restored') from None

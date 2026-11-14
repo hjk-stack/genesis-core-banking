@@ -21,7 +21,7 @@ export async function authenticateFineract(username,password,baseUrl,fetcher=fet
  if(response.status===401||response.status===403)fault('SIGN_IN_FAILED','password',401);
  if(!response.ok)fault('SIGN_IN_SERVICE',null,503);
  const account=await response.json();
- if(account.isAuthenticated!==true||!account.permissions?.includes('ALL_FUNCTIONS'))fault('OPERATOR_ACCESS_REQUIRED','username',403);
+ if(account.authenticated!==true||account.isTwoFactorAuthenticationRequired===true||!account.permissions?.includes('ALL_FUNCTIONS'))fault('OPERATOR_ACCESS_REQUIRED','username',403);
  return {id:'fineract:'+account.userId,username:account.username||username,admin:true};
 }
 const messages={
