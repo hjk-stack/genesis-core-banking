@@ -16,12 +16,12 @@ export function createPaymentWizard({api,accounts,refresh,notice}){
   dialog.querySelectorAll('.payment-progress li').forEach((p,i)=>{p.classList.toggle('current',i===step);p.classList.toggle('complete',i<step);if(i===step)p.setAttribute('aria-current','step');else p.removeAttribute('aria-current');});
   q('.step-caption').textContent=`Step ${step+1} of 5 · ${names[step]}`;
   q('[data-back]').hidden=step===0;q('[data-next]').textContent=step===3?'OK · Build message':step===4?'Transfer':'Next';
-  q('.payment-slide:nth-child('+(step+1)+')').querySelector('input,select,h3')?.focus();
+  q('.payment-slide:nth-child('+(step+1)+')').querySelector('input,select,h3')?.focus({preventScroll:true});
  }
  function setBusy(value){busy=value;dialog.querySelectorAll('.payment-slide').forEach((p,i)=>p.inert=value||i!==step);dialog.querySelectorAll('.payment-footer button,.payment-close').forEach(b=>b.disabled=value);q('form').setAttribute('aria-busy',String(value));}
  function error(e){
   clearErrors();const input=els()?.namedItem(e.field),slot=dialog.querySelector(`[data-error="${String(e.field).replace(/[^a-zA-Z]/g,'')}"]`);
-  if(input){const index=[...dialog.querySelectorAll('.payment-slide')].findIndex(p=>p.contains(input));if(index>=0)show(index);input.setAttribute('aria-invalid','true');input.focus();}
+  if(input){const index=[...dialog.querySelectorAll('.payment-slide')].findIndex(p=>p.contains(input));if(index>=0)show(index);input.setAttribute('aria-invalid','true');input.focus({preventScroll:true});}
   (slot||q('.payment-error')).textContent=e.message;
  }
  const values=()=>Object.fromEntries(new FormData(q('form')));

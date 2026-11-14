@@ -50,6 +50,11 @@ jobs:
         run: npm test
       - name: Build banking application container
         run: docker build -t avispay-sovereign:ci genesis-banking-uat/portal
+      - name: Verify payment popup layout in Chromium
+        working-directory: genesis-banking-uat/portal
+        run: |
+          npx playwright install --with-deps chromium
+          node --test test-browser/*.mjs
   deploy:
     needs: verify
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.deploy_existing_uat)
