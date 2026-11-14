@@ -18,6 +18,11 @@ on:
       - '.github/workflows/uat-stack.yml'
   workflow_dispatch:
     inputs:
+      legacy_stack_maintenance:
+        description: 'Explicitly run the original Fineract/Mifos infrastructure maintenance workflow'
+        type: boolean
+        required: false
+        default: false
       allowed_ips:
         description: 'Comma-separated CIDRs that alone may open the web app; empty = open to all (Fineract sign-in required). Pushes keep the current setting.'
         required: false
@@ -44,6 +49,7 @@ env:
 
 jobs:
   uat:
+    if: github.event_name == 'workflow_dispatch' && inputs.legacy_stack_maintenance
     runs-on: ubuntu-24.04
     # Fineract build (~7 min) + first migration (job allows up to 90 min) + app start.
     timeout-minutes: 150
@@ -168,3 +174,4 @@ jobs:
           export MIFOS_IMAGE="$SERVER/genesis-mifos:$TAG"
           export GATEWAY_IMAGE="$SERVER/genesis-iso-sandbox:$TAG"
           bash genesis-banking-uat/azure/deploy-uat.sh
+
