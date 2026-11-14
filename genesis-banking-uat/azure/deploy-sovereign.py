@@ -1,4 +1,6 @@
 """Application-only release. Never creates/deletes infrastructure or resets a database."""
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 import http.cookiejar
 import json
 import os
@@ -106,6 +108,26 @@ def main():
             result = api(opener, base, '/api/views/' + view)
             if not isinstance(result.get('rows'), list):
                 raise RuntimeError('Authenticated banking read failed')
+        stage = 'published FX data verification'
+        expected_fx = {'EUR', 'GBP', 'CHF', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'HUF', 'RON', 'USD', 'SGD', 'JPY'}
+        # Startup refresh is asynchronous. Read public price metadata only; never submit a conversion.
+        for attempt in range(16):
+            rates = api(opener, base, '/api/views/fxrates')['rows']
+            by_currency = {row['currency_code']: row for row in rates}
+            today = datetime.now(timezone.utc).date()
+            if expected_fx.issubset(by_currency) and all(
+                row['source'] == 'ECB reference rates'
+                and Decimal(row['units_per_eur']).is_finite()
+                and Decimal(row['units_per_eur']) > 0
+                and today - timedelta(days=7) <= date.fromisoformat(row['source_date'][:10]) <= today
+                for row in (by_currency[currency] for currency in expected_fx)
+            ):
+                break
+            time.sleep(2)
+        else:
+            raise RuntimeError('Published FX data did not pass source, coverage and date verification')
+        dates = sorted({row['source_date'][:10] for row in rates})
+        print('Verified ECB reference data: ' + str(len(rates)) + ' currencies; publication ' + ', '.join(dates))
         api(opener, base, '/api/logout', {}, login['csrf'])
         print('Verified application release ' + sha)
         print('Authenticated account, ledger, payment, routing, clearing, offline, FX and audit reads passed')
