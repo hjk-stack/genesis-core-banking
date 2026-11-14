@@ -35,6 +35,11 @@ jobs:
       - name: Install application and test dependencies
         working-directory: genesis-banking-uat/portal
         run: npm ci --no-audit --no-fund
+      - name: Check server and browser module syntax
+        working-directory: genesis-banking-uat/portal
+        run: |
+          node --check server.mjs
+          node --check public/app.mjs
       - name: Verify sovereign banking on PostgreSQL
         working-directory: genesis-banking-uat/portal
         env:
