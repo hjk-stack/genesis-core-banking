@@ -5,7 +5,7 @@ import {pathToFileURL} from 'node:url';
 import pg from 'pg';
 import {fault,text} from './src/core.mjs';
 import {migrate} from './src/migrate.mjs';
-import {CardPaymentServer} from './src/offline-cards.mjs';
+import {FxBankingServer} from './src/fx.mjs';
 import {processAvis8583} from './src/pos-switch.mjs';
 import {authenticateMessage,connectorCredentials,dispatchPayment} from './src/payment-transport.mjs';
 import {buildPacs002,readIso20022} from './src/iso20022.mjs';
@@ -25,6 +25,9 @@ export async function authenticateFineract(username,password,baseUrl,fetcher=fet
  return {id:'fineract:'+account.userId,username:account.username||username,admin:true};
 }
 const messages={
+ FX_ACCOUNT_PAIR:'Select two different currency accounts belonging to the same customer.',FX_RATE_REQUIRED:'Refresh rates or select a currency with a current quote.',
+ FX_LIQUIDITY_REQUIRED:'The treasury has insufficient available funds in the receiving currency.',FX_QUOTE_CLOSED:'Request a new quote for this conversion.',
+ FX_QUOTE_EXPIRED:'This quote expired. Its treasury reservation has been released; request a new quote.',FX_SOURCE_DATE:'The reference-rate publication date is outside the accepted range.',
  CONNECTOR_NOT_FOUND:'Select a configured bank connector.',BANK_ROUTE_REQUIRED:'Link the selected ABIQ account to its bank account.',
  INSUFFICIENT_CLEARING_FUNDS:'The selected clearing account has insufficient unreserved funds.',
  TRANSFER_NOT_FOUND:'Select an existing bank payment.',TRANSFER_ALREADY_CLOSED:'This payment has already been settled or rejected.',
@@ -49,7 +52,7 @@ const messages={
  CSRF:'Refresh the page and submit again.',TOO_MANY_ATTEMPTS:'Please wait before trying to sign in again.'
 };
 export function createBankServer({pool,authenticate,release='local',secureCookies=true}) {
- const core=new CardPaymentServer(pool),attempts=new Map();
+ const core=new FxBankingServer(pool),attempts=new Map();
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  return http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
@@ -131,11 +134,14 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(path==='/api/bankpayments/dispatch')return send(res,200,await dispatchPayment(core,actor,body,req.headers['idempotency-key']));
    const routes={customers:'openCustomer',currencies:'addCurrencies',transfers:'transfer',shops:'registerShop',
     correspondents:'registerCashAccount',bankprofiles:'registerBankConnector',bankroutes:'linkBankAccount',bankpayments:'initiatePayment','clearing/reconcile':'reconcileStatement',
+    'fx/rates/refresh':'refreshFxRates','fx/quote':'quoteFx','fx/execute':'executeFx','fx/cancel':'cancelFx',
     'offline/keys':'configureOffline','offline/allowances':'issueOfflineAllowance','offline/sync':'settleOfflineBatch','offline/close':'closeOfflineAllowance',
     'checkouts/capture':'captureCheckout','checkouts/release':'releaseCheckout','checkouts/refund':'refundCheckout',
     cards:'registerCard',terminals:'registerTerminal','cards/authorize':'authorizeCard','cards/capture':'settleCard','cards/reverse':'settleCard'};
    const action=path.slice(5),method=routes[action];if(!method)fault('NOT_FOUND',null,404);
-   return send(res,200,await core[method](actor,body,req.headers['idempotency-key'],action==='cards/reverse'));
+   const result=await core[method](actor,body,req.headers['idempotency-key'],action==='cards/reverse');
+   if(action==='fx/execute'&&result.status==='EXPIRED')fault('FX_QUOTE_EXPIRED','quoteId',409);
+   return send(res,200,result);
   }catch(e){
    const code=e.code==='23505'?'DUPLICATE_RECORD':['23503','22P02'].includes(e.code)?'INVALID_REFERENCE':messages[e.code]?e.code:messages[e.message]?e.message:'REQUEST_FAILED';
    console.error(JSON.stringify({requestId,code,diagnosticCode:e.code||e.message?.slice(0,100)}));
@@ -150,4 +156,12 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  const client=await pool.connect();try{await migrate(client);}finally{client.release();}
  createBankServer({pool,authenticate:(u,p)=>authenticateFineract(u,p,process.env.FINERACT_URL),release:process.env.RELEASE_SHA||'local'})
   .listen(Number(process.env.PORT||8080),'0.0.0.0');
+ const housekeeping=new FxBankingServer(pool);let expiring=false;
+ const refreshRates=()=>housekeeping.refreshFxRates({id:'system:fx-rates',admin:true},{},'ecb:'+new Date().toISOString().slice(0,13)).catch(e=>console.error(JSON.stringify({operation:'FX_RATE_REFRESH',code:e.code||'RATE_REFRESH_FAILED'})));
+ void refreshRates();setInterval(refreshRates,3600000).unref();
+ setInterval(async()=>{if(expiring)return;expiring=true;try{
+  if((await pool.query("SELECT 1 FROM avis_core_v2.fx_quotes WHERE status='OPEN' AND expires_at<=now() LIMIT 1")).rows.length)
+   await housekeeping.operation({id:'system:fx-expiry',admin:true},'EXPIRE_FX_QUOTES',{},'expiry:'+Math.floor(Date.now()/30000),async db=>{await housekeeping.expireFxQuotes(db,{id:'system:fx-expiry'});return {expired:true};});
+ }catch(e){console.error(JSON.stringify({operation:'FX_EXPIRY',code:e.code||'EXPIRY_FAILED'}));}finally{expiring=false;}},30000).unref();
+
 }

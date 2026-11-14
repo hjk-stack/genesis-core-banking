@@ -16,7 +16,7 @@ The current production-facing launcher is not the banking implementation describ
 | Clearing account connector | Sovereign Core v2 §§2–4 | Incoming confirmed cash → suspense → common → user; outgoing reservation → confirmed cash settlement; balanced statement reconciliation; clearing liquidity reserved alongside customer funds. |
 | ISO 8583 online and offline cards | POS v6; Industrial v6.2 | ASCII/binary bitmap codec with configurable dictionary, correlated replies, AVIS switch authorization/capture/reversal, signed prefunded offline allowances and atomic SAF settlement with card + terminal verification. External scheme profiles, EMV cryptogram adapters and industrial tranche processing are subsequent acceptance items. |
 | Multichain crypto and tokenization automation | Complete Bank & Crypto; OmniChain; Universal Asset Bridge | Preserve existing addresses; integrate chain verification, signing and automated asset registration |
-| Fiat converter | v3 and ABIQ v8.1 | Required: firm quote, expiry, treasury inventory, exact two-currency journals and reversal |
+| Fiat converter | v3 and ABIQ v8.1 | Treasury-funded 30-second quotes, expiry/cancellation release, exact two-currency posting and commissions. The ECB reference feed retains its publication date; these are AVISPay treasury quotes, not external bank trade confirmations. |
 | Exchange / robot / index picker | Exchange v5; Board W-Effect clarification | Required in final workstream; W-Effect has no margin or leverage prerequisite |
 
 This branch does not claim completion of the full banking programme. Internal operator-account tests do not prove external network acceptance, card certification, on-chain execution or live exchange operation. Those are engineering acceptance evidence, not customer-facing banners.
@@ -45,3 +45,7 @@ The interface fetches records from the authenticated API. There are no fabricate
 - Official XSDs: [pacs.008.001.08](https://www.iso20022.org/message/14231/download), [pacs.002.001.10](https://www.iso20022.org/message/14061/download). XSD validation does not establish compliance with every bank's additional message profile.
 - [Worldpay ISO 8583 reference](https://docs.worldpay.com/assets/pdf/Worldpay_ISO_8583_Reference_Guide_V2.62.pdf) and [FIS LISO reference](https://developerengine.fisglobal.com/assets/pdf/ISO_8583_Host_Capture_Msg_Spec_LISO_V1.2.pdf) demonstrate differing field layouts. `AVIS_ASCII` is the AVIS proprietary dictionary; it is not automatically a Worldpay/FIS/Visa/Mastercard profile.
 - Breinrock's public BaaS page advertises APIs but its documentation link leads to its contact page. No endpoint, bank response or account-creation confirmation has been invented.
+
+## FX reference data and execution
+
+The ECB daily XML feed supplies published reference rates; publication date and retrieval time are retained. These are not advertised as streaming prices. The feed covers 13 of the 14 configured fiat currencies including EUR; AED requires an external-bank rate source and is not synthesized. Quotes reserve destination-currency treasury inventory for 30 seconds, with automatic expiry release. Execution posts both currencies and the chosen commission atomically. No initial treasury balance is seeded. The rate publisher runs on startup/hourly and cannot veto account creation or payment operation.
