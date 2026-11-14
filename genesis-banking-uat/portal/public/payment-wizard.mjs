@@ -47,6 +47,7 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
   q('[data-address]').hidden=m!=='BANK';
   if(m==='CODED_CARD'){els().offlineDebit.checked=true;if(cd==='EXTERNAL')els().cardDestination.value='NEW';}
   q('[data-offline]').hidden=els().cardDestination.value==='EXTERNAL';
+  if(cd==='EXTERNAL')els().offlineDebit.checked=false;
   dialog.querySelectorAll('input,select').forEach(el=>el.disabled=Boolean(el.closest('[hidden]')));
   if(m==='CODED_CARD')els().offlineDebit.disabled=true;
   els().amount.pattern=m==='CRYPTO'?'[0-9]+([.][0-9]{1,18})?':'[0-9]+([.][0-9]{1,2})?';els().amount.maxLength=m==='CRYPTO'?37:21;
@@ -116,7 +117,7 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
    }
    if(step===3){
     const v=values(),a=bankSource();reviewKey ||= crypto.randomUUID();
-    review=await api('payments/review',{method:method(),cryptoAccount:v.cryptoAccount,cryptoDestination:v.cryptoDestination,receiverUserId:v.receiverUserId,cryptoAddress:v.cryptoAddress,destinationTag:v.destinationTag,cardDestination:v.cardDestination,cardId:v.cardId,externalCardId:v.externalCardId,offlineDebit:els().offlineDebit.checked,from:v.from,currency:a.currency_code,amount:v.amount,
+    review=await api('payments/review',{method:method(),cryptoAccount:v.cryptoAccount,cryptoDestination:v.cryptoDestination,receiverUserId:v.receiverUserId,cryptoAddress:v.cryptoAddress,destinationTag:v.destinationTag,cardDestination:v.cardDestination,cardId:v.cardId,externalCardId:v.externalCardId,offlineDebit:['CARD','CODED_CARD'].includes(method())&&v.cardDestination!=='EXTERNAL'&&els().offlineDebit.checked,from:v.from,currency:a.currency_code,amount:v.amount,
      receiverAccount:v.receiverAccount,receiverBic:v.receiverBic,receiverName:v.receiverName,
      address:{street:v.street,city:v.city,postalCode:v.postalCode,country:v.country},reference:v.reference},reviewKey);
     transferKey=crypto.randomUUID();reviewDisplay(review);

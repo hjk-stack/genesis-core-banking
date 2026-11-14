@@ -68,7 +68,7 @@ test('external card number is registered separately and excluded from reviewed t
   if(path==='cards/external')return {id:'external-card',lastFour:'1111'};
   if(path==='payments/review')return {id:'request',mode:'MANUAL',format:'AVIS_TRANSFER_V1',message:'External load',messageHash:'hash',instruction:{...body,destinationLabel:'External card ending 1111'}};
  },views);
- fill('from',account.abiq_iban);fill('method','CARD');fill('amount','20');await next();fill('cardDestination','EXTERNAL');fill('externalCardId','NEW');fill('cardNumber','4111111111111111');fill('expiry','12/2099');fill('holderName','External Receiver');await next();
+ fill('from',account.abiq_iban);fill('method','CARD');fill('amount','20');await next();fields().offlineDebit.checked=true;fill('cardDestination','EXTERNAL');assert.equal(fields().offlineDebit.checked,false);assert.equal(fields().offlineDebit.disabled,true);fill('externalCardId','NEW');fill('cardNumber','4111111111111111');fill('expiry','12/2099');fill('holderName','External Receiver');await next();
  assert.equal(fields().receiverName.value,'External Receiver');assert.equal(fields().cardNumber.value,'');await next();fill('reference','External load');await next();
- const reviewed=state.calls.find(c=>c.path==='payments/review');assert.equal(reviewed.body.externalCardId,'external-card');assert.equal(JSON.stringify(reviewed.body).includes('4111111111111111'),false);assert.equal(state.calls.filter(c=>c.path==='cards/external').length,1);
+ const reviewed=state.calls.find(c=>c.path==='payments/review');assert.equal(reviewed.body.externalCardId,'external-card');assert.equal(reviewed.body.offlineDebit,false);assert.equal(JSON.stringify(reviewed.body).includes('4111111111111111'),false);assert.equal(state.calls.filter(c=>c.path==='cards/external').length,1);
 });
