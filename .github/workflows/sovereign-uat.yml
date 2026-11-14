@@ -1,10 +1,10 @@
 name: AVISPay sovereign UAT
 on:
   pull_request:
-    paths: ['genesis-banking-uat/portal/**', 'genesis-banking-uat/azure/deploy-sovereign.py', '.github/workflows/sovereign-uat.yml']
+    paths: ['genesis-banking-uat/portal/**', 'genesis-banking-uat/azure/deploy-sovereign.py', 'genesis-banking-uat/azure/test_deploy_sovereign.py', '.github/workflows/sovereign-uat.yml']
   push:
     branches: [main]
-    paths: ['genesis-banking-uat/portal/**', 'genesis-banking-uat/azure/deploy-sovereign.py', '.github/workflows/sovereign-uat.yml']
+    paths: ['genesis-banking-uat/portal/**', 'genesis-banking-uat/azure/deploy-sovereign.py', 'genesis-banking-uat/azure/test_deploy_sovereign.py', '.github/workflows/sovereign-uat.yml']
   workflow_dispatch:
     inputs:
       deploy_existing_uat:
@@ -42,6 +42,7 @@ jobs:
           node --check public/app.mjs
           node --check public/payment-wizard.mjs
           python3 -m py_compile ../azure/deploy-sovereign.py
+          python3 -m unittest discover -s ../azure -p test_deploy_sovereign.py
       - name: Verify sovereign banking on PostgreSQL
         working-directory: genesis-banking-uat/portal
         env:
