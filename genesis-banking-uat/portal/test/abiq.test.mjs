@@ -26,7 +26,7 @@ before(async()=>{
    if(client.exec)await client.exec(sql);else await client.query(sql);
    await client.query('INSERT INTO avis_core_v2.schema_migrations(version,checksum) VALUES($1,$2)',[name,createHash('sha256').update(sql).digest('hex')]);
   }
-  await client.query("INSERT INTO avis_core_v2.sovereign_users(user_id,avis_account_no,full_name,account_type) VALUES(50,'legacy-customer-50','Existing Customer','BUSINESS')");
+  await client.query("INSERT INTO avis_core_v2.sovereign_users(user_id,avis_account_no,full_name,account_type) VALUES(1,'legacy-corporate-1','AVISPay PLC','BUSINESS'),(50,'legacy-customer-50','Existing Customer','BUSINESS')");
   legacy=(await client.query("SELECT avis_core_v2.provision_abiq_accounts(50,'AVIS',ARRAY['EUR'],'legacy-request') AS result")).rows[0].result[0];
   await client.query("INSERT INTO avis_core_v2.platform_connectors(connector_code,display_name,is_enabled) VALUES('LEGACY','Preserved connector',true)");
   await linkAbiqBankRoute(client,{userId:'50',participantCode:'AVIS',abiqIban:legacy.abiqIban,bankRoute:{accountType:'IBAN',country:'DE',accountNumber:'DE89370400440532013000',bic:'COBADEFFXXX',connectorCode:'LEGACY',providerAccountId:'existing-50',providerReference:'existing-response'}});
@@ -53,6 +53,12 @@ test('corporate user 1 and frontend user 2 have distinct zero-balance EUR USD GB
  assert.equal(accounts.length,6);assert.equal(new Set(accounts.map(a=>a.abiq_iban)).size,6);
  for(const a of accounts){assert.equal(a.abiq_bic,'AVIPTN64XXX');assert.equal(a.available_balance,'0.000000000000000000');assert.equal(parseAbiqIban(a.abiq_iban).currency,a.currency_code);}
  assert.equal(Number((await rows('SELECT count(*) AS n FROM avis_core_v2.ledger_accounts WHERE user_id IN(1,2)'))[0].n),18);
+});
+test('an existing corporate holder receives the institution role without replacing its account reference',async()=>{
+ const holder=(await rows('SELECT full_name,avis_account_no,account_role FROM avis_core_v2.sovereign_users WHERE user_id=1'))[0];
+ assert.deepEqual(holder,{full_name:'AVISPay PLC',avis_account_no:'legacy-corporate-1',account_role:'INSTITUTION'});
+ const audit=await rows("SELECT resource_id FROM avis_core_v2.operation_audit WHERE actor_id='migration:009' AND operation='ASSIGN_INSTITUTION_ROLE'");
+ assert.deepEqual(audit,[{resource_id:'1'}]);
 });
 test('identifier vectors encode TN AVIP numeric currency and an independent 14-digit sequence',()=>{
  assert.equal(generateIssuedAbiqIban({accountNumber:'1',currency:'EUR'}),'TN73AVIP97800000000000001');
