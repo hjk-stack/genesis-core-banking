@@ -103,11 +103,33 @@ def main():
         # Existing administrator sign-in; read records only. Never create or fund test customers here.
         stage = 'administrator authentication'
         login = api(opener, base, '/api/login', {'username': 'mifos', 'password': secret('genesis-mifos-uat', 'admin-password')})
-        for view in ['accounts', 'ledger', 'bankpayments', 'bankroutes', 'clearing', 'offlinegrants', 'fxrates', 'fxquotes', 'audit']:
+        for view in ['accounts', 'customers', 'issuer', 'ledger', 'bankpayments', 'bankroutes', 'clearing', 'offlinegrants', 'fxrates', 'fxquotes', 'audit']:
             stage = 'authenticated read ' + view
             result = api(opener, base, '/api/views/' + view)
             if not isinstance(result.get('rows'), list):
                 raise RuntimeError('Authenticated banking read failed')
+        stage = 'ABIQ issuer and account verification'
+        issuer = api(opener, base, '/api/views/issuer')['rows']
+        if not any(row['abiq_code'] == 'AVIPTN64XXX' and row['country_code'] == 'TN' for row in issuer):
+            raise RuntimeError('ABIQ issuer mismatch')
+        holders = {str(row['user_id']): row for row in api(opener, base, '/api/views/customers')['rows']}
+        if holders.get('1', {}).get('full_name') != 'AVISPay PLC' or holders.get('1', {}).get('account_role') != 'INSTITUTION':
+            raise RuntimeError('Corporate account identity mismatch')
+        if holders.get('2', {}).get('full_name') != 'Frontend user':
+            raise RuntimeError('Frontend account identity mismatch')
+        accounts = api(opener, base, '/api/views/accounts')['rows']
+        for uid in ['1', '2']:
+            suite = [a for a in accounts if str(a['user_id']) == uid and a['participant_code'] == 'AVIP']
+            if not {'EUR', 'USD', 'GBP'}.issubset(a['currency_code'] for a in suite):
+                raise RuntimeError('ABIQ currency accounts missing')
+            for account in suite:
+                identifier = account['abiq_iban']
+                if not re.fullmatch(r'TN[0-9]{2}AVIP[0-9]{17}', identifier) or account['abiq_bic'] != 'AVIPTN64XXX':
+                    raise RuntimeError('ABIQ account format mismatch')
+                expanded = ''.join(str(ord(c) - 55) if c.isalpha() else c for c in identifier[4:] + identifier[:4])
+                if int(expanded) % 97 != 1:
+                    raise RuntimeError('ABIQ checksum mismatch')
+        print('Verified ABIQ issuer, corporate user 1, frontend user 2 and EUR/USD/GBP account checksums')
         stage = 'published FX data verification'
         expected_fx = {'EUR', 'GBP', 'CHF', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'HUF', 'RON', 'USD', 'SGD', 'JPY'}
         # Startup refresh is asynchronous. Read public price metadata only; never submit a conversion.

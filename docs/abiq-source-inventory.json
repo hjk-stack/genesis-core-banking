@@ -1,0 +1,134 @@
+{
+  "reviewScope": "Core accounts, ABIQ issuance, ledger preservation and deployment; other modules remain separately scoped",
+  "documents": [
+    {
+      "name": "AVISGreen_Rolling_TradeLoop_Security_Token_and_OmniChain_Spec 2.pdf",
+      "sha256": "bebdf0427c7c9d5ca96fdb922dae1d3859e3dfdc018899d41180e1f544a616f9",
+      "pages": 8,
+      "words": 2659
+    },
+    {
+      "name": "AVISGreen_Rolling_TradeLoop_Security_Token_and_OmniChain_Spec.pdf",
+      "sha256": "bebdf0427c7c9d5ca96fdb922dae1d3859e3dfdc018899d41180e1f544a616f9",
+      "pages": 8,
+      "words": 2659
+    },
+    {
+      "name": "AVISPay_Addendum_v5_Unified_Exchange_HFT_WEffect_and_RWA_Tokenization.pdf",
+      "sha256": "42e563075b158ac6bb383d76139a7d7004b4514ca7d050afc5f7769ecae8f3e6",
+      "pages": 4,
+      "words": 1656
+    },
+    {
+      "name": "AVISPay_Addendum_v6_2_Industrial_ForcePayment_50M_POS_Clearing.pdf",
+      "sha256": "6a18133a60d31fff8d4b81700655ee1d27513a798021ceab71ebc3e1053c5bde",
+      "pages": 5,
+      "words": 2015
+    },
+    {
+      "name": "AVISPay_Addendum_v6_POS_Server_Offline_Payments_and_Card_Bridge.pdf",
+      "sha256": "94d85e28d07b8b558823a32f1f4e280a9def6f69f772b13e9c4c6f05a5f63ca0",
+      "pages": 4,
+      "words": 1788
+    },
+    {
+      "name": "AVISPay_Addendum_v8_1_MultiCurrency_European_ABIQ_Master_Plan.pdf",
+      "sha256": "d7b91e4330543957b386e106d91febaaa01b431b33f8227116e4347c72ac64a7",
+      "pages": 4,
+      "words": 1956
+    },
+    {
+      "name": "AVISPay_Agent_Parallel_Migration_Runbook.pdf",
+      "sha256": "7cec19d304985342e2107681ec6f13006ced8013380907bcfa955e3d65150a4b",
+      "pages": 5,
+      "words": 1754
+    },
+    {
+      "name": "AVISPay_Complete_10_Volume_Master_Index_and_Agent_Roadmap.pdf",
+      "sha256": "80195ce22c3f8d21379816420af921d89cd895a86d5130c198bad436e2c82fb3",
+      "pages": 3,
+      "words": 1105
+    },
+    {
+      "name": "AVISPay_Complete_Bank_and_Crypto_Architecture.pdf",
+      "sha256": "5b7706d5809d0545ec6bbcf55991e43f0b3633d5e3021a126ab7f52b1bfbd52f",
+      "pages": 12,
+      "words": 3446
+    },
+    {
+      "name": "AVISPay_Executive_Handover_and_Deployment_Verification_Guide.pdf",
+      "sha256": "40bd5ed224ba29feac7885b87c98e2b8904f162cfa8ded81948a3c9b6b7befe6",
+      "pages": 5,
+      "words": 952
+    },
+    {
+      "name": "AVISPay_Kickoff_Master_Plan_and_PR_to_Main_Protocol_16_PDFs.pdf",
+      "sha256": "1f93b8a6d526d5dcdf41f84fceda1e276c180a739f0a8ac4f74476d1252c0319",
+      "pages": 4,
+      "words": 862
+    },
+    {
+      "name": "AVISPay_Master_Agent_System_Prompt_and_Build_Directive.pdf",
+      "sha256": "fa70b7625272eba4b62a09c84be28e9790dabbf9c02775c170af1068a9598f10",
+      "pages": 2,
+      "words": 916
+    },
+    {
+      "name": "AVISPay_Master_Azure_Bank_Marketplace_StockExchange_Crypto_Blueprint_v3.pdf",
+      "sha256": "9688593a259b0f29a2a6f405736d54098bf18d4228e683254391671f178b3cdd",
+      "pages": 8,
+      "words": 2851
+    },
+    {
+      "name": "AVISPay_OmniChain_Universal_Bridge_and_Agent_Build_Spec.pdf",
+      "sha256": "4c40f8d253e48573ea30792991b85ce04ed77c61a7ac58173ac0127c5e4317e7",
+      "pages": 10,
+      "words": 3045
+    },
+    {
+      "name": "AVISPay_Operational_DevOps_and_Compliance_Appendix_v4.pdf",
+      "sha256": "054c6b5c1ba97719d3e35dcc7d38485d6bf9e40e7efbffec5ca59ce835dc0089",
+      "pages": 5,
+      "words": 1484
+    },
+    {
+      "name": "AVISPay_Sovereign_Core_and_Quantum_Connector_Master_Blueprint(1).pdf",
+      "sha256": "6b58c9c6f824dff6668d4a608266a2322d455105380ff0487b3d80d40c05b20c",
+      "pages": 10,
+      "words": 2839
+    },
+    {
+      "name": "AVISPay_Sovereign_Core_and_Quantum_Connector_Master_Blueprint.pdf",
+      "sha256": "6b58c9c6f824dff6668d4a608266a2322d455105380ff0487b3d80d40c05b20c",
+      "pages": 10,
+      "words": 2839
+    },
+    {
+      "name": "AVISPay_Universal_Asset_Bridge_and_Agent_Spec(1).pdf",
+      "sha256": "0bd522d193e4125dbcdc1bbf1eb615d760b15410371777933d5143067b1559eb",
+      "pages": 12,
+      "words": 2561
+    },
+    {
+      "name": "AVISPay_Universal_Asset_Bridge_and_Agent_Spec.pdf",
+      "sha256": "0bd522d193e4125dbcdc1bbf1eb615d760b15410371777933d5143067b1559eb",
+      "pages": 12,
+      "words": 2561
+    },
+    {
+      "name": "ABIQ ISO020022-Gateway 2023.pdf",
+      "sha256": "2b09dc06ed0b06a6bb7d0718a47efde220312f1112a4cd03f5127e27cf60f011",
+      "source": "current attachment"
+    },
+    {
+      "name": "AVISPay_Final_Master_Plan_and_ABIQ_Sovereign_Network_v8(3).pdf",
+      "sha256": "e108655625ccc40efe25baf7addd3dc9b1511bf9db52dfbb33fd21dea8ae77fc",
+      "source": "current attachment"
+    },
+    {
+      "name": "fit.INTELECT ABIQ API User Reference Manualdocx(1).pdf",
+      "sha256": "b8fb96878b9db6415edbd6544e13cea0347ad6348a55d31d1232b5799cd69620",
+      "source": "current attachment"
+    }
+  ]
+}

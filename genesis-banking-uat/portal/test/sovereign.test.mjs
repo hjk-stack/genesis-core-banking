@@ -28,7 +28,7 @@ test('exact decimals reject floating point, exponent and overprecision',()=>{ass
 test('sovereign signup opens all 14 ABIQ accounts with 3 scopes and no external dependency',async()=>{
  await pool.query("INSERT INTO avis_core_v2.platform_connectors(connector_code,display_name,is_enabled,auto_provision,endpoint_url) VALUES('CORE_BANK_IBAN','Account bridge',true,true,'https://unused.invalid')");
  buyer=await customer('Buyer','PERSONAL',Object.keys(ABIQ_PARTITIONS));assert.equal(buyer.accounts.length,14);
- for(const a of buyer.accounts){assert.equal(parseAbiqIban(a.abiqIban).userId,buyer.userId);assert.equal(parseAbiqIban(a.abiqIban).currency,a.currency);assert.equal(await balance(a.accountId),'0.000000000000000000');}
+ for(const a of buyer.accounts){assert.equal(parseAbiqIban(a.abiqIban).accountNumber,a.accountNumber);assert.equal(parseAbiqIban(a.abiqIban).currency,a.currency);assert.equal(await balance(a.accountId),'0.000000000000000000');}
  assert.equal(Number((await pool.query('SELECT count(*) AS n FROM avis_core_v2.ledger_accounts WHERE user_id=$1',[buyer.userId])).rows[0].n),42);
  assert.equal(await count('connector_outbox'),1);seller=await customer('First Shop Ltd','BUSINESS');seller2=await customer('Second Shop Ltd','BUSINESS');
 });

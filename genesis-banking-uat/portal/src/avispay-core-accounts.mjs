@@ -5,6 +5,7 @@ import { normalizeIban } from './avispay-correspondent-mapping.mjs';
 export const ABIQ_PARTITIONS = Object.freeze({EUR:'0978',GBP:'0826',CHF:'0756',SEK:'0752',
  NOK:'0578',DKK:'0208',PLN:'0985',CZK:'0203',HUF:'0348',RON:'0946',USD:'0840',
  AED:'0784',SGD:'0702',JPY:'0392'});
+export const ABIQ_ISSUER = Object.freeze({participantCode:'AVIP',abiqCode:'AVIPTN64XXX',countryCode:'TN',accountDigits:14});
 const fail = code => { throw Object.assign(new Error(code),{code}); };
 function field(value,code,max=128) {
  if(typeof value!=='string'||!value.trim()||value.trim().length>max||/[\x00-\x1f\x7f]/.test(value)) fail(code);
@@ -36,14 +37,25 @@ export function generateAbiqIban({userId,participantCode,currency}) {
  const bban=nodeCode(participantCode)+ABIQ_PARTITIONS[currencyCode(currency)]+customerId(userId).padStart(14,'0');
  return 'AQ'+String(98-abiqMod97(bban+'AQ00')).padStart(2,'0')+bban;
 }
+export function generateIssuedAbiqIban({accountNumber,currency}) {
+ const bban=ABIQ_ISSUER.participantCode+ABIQ_PARTITIONS[currencyCode(currency)].slice(1)+customerId(accountNumber).padStart(14,'0');
+ return ABIQ_ISSUER.countryCode+String(98-abiqMod97(bban+ABIQ_ISSUER.countryCode+'00')).padStart(2,'0')+bban;
+}
+export function isAbiqIdentifier(value) {
+ const compact=typeof value==='string'?value.replace(/\s/g,'').toUpperCase():'';
+ return compact.startsWith('AQ')||/^TN.{2}AVIP/.test(compact);
+}
 export function parseAbiqIban(value) {
  const identifier=field(value,'ABIQ_INVALID_IDENTIFIER',40).replace(/\s/g,'').toUpperCase();
- const match=/^AQ(\d{2})([A-Z0-9]{4})(0\d{3})(\d{14})$/.exec(identifier);
+ const current=/^TN(\d{2})(AVIP)(\d{3})(\d{14})$/.exec(identifier);
+ const legacy=/^AQ(\d{2})([A-Z0-9]{4})(0\d{3})(\d{14})$/.exec(identifier);
+ const match=current||legacy;
  if(!match||abiqMod97(identifier.slice(4)+identifier.slice(0,4))!==1) fail('ABIQ_INVALID_IDENTIFIER');
- const currency=Object.keys(ABIQ_PARTITIONS).find(c=>ABIQ_PARTITIONS[c]===match[3]);
+ const currency=Object.keys(ABIQ_PARTITIONS).find(c=>ABIQ_PARTITIONS[c]===(current?'0'+match[3]:match[3]));
  if(!currency) fail('ABIQ_UNSUPPORTED_CURRENCY');
- const userId=customerId(match[4]);
- return {identifier,participantCode:match[2],currency,userId};
+ const sequence=customerId(match[4]);
+ return {identifier,participantCode:match[2],currency,...(current?
+  {countryCode:'TN',abiqCode:ABIQ_ISSUER.abiqCode,accountNumber:sequence.padStart(14,'0')}:{userId:sequence})};
 }
 export async function provisionAbiqAccounts(db,{userId,participantCode,currencies,idempotencyKey}) {
  if(!Array.isArray(currencies)||!currencies.length||currencies.length>14) fail('ABIQ_INVALID_CURRENCIES');
@@ -57,6 +69,7 @@ export function normalizeAbiqBankRoute(input) {
  const country=field(input.country,'ABIQ_INVALID_BANK_COUNTRY',2).toUpperCase();
  if(!/^[A-Z]{2}$/.test(country)||country==='AQ') fail('ABIQ_INVALID_BANK_COUNTRY');
  const raw=field(input.accountNumber,'ABIQ_INVALID_BANK_ACCOUNT');
+ if(accountType==='IBAN'&&isAbiqIdentifier(raw)) fail('ABIQ_INVALID_BANK_ACCOUNT');
  const accountNumber=accountType==='IBAN'?normalizeIban(raw):raw;
  if(accountType==='IBAN'&&accountNumber.slice(0,2)!==country) fail('ABIQ_BANK_COUNTRY_MISMATCH');
  const bic=input.bic==null?null:field(input.bic,'ABIQ_INVALID_BANK_BIC',11).toUpperCase();
@@ -69,7 +82,7 @@ export function normalizeAbiqBankRoute(input) {
 }
 export async function linkAbiqBankRoute(db,{userId,participantCode,abiqIban,bankRoute}) {
  const target=parseAbiqIban(abiqIban),uid=customerId(userId),node=nodeCode(participantCode);
- if(target.userId!==uid||target.participantCode!==node) fail('ABIQ_ROUTE_OWNER_MISMATCH');
+ if((target.userId!==undefined&&target.userId!==uid)||target.participantCode!==node) fail('ABIQ_ROUTE_OWNER_MISMATCH');
  const r=normalizeAbiqBankRoute(bankRoute);
  const result=await db.query(`
  WITH eligible AS (
@@ -92,7 +105,7 @@ export async function linkAbiqBankRoute(db,{userId,participantCode,abiqIban,bank
 }
 export async function resolveAbiqAccount(db,{identifier,currency}) {
  const curr=currencyCode(currency),raw=field(identifier,'ABIQ_INVALID_IDENTIFIER');
- if(/^AQ/i.test(raw)) {
+ if(isAbiqIdentifier(raw)) {
   const route=parseAbiqIban(raw);
   if(route.currency!==curr) fail('ABIQ_CURRENCY_MISMATCH');
   const result=await db.query(`SELECT b.bridge_id,b.ledger_account_id,b.user_id,b.participant_code,b.currency_code
