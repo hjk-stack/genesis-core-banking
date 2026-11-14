@@ -7,6 +7,7 @@ import pg from 'pg';
 import {fault,text} from './src/core.mjs';
 import {migrate} from './src/migrate.mjs';
 import {FxBankingServer} from './src/fx.mjs';
+import {PaymentRegister} from './src/payment-register.mjs';
 import {processAvis8583} from './src/pos-switch.mjs';
 import {authenticateMessage,connectorCredentials,dispatchPayment,recoverPaymentDeliveries} from './src/payment-transport.mjs';
 import {buildPacs002,readIso20022} from './src/iso20022.mjs';
@@ -29,6 +30,11 @@ export async function authenticateFineract(username,password,baseUrl,fetcher=fet
  return {id:'fineract:'+account.userId,username:account.username||username,admin:true};
 }
 const messages={
+ INVALID_RECEIVER_ACCOUNT:'Check the receiving account number and its check digits.',
+ INVALID_RECEIVER_BIC:'Enter an 8 or 11 character BIC.',RECEIVER_BIC_MISMATCH:'The BIC does not match this receiving account.',
+ RECEIVER_BANK_VALIDATION:'Check the receiving account and bank BIC.',
+ PAYMENT_REVIEW_CHANGED:'The payment details or route changed. Go back and build a new message.',
+ PAYMENT_REQUEST_NOT_FOUND:'Select an existing payment request.',PAYMENT_REQUEST_CLOSED:'This request is already closed.',
  ABIQ_ACCOUNT_ORDER_COUNT:'Request one identifier when opening a currency account.',
  ABIQ_UNSUPPORTED_CURRENCY:'Select an accepted account currency.',ABIQ_INVALID_CURRENCIES:'Select at least one account currency.',
  ABIQ_CUSTOMER_NOT_FOUND:'Select an existing account holder.',ABIQ_INVALID_CUSTOMER:'Select a valid account holder.',
@@ -60,7 +66,7 @@ const messages={
  CSRF:'Refresh the page and submit again.',TOO_MANY_ATTEMPTS:'Please wait before trying to sign in again.'
 };
 export function createBankServer({pool,authenticate,release='local',secureCookies=true}) {
- const core=new FxBankingServer(pool),attempts=new Map();
+ const core=new PaymentRegister(pool),attempts=new Map();
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  return http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
@@ -90,7 +96,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const reply=await buildPacs002({messageId:randomBytes(16).toString('hex'),uetr:original.uetr,senderBic:p.local_bic,receiverBic:p.peer_bic,status:receipt.status,bankReference:receipt.id.replaceAll('-','')});
     res.setHeader('content-type','application/xml');return res.end(reply);
    }
-   if(req.method==='GET'&&['/','/app.mjs','/styles.css'].includes(path)){
+   if(req.method==='GET'&&['/','/app.mjs','/payment-wizard.mjs','/styles.css'].includes(path)){
     const file=path==='/'?'index.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     res.setHeader('content-type',path==='/'?'text/html; charset=utf-8':path.endsWith('css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8');return res.end(body);
@@ -134,6 +140,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     if(session.csrf_hash!==digest(csrf))await pool.query('UPDATE avis_core_v2.operator_sessions SET csrf_hash=$2 WHERE token_hash=$1',[digest(token),digest(csrf)]);
     return send(res,200,{username:actor.username,csrf});
    }
+   if(req.method==='GET'&&/^\/api\/payment-requests\/[0-9a-f-]{36}$/.test(path))return send(res,200,await core.paymentRequest(actor,path.split('/').at(-1)));
    if(req.method==='GET'&&path.startsWith('/api/views/'))return send(res,200,{rows:await core.list(actor,path.split('/').at(-1))});
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
@@ -141,9 +148,10 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     await pool.query('DELETE FROM avis_core_v2.operator_sessions WHERE token_hash=$1',[digest(token)]);
     res.setHeader('Set-Cookie',`avis_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secureCookies?'; Secure':''}`);return send(res,200,{});
    }
+   if(path==='/api/payments/check-receiver')return send(res,200,await core.checkReceiver(actor,body));
    if(path==='/api/abiq')return send(res,200,await processAbiqRequest(core,actor,body));
    if(path==='/api/bankpayments/dispatch')return send(res,200,await dispatchPayment(core,actor,body,req.headers['idempotency-key']));
-   const routes={customers:'openCustomer',currencies:'addCurrencies',transfers:'transfer',shops:'registerShop',
+   const routes={'payments/review':'preparePayment','payments/transfer':'confirmPayment','payments/cancel':'cancelPayment','customers/profile':'saveCustomerProfile',customers:'openCustomer',currencies:'addCurrencies',transfers:'transfer',shops:'registerShop',
     correspondents:'registerCashAccount',bankprofiles:'registerBankConnector',bankroutes:'linkBankAccount',bankpayments:'initiatePayment','clearing/reconcile':'reconcileStatement',
     'fx/rates/refresh':'refreshFxRates','fx/quote':'quoteFx','fx/execute':'executeFx','fx/cancel':'cancelFx',
     'offline/keys':'configureOffline','offline/allowances':'issueOfflineAllowance','offline/sync':'settleOfflineBatch','offline/close':'closeOfflineAllowance',

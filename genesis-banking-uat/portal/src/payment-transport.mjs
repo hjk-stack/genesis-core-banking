@@ -52,6 +52,12 @@ export async function recoverPaymentDeliveries(server,actor) {
   return {recovered:result.rows.length,deliveries:result.rows};
  });
 }
+export const bankRouteSnapshot=p=>({profileId:p.profile_id,endpoint:p.endpoint_url,cashAccountId:p.cash_account_id,
+ localBic:p.local_bic,peerBic:p.peer_bic,credentialReference:p.credential_reference});
+async function checkReviewedRoute(db,transfer,profile){
+ const request=(await db.query('SELECT route_snapshot FROM avis_core_v2.payment_requests WHERE transfer_id=$1',[transfer.transfer_id])).rows[0];
+ if(request){const current=bankRouteSnapshot(profile);if(!request.route_snapshot||!Object.keys(current).every(k=>current[k]===request.route_snapshot[k]))fault('PAYMENT_REVIEW_CHANGED','review',409);}
+}
 export async function dispatchPayment(server,actor,input,key,{send=sendBankMessage,credentials=connectorCredentials}={}) {
  await recoverPaymentDeliveries(server,actor);
  // Claim once. A lost response is resolved by authenticated bank evidence, never a blind resend.
@@ -59,7 +65,7 @@ export async function dispatchPayment(server,actor,input,key,{send=sendBankMessa
   const t=(await db.query('SELECT * FROM avis_core_v2.interbank_ip_transfers WHERE transfer_id=$1 FOR UPDATE',[input.transferId])).rows[0];
   if(!t||t.direction!=='OUTBOUND')fault('TRANSFER_NOT_FOUND','transferId');
   if(['ACCC','RJCT'].includes(t.iso_status))fault('TRANSFER_ALREADY_CLOSED','transferId');
-  const p=await server.profile(db,t.profile_id);credentials(p.credential_reference);
+  const p=await server.profile(db,t.profile_id);await checkReviewedRoute(db,t,p);credentials(p.credential_reference);
   const outbox=(await db.query("UPDATE avis_core_v2.payment_outbox SET status='SENDING',attempts=attempts+1,lease_until=now()+interval '1 minute',updated_at=now() WHERE transfer_id=$1 AND status='QUEUED' RETURNING transfer_id",[t.transfer_id])).rows[0];
   if(!outbox)fault('PAYMENT_ALREADY_DISPATCHED','transferId',409);
   return {id:t.transfer_id,claimed:true};
@@ -71,6 +77,7 @@ export async function dispatchPayment(server,actor,input,key,{send=sendBankMessa
  }
  try {
   const t=(await server.pool.query('SELECT * FROM avis_core_v2.interbank_ip_transfers WHERE transfer_id=$1',[claim.id])).rows[0],p=await server.profile(server.pool,t.profile_id);
+  await checkReviewedRoute(server.pool,t,p);
   const xml=await send(p,taken.rows[0].content,credentials(p.credential_reference));
   const {readIso20022}=await import('./iso20022.mjs');const result=await readIso20022(xml);
   if(result.type!=='pacs.002.001.10'||result.uetr!==t.uetr)fault('BANK_RESPONSE_CORRELATION');
