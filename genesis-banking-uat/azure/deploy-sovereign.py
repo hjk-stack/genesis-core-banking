@@ -101,14 +101,14 @@ def main():
         # Existing administrator sign-in; read records only. Never create or fund test customers here.
         stage = 'administrator authentication'
         login = api(opener, base, '/api/login', {'username': 'mifos', 'password': secret('genesis-mifos-uat', 'admin-password')})
-        for view in ['accounts', 'ledger', 'bankpayments', 'bankroutes', 'clearing', 'offlinegrants', 'audit']:
+        for view in ['accounts', 'ledger', 'bankpayments', 'bankroutes', 'clearing', 'offlinegrants', 'fxrates', 'fxquotes', 'audit']:
             stage = 'authenticated read ' + view
             result = api(opener, base, '/api/views/' + view)
             if not isinstance(result.get('rows'), list):
                 raise RuntimeError('Authenticated banking read failed')
         api(opener, base, '/api/logout', {}, login['csrf'])
         print('Verified application release ' + sha)
-        print('Authenticated account, ledger, payment, routing, clearing, offline and audit reads passed')
+        print('Authenticated account, ledger, payment, routing, clearing, offline, FX and audit reads passed')
         print('Existing application URL: ' + base)
         with open(os.environ.get('GITHUB_STEP_SUMMARY', os.devnull), 'a') as summary:
             summary.write(f'AVISPay application release `{sha}` verified on [{APP}]({base}).\n\n')
