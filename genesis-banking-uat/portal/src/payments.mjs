@@ -104,6 +104,7 @@ export class PaymentServer extends SovereignCore {
    journalId=await this.post(db,actor,k,'BANK_INCOMING_ALLOCATED',bankReference,[line(p.ledger_account_id,'DEBIT',t.amount),line(suspense,'CREDIT',t.amount),line(suspense,'DEBIT',t.amount),line(common,'CREDIT',t.amount),line(common,'DEBIT',t.amount),line(t.source_account_id,'CREDIT',t.amount)]);
   }
   await db.query('UPDATE avis_core_v2.interbank_ip_transfers SET iso_status=$2,settlement_journal_id=$3,bank_reference=$4,cash_reserved=false WHERE transfer_id=$1',[t.transfer_id,status,journalId,bankReference]);
+  if(t.direction==='OUTBOUND')await db.query("UPDATE avis_core_v2.payment_outbox SET status='ACKNOWLEDGED',lease_until=NULL,last_error_code=NULL,updated_at=now() WHERE transfer_id=$1",[t.transfer_id]);
  }
  async reconcileStatement(actor,input,key){
   text(input.reference,'reference');const opening=zeroMoney(input.openingBalance),closing=zeroMoney(input.closingBalance);

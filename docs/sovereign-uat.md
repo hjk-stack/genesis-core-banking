@@ -49,3 +49,7 @@ The interface fetches records from the authenticated API. There are no fabricate
 ## FX reference data and execution
 
 The ECB daily XML feed supplies published reference rates; publication date and retrieval time are retained. These are not advertised as streaming prices. The feed covers 13 of the 14 configured fiat currencies including EUR; AED requires an external-bank rate source and is not synthesized. Quotes reserve destination-currency treasury inventory for 30 seconds, with automatic expiry release. Execution posts both currencies and the chosen commission atomically. No initial treasury balance is seeded. The rate publisher runs on startup/hourly and cannot veto account creation or payment operation.
+
+## Payment process restart recovery
+
+A startup and 10-second recovery worker resolves expired delivery leases in bounded, audited batches. Unconfirmed deliveries retain their reservations and are never automatically resent. An authenticated final bank response or matched statement closes delivery and financial settlement in the same database transaction. Recovery repairs earlier committed-settlement/outbox gaps without posting a second journal. Transport requests also have a 15-second wall-clock deadline, including peers that continue sending partial data.

@@ -7,7 +7,7 @@ import {fault,text} from './src/core.mjs';
 import {migrate} from './src/migrate.mjs';
 import {FxBankingServer} from './src/fx.mjs';
 import {processAvis8583} from './src/pos-switch.mjs';
-import {authenticateMessage,connectorCredentials,dispatchPayment} from './src/payment-transport.mjs';
+import {authenticateMessage,connectorCredentials,dispatchPayment,recoverPaymentDeliveries} from './src/payment-transport.mjs';
 import {buildPacs002,readIso20022} from './src/iso20022.mjs';
 
 const digest=v=>createHash('sha256').update(v).digest('hex');
@@ -157,6 +157,12 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  createBankServer({pool,authenticate:(u,p)=>authenticateFineract(u,p,process.env.FINERACT_URL),release:process.env.RELEASE_SHA||'local'})
   .listen(Number(process.env.PORT||8080),'0.0.0.0');
  const housekeeping=new FxBankingServer(pool);let expiring=false;
+ let recovering=false;
+ const recoverDeliveries=async()=>{if(recovering)return;recovering=true;try {
+  await recoverPaymentDeliveries(housekeeping,{id:'system:payment-delivery',admin:true});
+ }catch(e){console.error(JSON.stringify({operation:'PAYMENT_DELIVERY_RECOVERY',code:e.code||'DELIVERY_RECOVERY_FAILED'}));}finally{recovering=false;}};
+ void recoverDeliveries();setInterval(recoverDeliveries,10000).unref();
+
  const refreshRates=()=>housekeeping.refreshFxRates({id:'system:fx-rates',admin:true},{},'ecb:'+new Date().toISOString().slice(0,13)).catch(e=>console.error(JSON.stringify({operation:'FX_RATE_REFRESH',code:e.code||'RATE_REFRESH_FAILED'})));
  void refreshRates();setInterval(refreshRates,3600000).unref();
  setInterval(async()=>{if(expiring)return;expiring=true;try{
