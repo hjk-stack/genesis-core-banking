@@ -1,7 +1,7 @@
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const amount=s=>{const [whole,fraction='']=String(s).split('.');return whole.replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+fraction.replace(/0+$/,'').padEnd(2,'0');};
 const names=['Account & amount','Receiving account','Receiver details','Reference','Review & transfer'];
-const field=(name,title,attrs='')=>`<label>${title}<input name="${name}" ${attrs}><span class="field-error" data-error="${name}"></span></label>`;
+const field=(name,title,attrs='')=>`<label>${title}<input name="${name}" aria-label="${title}" ${attrs}><span class="field-error" data-error="${name}"></span></label>`;
 const resultLabel=r=>r.current_status==='COMPLETED'?'Transfer completed':r.current_status==='REJECTED'?'Bank rejected the transfer':r.current_status==='CANCELLED'?'Transfer request cancelled':r.delivery_mode==='MANUAL'?'Recorded in Administration · Transfer requests':r.delivery==='UNCERTAIN'?'Delivery requires reconciliation · see Administration':r.delivery==='QUEUED'?'Transfer queued for delivery':'Transfer submitted · awaiting bank settlement';
 
 export function createPaymentWizard({api,accounts,refresh,notice}){
@@ -16,12 +16,12 @@ export function createPaymentWizard({api,accounts,refresh,notice}){
   dialog.querySelectorAll('.payment-progress li').forEach((p,i)=>{p.classList.toggle('current',i===step);p.classList.toggle('complete',i<step);if(i===step)p.setAttribute('aria-current','step');else p.removeAttribute('aria-current');});
   q('.step-caption').textContent=`Step ${step+1} of 5 · ${names[step]}`;
   q('[data-back]').hidden=step===0;q('[data-next]').textContent=step===3?'OK · Build message':step===4?'Transfer':'Next';
-  q('.payment-slide:nth-child('+(step+1)+')').querySelector('input,select,h3')?.focus();
+  q('.payment-slide:nth-child('+(step+1)+')').querySelector('input,select,h3')?.focus({preventScroll:true});
  }
  function setBusy(value){busy=value;dialog.querySelectorAll('.payment-slide').forEach((p,i)=>p.inert=value||i!==step);dialog.querySelectorAll('.payment-footer button,.payment-close').forEach(b=>b.disabled=value);q('form').setAttribute('aria-busy',String(value));}
  function error(e){
   clearErrors();const input=els()?.namedItem(e.field),slot=dialog.querySelector(`[data-error="${String(e.field).replace(/[^a-zA-Z]/g,'')}"]`);
-  if(input){const index=[...dialog.querySelectorAll('.payment-slide')].findIndex(p=>p.contains(input));if(index>=0)show(index);input.setAttribute('aria-invalid','true');input.focus();}
+  if(input){const index=[...dialog.querySelectorAll('.payment-slide')].findIndex(p=>p.contains(input));if(index>=0)show(index);input.setAttribute('aria-invalid','true');input.focus({preventScroll:true});}
   (slot||q('.payment-error')).textContent=e.message;
  }
  const values=()=>Object.fromEntries(new FormData(q('form')));
@@ -78,7 +78,7 @@ export function createPaymentWizard({api,accounts,refresh,notice}){
   dialog.innerHTML=`<div class="payment-heading"><div><p class="eyebrow">PAYMENTS</p><h2 id="payment-title">Register a payment</h2></div><button type="button" class="payment-close" aria-label="Close payment">×</button></div>
    <ol class="payment-progress">${names.map((name,i)=>`<li><span>${i+1}</span><small>${name}</small></li>`).join('')}</ol><p class="step-caption" aria-live="polite"></p>
    <form novalidate><div class="payment-viewport"><div class="payment-track">
-    <section class="payment-slide"><h3 tabindex="-1">Account and amount</h3><label>Sender account<select name="from" required><option value="">Select account…</option>${accounts().map(a=>`<option value="${escape(a.abiq_iban)}">${escape(a.full_name)} · ${escape(a.currency_code)} · ${escape(a.abiq_iban)} · Available ${escape(amount(a.available_balance))}</option>`).join('')}</select><span class="field-error" data-error="from"></span></label><p class="account-balance" data-balance></p><div class="amount-field">${field('amount','Amount','required inputmode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" maxlength="21"')}<span data-currency></span></div></section>
+    <section class="payment-slide"><h3 tabindex="-1">Account and amount</h3><label>Sender account<select name="from" aria-label="Sender account" required><option value="">Select account…</option>${accounts().map(a=>`<option value="${escape(a.abiq_iban)}">${escape(a.full_name)} · ${escape(a.currency_code)} · ${escape(a.abiq_iban)} · Available ${escape(amount(a.available_balance))}</option>`).join('')}</select><span class="field-error" data-error="from"></span></label><p class="account-balance" data-balance></p><div class="amount-field">${field('amount','Amount','required inputmode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" maxlength="21"')}<span data-currency></span></div></section>
     <section class="payment-slide"><h3 tabindex="-1">Receiving account</h3>${field('receiverAccount','Receiver IBAN or account number','required autocomplete="off" maxlength="40"')}${field('receiverBic','Receiver BIC','autocomplete="off" maxlength="11"')}<p class="field-help">Internal AVISPay account numbers fill the BIC and receiver details automatically.</p></section>
     <section class="payment-slide"><h3 tabindex="-1">Receiver details</h3><p data-receiver-note></p>${field('receiverName','Name','required maxlength="140"')}${field('street','Street and building','required maxlength="70"')}<div class="payment-grid">${field('postalCode','Postal code','maxlength="16"')}${field('city','City','required maxlength="35"')}</div>${field('country','Country code','required minlength="2" maxlength="2" placeholder="AT" pattern="[A-Za-z]{2}"')}</section>
     <section class="payment-slide"><h3 tabindex="-1">Payment reference</h3>${field('reference','Reference','required maxlength="128"')}<p>The reference will accompany the transfer.</p></section>

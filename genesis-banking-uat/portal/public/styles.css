@@ -10,10 +10,10 @@ textarea{box-sizing:border-box;width:100%;font:inherit;border:1px solid #d6dbe3;
 .payment-progress li span{display:inline-flex;width:26px;height:26px;border-radius:50%;background:#f0f1f4;align-items:center;justify-content:center;font-weight:700}
 .payment-progress small{display:block;font-size:11px;margin-top:7px}.payment-progress .current{border-color:#b0002d;color:#a8002a}.payment-progress .current span{background:#b0002d;color:white}.payment-progress .complete{border-color:#d5a0ae}
 .step-caption{font-size:13px;color:#646d7b;margin:16px 28px 0}.payment-dialog form{padding:0;display:block}
-.payment-viewport{overflow:hidden}.payment-track{display:flex;align-items:flex-start;transition:transform 260ms ease}
-.payment-track.step-0{transform:translateX(0)}.payment-track.step-1{transform:translateX(-100%)}.payment-track.step-2{transform:translateX(-200%)}.payment-track.step-3{transform:translateX(-300%)}.payment-track.step-4{transform:translateX(-400%)}
-.payment-slide{flex:0 0 100%;min-width:0;box-sizing:border-box;padding:20px 28px 4px;visibility:hidden;height:0;overflow:hidden}
-.payment-slide[aria-hidden=false]{visibility:visible;height:auto;overflow:visible}.payment-slide h3{margin:0 0 22px;font-size:22px;outline:none}
+.payment-viewport{overflow:clip}.payment-track{display:grid;min-width:0}
+.payment-slide{grid-area:1/1;min-width:0;box-sizing:border-box;padding:20px 28px 4px;display:none}
+.payment-slide[aria-hidden=false]{display:block;animation:payment-enter 260ms ease both}.payment-slide h3{margin:0 0 22px;font-size:22px;outline:none}
+@keyframes payment-enter{from{transform:translateX(24px);opacity:0}to{transform:translateX(0);opacity:1}}
 .payment-slide label{display:block;margin:0 0 16px;font-weight:600}.payment-slide input,.payment-slide select{display:block;width:100%;box-sizing:border-box;margin-top:8px;min-width:0}
 .payment-slide input[readonly]{background:#f6f7f9}.payment-slide .field-help,.payment-slide [data-receiver-note]{font-size:13px;color:#626c79}
 .payment-grid{display:grid;grid-template-columns:1fr 2fr;gap:16px}.account-balance{padding:13px 16px;background:#f6f7f9;border-radius:8px;font-weight:600;margin:0 0 20px}
@@ -22,4 +22,4 @@ textarea{box-sizing:border-box;width:100%;font:inherit;border:1px solid #d6dbe3;
 .payment-error{color:#a8002a;margin:8px 28px;font-size:14px;min-height:1.25em}.payment-footer{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:10px;padding:18px 28px 24px;border-top:1px solid #e4e6eb}.payment-footer [data-back]{margin-right:auto}
 .payment-summary{display:grid;grid-template-columns:85px 1fr;gap:10px 16px;font-size:14px;margin:0 0 20px}.payment-summary dt{color:#626c79}.payment-summary dd{margin:0;overflow-wrap:anywhere}.payment-slide details{padding:12px;border:1px solid #dce0e5;border-radius:8px}.payment-slide summary{cursor:pointer;font-weight:600;font-size:13px}.payment-slide pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;font-size:11px;background:#f6f7f9;padding:12px;margin-bottom:0}
 @media(max-width:580px){.payment-heading,.payment-slide{padding-left:18px;padding-right:18px}.payment-progress{padding-left:18px;padding-right:18px}.payment-progress small{display:none}.payment-grid{grid-template-columns:1fr}.step-caption{margin-left:18px}.payment-footer{padding-left:18px;padding-right:18px}.payment-summary{grid-template-columns:65px 1fr}}
-@media(prefers-reduced-motion:reduce){.payment-track{transition:none}}
+@media(prefers-reduced-motion:reduce){.payment-slide[aria-hidden=false]{animation:none}}
