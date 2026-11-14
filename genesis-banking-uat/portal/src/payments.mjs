@@ -59,7 +59,7 @@ export class PaymentServer extends SovereignCore {
    if(!reserved.rows.length)fault('INSUFFICIENT_CLEARING_FUNDS','cashAccountId');
    const suspense=await this.system(db,'SUSPENSE_OUTBOUND',input.currency,id);
    const journalId=await this.post(db,actor,k,'BANK_PAYMENT_RESERVED',input.reference,[line(payer.ledger_account_id,'DEBIT',amount),line(suspense,'CREDIT',amount)]);
-   await db.query(`INSERT INTO avis_core_v2.interbank_ip_transfers(transfer_id,uetr,direction,cash_account_id,user_id,journal_id,debtor_iban,creditor_iban,currency_code,amount,raw_iso_payload,profile_id,source_account_id,cash_reserved) VALUES($1,$2,'OUTBOUND',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true)`,[id,uetr,p.cash_account_id,payer.user_id,journalId,account.account_number,creditorIban,input.currency,amount,JSON.stringify({xml}),p.profile_id,payer.ledger_account_id]);
+   await db.query(`INSERT INTO avis_core_v2.interbank_ip_transfers(transfer_id,uetr,direction,cash_account_id,user_id,journal_id,debtor_iban,creditor_iban,currency_code,amount,raw_iso_payload,profile_id,source_account_id,cash_reserved) VALUES($1,$2,'OUTBOUND',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true)`,[id,uetr,p.cash_account_id,payer.user_id,journalId,account.account_number,creditorIban,input.currency,amount,JSON.stringify({xml,creditorName:input.creditorName,reference:input.reference}),p.profile_id,payer.ledger_account_id]);
    await db.query('INSERT INTO avis_core_v2.payment_outbox(transfer_id,content,content_type) VALUES($1,$2,$3)',[id,xml,'application/xml']);
    return {id,uetr,journalId,status:'PDNG'};
   });
@@ -130,7 +130,7 @@ export class PaymentServer extends SovereignCore {
   const queries={
    bankprofiles:`SELECT p.profile_id,c.display_name,p.protocol,p.local_bic,p.peer_bic,p.cash_account_id,a.currency_code,c.endpoint_url FROM avis_core_v2.bank_connector_profiles p JOIN avis_core_v2.platform_connectors c ON c.connector_code=p.profile_id JOIN avis_core_v2.external_cash_accounts a USING(cash_account_id) ORDER BY profile_id`,
    bankroutes:`SELECT b.abiq_iban,r.account_number,r.bank_bic,r.currency_code,r.connector_code FROM avis_core_v2.abiq_bank_routes r JOIN avis_core_v2.abiq_routing_bridge b USING(bridge_id) ORDER BY b.user_id LIMIT 300`,
-   bankpayments:`SELECT t.transfer_id,t.uetr,t.direction,t.profile_id,t.debtor_iban,t.creditor_iban,t.amount::text,t.currency_code,t.iso_status AS status,t.bank_reference,t.created_at,o.status AS delivery FROM avis_core_v2.interbank_ip_transfers t LEFT JOIN avis_core_v2.payment_outbox o USING(transfer_id) ORDER BY created_at DESC LIMIT 300`,
+   bankpayments:`SELECT t.transfer_id,t.uetr,t.direction,t.profile_id,t.debtor_iban,t.creditor_iban,t.raw_iso_payload->>'creditorName' AS creditor_name,COALESCE(t.raw_iso_payload->>'reference',j.reference_id) AS payment_reference,t.amount::text,t.currency_code,t.iso_status AS status,t.bank_reference,t.created_at,o.status AS delivery FROM avis_core_v2.interbank_ip_transfers t LEFT JOIN avis_core_v2.payment_outbox o USING(transfer_id) LEFT JOIN avis_core_v2.ledger_journals j ON j.journal_id=t.journal_id ORDER BY t.created_at DESC LIMIT 300`,
    clearing:`SELECT s.provider_reference,s.currency_code,s.opening_balance::text,s.closing_balance::text,s.imported_at,count(e.*)::int AS entries,count(e.transfer_id)::int AS matched FROM avis_core_v2.clearing_statements s JOIN avis_core_v2.clearing_statement_entries e USING(statement_id) GROUP BY s.statement_id ORDER BY s.imported_at DESC LIMIT 300`
   };return queries[view]?(await this.pool.query(queries[view])).rows:super.list(actor,view);
  }
