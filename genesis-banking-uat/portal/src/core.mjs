@@ -198,19 +198,19 @@ export class SovereignCore {
     WHERE core_bank_card_ref=$1 AND c.status='ACTIVE' FOR SHARE OF c`,[input.cardReference])).rows[0];
    if(!card||card.card_rail_mode==='GLOBAL_SCHEME_ONLY')fault('SELECT_AVIS_CARD','cardReference');
    if(card.currency_code!==input.currency)fault('CURRENCY_MISMATCH','currency');
-   const terminal=(await db.query(`SELECT t.terminal_id FROM avis_core_v2.pos_terminals t JOIN avis_core_v2.marketplace_merchants m USING(merchant_id)
+   const terminal=(await db.query(`SELECT t.terminal_id,m.commission_rate_bps FROM avis_core_v2.pos_terminals t JOIN avis_core_v2.marketplace_merchants m USING(merchant_id)
     WHERE terminal_id=$1 AND t.status='ACTIVE' AND m.status='ACTIVE' FOR SHARE OF t,m`,[input.terminalId])).rows[0];
    if(!terminal)fault('TERMINAL_NOT_FOUND','terminalId');
    const id=randomUUID(),hold=await this.system(db,'SUSPENSE_CARD_FX',input.currency,id);
    const journalId=await this.post(db,actor,k,'AVIS_CARD_AUTHORIZATION',input.networkReference,[side(card.funding_account_id,'DEBIT',amount),side(hold,'CREDIT',amount)]);
-   await db.query(`INSERT INTO avis_core_v2.card_authorizations(authorization_id,card_id,terminal_id,network_reference,amount,currency_code,status,authorization_journal_id)
-    VALUES($1,$2,$3,$4,$5,$6,'AUTHORIZED',$7)`,[id,card.card_id,terminal.terminal_id,input.networkReference,amount,input.currency,journalId]);
+   await db.query(`INSERT INTO avis_core_v2.card_authorizations(authorization_id,card_id,terminal_id,network_reference,amount,currency_code,status,authorization_journal_id,commission_rate_bps)
+    VALUES($1,$2,$3,$4,$5,$6,'AUTHORIZED',$7,$8)`,[id,card.card_id,terminal.terminal_id,input.networkReference,amount,input.currency,journalId,terminal.commission_rate_bps]);
    return {id,journalId,status:'AUTHORIZED'};
   });
  }
  async settleCard(actor,input,key,reverse=false) {
   return this.operation(actor,reverse?'AVIS_CARD_REVERSE':'AVIS_CARD_CAPTURE',input,key,async(db,k)=>{
-   const auth=(await db.query(`SELECT a.*,c.funding_account_id,m.owner_user_id,m.commission_rate_bps FROM avis_core_v2.card_authorizations a
+   const auth=(await db.query(`SELECT a.*,c.funding_account_id,m.owner_user_id FROM avis_core_v2.card_authorizations a
     JOIN avis_core_v2.avis_cards c USING(card_id) JOIN avis_core_v2.pos_terminals t USING(terminal_id)
     JOIN avis_core_v2.marketplace_merchants m USING(merchant_id) WHERE authorization_id=$1 FOR UPDATE OF a`,[input.authorizationId])).rows[0];
    if(!auth||auth.status!=='AUTHORIZED')fault('AUTHORIZATION_ALREADY_CLOSED','authorizationId',409);

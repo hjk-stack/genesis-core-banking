@@ -18,7 +18,7 @@ async function fund(c,amount='1000.00'){
  await core.post(client,actor,key(),'FIXTURE_CASH','isolated automated test',[{accountId:nostro,direction:'DEBIT',amount},{accountId:eur(c).accountId,direction:'CREDIT',amount}]);await client.query('COMMIT');}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
 }
 before(async()=>{
- if(process.env.TEST_DATABASE_URL){const url=new URL(process.env.TEST_DATABASE_URL);assert.equal(url.pathname,'/avispay_ci','Only the dedicated CI database is accepted');pool=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});}
+ if(process.env.TEST_DATABASE_URL){const url=new URL(process.env.TEST_DATABASE_URL);assert.equal(url.pathname,'/avispay_ci','Only the dedicated CI database is accepted');pool=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});await pool.query('DROP SCHEMA IF EXISTS avis_core_v2 CASCADE');}
  else{db=new PGlite();pool={query:(...args)=>db.query(...args),connect:async()=>({query:(...args)=>db.query(...args),exec:sql=>db.exec(sql),release(){}})};}
  const client=await pool.connect();try{await migrate(client);await migrate(client);}finally{client.release();}
  core=new SovereignCore(pool);

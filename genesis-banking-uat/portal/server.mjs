@@ -3,8 +3,12 @@ import {readFile} from 'node:fs/promises';
 import {createHash,randomBytes} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 import pg from 'pg';
-import {SovereignCore,fault,text} from './src/core.mjs';
+import {fault,text} from './src/core.mjs';
 import {migrate} from './src/migrate.mjs';
+import {CardPaymentServer} from './src/offline-cards.mjs';
+import {processAvis8583} from './src/pos-switch.mjs';
+import {authenticateMessage,connectorCredentials,dispatchPayment} from './src/payment-transport.mjs';
+import {buildPacs002,readIso20022} from './src/iso20022.mjs';
 
 const digest=v=>createHash('sha256').update(v).digest('hex');
 export async function authenticateFineract(username,password,baseUrl,fetcher=fetch) {
@@ -21,6 +25,14 @@ export async function authenticateFineract(username,password,baseUrl,fetcher=fet
  return {id:'fineract:'+account.userId,username:account.username||username,admin:true};
 }
 const messages={
+ CONNECTOR_NOT_FOUND:'Select a configured bank connector.',BANK_ROUTE_REQUIRED:'Link the selected ABIQ account to its bank account.',
+ INSUFFICIENT_CLEARING_FUNDS:'The selected clearing account has insufficient unreserved funds.',
+ TRANSFER_NOT_FOUND:'Select an existing bank payment.',TRANSFER_ALREADY_CLOSED:'This payment has already been settled or rejected.',
+ PAYMENT_ALREADY_DISPATCHED:'This payment has already been submitted. Check its bank reference.',
+ CONNECTOR_CONFIGURATION:'Check the credential reference in connector administration.',
+ STATEMENT_TOTAL_MISMATCH:'The statement entries do not reconcile with its opening and closing balances.',
+ STATEMENT_MATCH_FAILED:'Check the amount, currency, direction and bank reference of this statement entry.',
+ MESSAGE_AUTHENTICATION:'Message authentication failed.',MESSAGE_REPLAY:'This message nonce has already been received.',
  INVALID_FIELD:'Check this field.',INVALID_AMOUNT:'Enter a positive amount using digits and a decimal point.',
  INSUFFICIENT_FUNDS:'The selected account has insufficient available funds.',ACCOUNT_NOT_FOUND:'Select an existing account in this currency.',
  ABIQ_INVALID_IDENTIFIER:'Check the ABIQ account number.',ABIQ_CURRENCY_MISMATCH:'The account currency does not match.',
@@ -37,7 +49,7 @@ const messages={
  CSRF:'Refresh the page and submit again.',TOO_MANY_ATTEMPTS:'Please wait before trying to sign in again.'
 };
 export function createBankServer({pool,authenticate,release='local',secureCookies=true}) {
- const core=new SovereignCore(pool),attempts=new Map();
+ const core=new CardPaymentServer(pool),attempts=new Map();
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  return http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
@@ -47,6 +59,25 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
   try {
    const url=new URL(req.url,'http://localhost'),path=url.pathname;
    if(req.method==='GET'&&path==='/healthz')return send(res,200,{status:'ok',release});
+   const ingress=/^\/network\/([A-Z0-9_]{1,35})\/(iso20022|iso8583|offline-batch)$/.exec(path);
+   if(ingress&&req.method==='POST'){
+    const contentType={iso20022:'application/xml',iso8583:'application/octet-stream','offline-batch':'application/json'}[ingress[2]];
+    if(!req.headers['content-type']?.startsWith(contentType))fault('INVALID_FIELD',null,415);
+    const parts=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>65535)fault('INVALID_FIELD',null,413);parts.push(chunk);}
+    const raw=Buffer.concat(parts),p=await core.profile(pool,ingress[1]),credentials=connectorCredentials(p.credential_reference);
+    await authenticateMessage(pool,p.profile_id,req.method,path,raw,req.headers,credentials.hmacSecret);
+    if(ingress[2]==='iso8583'){
+     const response=await processAvis8583(core,{id:'connector:'+p.profile_id,admin:true},raw,{allowedTerminals:credentials.allowedTerminals||[]});
+     res.setHeader('content-type','application/octet-stream');return res.end(response);
+    }
+    if(ingress[2]==='offline-batch'){
+     const batch=JSON.parse(raw.toString('utf8'));if(!credentials.allowedTerminals?.includes(batch.terminalId))fault('TERMINAL_NOT_FOUND','terminalId');
+     return send(res,200,await core.settleOfflineBatch({id:'connector:'+p.profile_id,admin:true},batch,batch.batchId));
+    }
+    const receipt=await core.receive(p.profile_id,raw.toString('utf8')),original=await readIso20022(raw.toString('utf8'));
+    const reply=await buildPacs002({messageId:randomBytes(16).toString('hex'),uetr:original.uetr,senderBic:p.local_bic,receiverBic:p.peer_bic,status:receipt.status,bankReference:receipt.id.replaceAll('-','')});
+    res.setHeader('content-type','application/xml');return res.end(reply);
+   }
    if(req.method==='GET'&&['/','/app.mjs','/styles.css'].includes(path)){
     const file=path==='/'?'index.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
@@ -96,7 +127,10 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     await pool.query('DELETE FROM avis_core_v2.operator_sessions WHERE token_hash=$1',[digest(token)]);
     res.setHeader('Set-Cookie',`avis_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secureCookies?'; Secure':''}`);return send(res,200,{});
    }
+   if(path==='/api/bankpayments/dispatch')return send(res,200,await dispatchPayment(core,actor,body,req.headers['idempotency-key']));
    const routes={customers:'openCustomer',currencies:'addCurrencies',transfers:'transfer',shops:'registerShop',
+    correspondents:'registerCashAccount',bankprofiles:'registerBankConnector',bankroutes:'linkBankAccount',bankpayments:'initiatePayment','clearing/reconcile':'reconcileStatement',
+    'offline/keys':'configureOffline','offline/allowances':'issueOfflineAllowance','offline/sync':'settleOfflineBatch','offline/close':'closeOfflineAllowance',
     'checkouts/capture':'captureCheckout','checkouts/release':'releaseCheckout','checkouts/refund':'refundCheckout',
     cards:'registerCard',terminals:'registerTerminal','cards/authorize':'authorizeCard','cards/capture':'settleCard','cards/reverse':'settleCard'};
    const action=path.slice(5),method=routes[action];if(!method)fault('NOT_FOUND',null,404);
