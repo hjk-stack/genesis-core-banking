@@ -6,7 +6,7 @@ import pg from 'pg';
 import {migrate} from '../src/migrate.mjs';
 import {PaymentServer} from '../src/payments.mjs';
 import {buildPacs008,buildPacs002,readIso20022} from '../src/iso20022.mjs';
-import {signRequest,authenticateMessage,dispatchPayment,frame} from '../src/payment-transport.mjs';
+import {signRequest,authenticateMessage,dispatchPayment,recoverPaymentDeliveries,frame} from '../src/payment-transport.mjs';
 let db,pool,core,user,cash,profile,account,seq=0;
 const actor={id:'payment-tests',admin:true},key=()=>`payment-${++seq}`;
 const bankIban='DE89370400440532013000',externalIban='GB82WEST12345698765432';
@@ -79,4 +79,49 @@ test('transport response must match payment UETR before changing balances',async
 test('confirmed bank response completes delivery and settlement through one ledger transaction',async()=>{
  const t=await outbound('5');const r=await dispatchPayment(core,actor,{transferId:t.id},key(),{credentials:()=>({}),send:()=>status(t,'ACCC')});assert.equal(r.status,'ACCC');assert.equal(r.delivery,'ACKNOWLEDGED');
  const bad=await pool.query(`SELECT journal_id FROM avis_core_v2.ledger_entries GROUP BY journal_id HAVING sum(CASE direction WHEN 'DEBIT' THEN amount ELSE -amount END)<>0`);assert.equal(bad.rows.length,0);
+});
+
+test('restart recovery preserves reservations and never resends an expired delivery lease',async()=>{
+ for(const started of [null,'DELIVERY_STARTED']) {
+  const t=await outbound('2');
+  await pool.query("UPDATE avis_core_v2.payment_outbox SET status='SENDING',attempts=1,lease_until=now()-interval '1 second',last_error_code=$2 WHERE transfer_id=$1",[t.id,started]);
+  const customerBefore=await balance(account.accountId),cashBefore=await balance(cash.accountId);
+  const recovered=await recoverPaymentDeliveries(core,actor);assert.equal(recovered.recovered,1);
+  assert.deepEqual(await balance(account.accountId),customerBefore);assert.deepEqual(await balance(cash.accountId),cashBefore);
+  const delivery=(await pool.query('SELECT status,attempts,last_error_code FROM avis_core_v2.payment_outbox WHERE transfer_id=$1',[t.id])).rows[0];
+  assert.deepEqual(delivery,{status:'UNCERTAIN',attempts:1,last_error_code:'DELIVERY_LEASE_EXPIRED'});
+  let sends=0;await assert.rejects(dispatchPayment(core,actor,{transferId:t.id},key(),{credentials:()=>({}),send:async()=>{sends++;}}),/PAYMENT_ALREADY_DISPATCHED/);assert.equal(sends,0);
+  await core.receive(profile.id,await status(t,'RJCT'));
+  assert.equal((await pool.query('SELECT status FROM avis_core_v2.payment_outbox WHERE transfer_id=$1',[t.id])).rows[0].status,'ACKNOWLEDGED');
+ }
+});
+test('recovery leaves an active delivery lease intact',async()=>{
+ const t=await outbound('2');await pool.query("UPDATE avis_core_v2.payment_outbox SET status='SENDING',attempts=1,lease_until=now()+interval '1 minute',last_error_code='DELIVERY_STARTED' WHERE transfer_id=$1",[t.id]);
+ assert.equal((await recoverPaymentDeliveries(core,actor)).recovered,0);
+ assert.equal((await pool.query('SELECT status FROM avis_core_v2.payment_outbox WHERE transfer_id=$1',[t.id])).rows[0].status,'SENDING');
+ await core.receive(profile.id,await status(t,'RJCT'));
+});
+test('authenticated settlement racing a lost response cannot regress delivery or post twice',async()=>{
+ const t=await outbound('2'),k=key();let sends=0;
+ const options={credentials:()=>({}),send:async()=>{sends++;await core.receive(profile.id,await status(t,'ACCC'));throw new Error('ECONNRESET');}};
+ const result=await dispatchPayment(core,actor,{transferId:t.id},k,options);assert.equal(result.delivery,'ACKNOWLEDGED');assert.equal(result.status,'ACCC');
+ const settled=await balance(cash.accountId);assert.equal((await dispatchPayment(core,actor,{transferId:t.id},k,options)).delivery,'ACKNOWLEDGED');assert.equal(sends,1);assert.deepEqual(await balance(cash.accountId),settled);
+ // Recover an earlier release's gap between committed bank settlement and outbox acknowledgment.
+ await pool.query("UPDATE avis_core_v2.payment_outbox SET status='SENDING',lease_until=now()-interval '1 second' WHERE transfer_id=$1",[t.id]);
+ assert.equal((await recoverPaymentDeliveries(core,actor)).recovered,1);assert.deepEqual(await balance(cash.accountId),settled);
+ assert.equal((await pool.query('SELECT status FROM avis_core_v2.payment_outbox WHERE transfer_id=$1',[t.id])).rows[0].status,'ACKNOWLEDGED');
+});
+test('a connector failure after the claim becomes an auditable delivery outcome',async()=>{
+ const t=await outbound('2'),original=core.profile;let calls=0,sends=0;
+ core.profile=async function(...args){if(++calls===2)throw new Error('CONNECTOR_CONFIGURATION');return original.apply(this,args);};
+ try {
+  const result=await dispatchPayment(core,actor,{transferId:t.id},key(),{credentials:()=>({}),send:async()=>{sends++;}});assert.equal(result.delivery,'UNCERTAIN');assert.equal(sends,0);
+ }finally{core.profile=original;}
+ await core.receive(profile.id,await status(t,'RJCT'));
+});
+test('PostgreSQL concurrent recovery workers claim each expired delivery once',{skip:!process.env.TEST_DATABASE_URL},async()=>{
+ const t=await outbound('2');await pool.query("UPDATE avis_core_v2.payment_outbox SET status='SENDING',attempts=1,lease_until=now()-interval '1 second' WHERE transfer_id=$1",[t.id]);
+ const before=await balance(cash.accountId),results=await Promise.all([recoverPaymentDeliveries(core,actor),recoverPaymentDeliveries(core,actor)]);
+ assert.equal(results.reduce((sum,r)=>sum+r.recovered,0),1);assert.deepEqual(await balance(cash.accountId),before);
+ await core.receive(profile.id,await status(t,'RJCT'));
 });
