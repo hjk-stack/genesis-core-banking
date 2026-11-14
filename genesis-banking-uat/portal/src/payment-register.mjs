@@ -10,7 +10,7 @@ import {connectorCredentials,dispatchPayment,bankRouteSnapshot} from './payment-
 const digest=s=>createHash('sha256').update(s).digest('hex');
 const entry=(accountId,direction,amount)=>({accountId,direction,amount});
 const equal=(a,b)=>b&&Object.keys(a).every(k=>a[k]===b[k]);
-const requestFields=`r.*,t.iso_status AS bank_status,o.status AS delivery,
+const requestFields=`r.*,COALESCE(r.execution_mode,r.delivery_mode) AS delivery_mode,t.iso_status AS bank_status,o.status AS delivery,
  CASE WHEN t.iso_status='ACCC' THEN 'COMPLETED' WHEN t.iso_status='RJCT' THEN 'REJECTED' ELSE r.status END AS current_status`;
 export class PaymentRegister extends FxBankingServer {
  constructor(pool,{directory={},transport={}}={}){super(pool);this.directory=directory;this.transport=transport;}
@@ -65,12 +65,13 @@ export class PaymentRegister extends FxBankingServer {
    if(!r||r.actor_id!==actor.id)fault('PAYMENT_REQUEST_NOT_FOUND','review',404);
    if(input.messageHash!==r.message_hash||digest(r.message_content)!==r.message_hash)fault('PAYMENT_REVIEW_CHANGED','review',409);
    if(r.status==='CANCELLED')fault('PAYMENT_REQUEST_CLOSED','review',409);
-   if(r.status!=='REVIEW')return {id:r.request_id,transferId:r.transfer_id,mode:r.delivery_mode};
+   if(r.status!=='REVIEW')return {id:r.request_id,transferId:r.transfer_id,mode:r.execution_mode||r.delivery_mode};
    if(r.instruction.createdAt.slice(0,10)!==new Date().toISOString().slice(0,10))fault('PAYMENT_REVIEW_CHANGED','review',409);
    const source=await this.route(db,r.instruction.from,r.currency_code,'from');
    if(source.bridge_id!==r.source_bridge_id)fault('PAYMENT_REVIEW_CHANGED','review',409);
-   let journalId,transferId=null,status='OUTGOING';
+   let journalId,transferId=null,status='OUTGOING',executionMode=r.delivery_mode;
    if(r.delivery_mode==='CONNECTED'){
+    try{
     if(digest(r.iso_message)!==r.message_hash)fault('PAYMENT_REVIEW_CHANGED','review',409);
     const p=await this.profile(db,r.profile_id);
     if(!equal(bankRouteSnapshot(p),r.route_snapshot))fault('PAYMENT_REVIEW_CHANGED','review',409);
@@ -79,25 +80,27 @@ export class PaymentRegister extends FxBankingServer {
      profileId:r.profile_id,creditorIban:r.beneficiary_account,creditorName:r.beneficiary_name,reference:r.payment_reference},
      {id:r.request_id,uetr:r.uetr,xml:r.iso_message});
     journalId=t.journalId;transferId=t.id;status='PROCESSING';
-   }else if(r.delivery_mode==='INTERNAL'){
+    }catch(e){if(!['CONNECTOR_CONFIGURATION','CONNECTOR_NOT_FOUND','INSUFFICIENT_CLEARING_FUNDS'].includes(e.code))throw e;executionMode='MANUAL';}
+   }
+   if(executionMode==='INTERNAL'){
     const target=await this.route(db,r.beneficiary_account,r.currency_code,'receiverAccount');
     if(target.bridge_id!==r.receiver_bridge_id||target.ledger_account_id===source.ledger_account_id)fault('PAYMENT_REVIEW_CHANGED','review',409);
     journalId=await this.post(db,actor,k,'PAYMENT_INTERNAL_TRANSFER',r.payment_reference,
      [entry(source.ledger_account_id,'DEBIT',r.amount),entry(target.ledger_account_id,'CREDIT',r.amount)]);status='COMPLETED';
-   }else{
+   }else if(executionMode==='MANUAL'){
     const hold=await this.system(db,'SUSPENSE_OUTBOUND',r.currency_code,r.request_id);
     journalId=await this.post(db,actor,k,'PAYMENT_MANUAL_RESERVED',r.payment_reference,
      [entry(source.ledger_account_id,'DEBIT',r.amount),entry(hold,'CREDIT',r.amount)]);
    }
-   await db.query(`UPDATE avis_core_v2.payment_requests SET status=$2,transfer_id=$3,reservation_journal_id=$4,submitted_at=now() WHERE request_id=$1`,[r.request_id,status,transferId,journalId]);
+   await db.query(`UPDATE avis_core_v2.payment_requests SET status=$2,transfer_id=$3,reservation_journal_id=$4,submitted_at=now(),execution_mode=$5 WHERE request_id=$1`,[r.request_id,status,transferId,journalId,executionMode]);
    await db.query(`INSERT INTO avis_core_v2.payment_beneficiaries(actor_id,account_number,bic,full_name,postal_address) VALUES($1,$2,$3,$4,$5)
     ON CONFLICT(actor_id,account_number) DO UPDATE SET bic=EXCLUDED.bic,full_name=EXCLUDED.full_name,postal_address=EXCLUDED.postal_address,updated_at=now()`,
     [actor.id,r.beneficiary_account,r.beneficiary_bic,r.beneficiary_name,JSON.stringify(r.beneficiary_address)]);
-   return {id:r.request_id,transferId,mode:r.delivery_mode};
+   return {id:r.request_id,transferId,mode:executionMode};
   });
   if(result.transferId){
    const t=(await this.pool.query('SELECT iso_status FROM avis_core_v2.interbank_ip_transfers WHERE transfer_id=$1',[result.transferId])).rows[0];
-   if(!['ACCC','RJCT'].includes(t.iso_status))await dispatchPayment(this,actor,{transferId:result.transferId},'register:'+result.id,this.transport);
+   if(!['ACCC','RJCT'].includes(t.iso_status))try{await dispatchPayment(this,actor,{transferId:result.transferId},'register:'+result.id,this.transport);}catch(e){if(!['CONNECTOR_CONFIGURATION','CONNECTOR_NOT_FOUND','PAYMENT_REVIEW_CHANGED','PAYMENT_ALREADY_DISPATCHED'].includes(e.code))throw e;console.error(JSON.stringify({operation:'PAYMENT_ADMIN_PICKUP',code:e.code,requestId:result.id}));}
   }
   return this.paymentRequest(actor,result.id);
  }
@@ -105,7 +108,7 @@ export class PaymentRegister extends FxBankingServer {
   return this.operation(actor,'CANCEL_MANUAL_PAYMENT',input,key,async(db,k)=>{
    const r=(await db.query('SELECT * FROM avis_core_v2.payment_requests WHERE request_id=$1 FOR UPDATE',[input.requestId])).rows[0];
    if(!r)fault('PAYMENT_REQUEST_NOT_FOUND','requestId',404);
-   if(r.delivery_mode!=='MANUAL'||!['OUTGOING','CANCELLED'].includes(r.status))fault('PAYMENT_REQUEST_CLOSED','requestId',409);
+   if((r.execution_mode||r.delivery_mode)!=='MANUAL'||!['OUTGOING','CANCELLED'].includes(r.status))fault('PAYMENT_REQUEST_CLOSED','requestId',409);
    if(r.status==='CANCELLED')return {id:r.request_id,status:r.status};
    const hold=await this.system(db,'SUSPENSE_OUTBOUND',r.currency_code,r.request_id);
    await this.post(db,actor,k,'PAYMENT_MANUAL_CANCELLED',r.payment_reference,
@@ -123,7 +126,7 @@ export class PaymentRegister extends FxBankingServer {
  async list(actor,view){
   if(!['paymentregister','transferrequests'].includes(view))return super.list(actor,view);
   if(!actor?.admin)fault('FORBIDDEN',null,403);
-  return (await this.pool.query(`SELECT r.request_id,r.created_at,r.beneficiary_name,r.beneficiary_account,r.beneficiary_bic,r.payment_reference,r.amount,r.currency_code,r.delivery_mode,
+  return (await this.pool.query(`SELECT r.request_id,r.created_at,r.beneficiary_name,r.beneficiary_account,r.beneficiary_bic,r.payment_reference,r.amount,r.currency_code,COALESCE(r.execution_mode,r.delivery_mode) AS delivery_mode,
    CASE WHEN t.iso_status='ACCC' THEN 'COMPLETED' WHEN t.iso_status='RJCT' THEN 'REJECTED' ELSE r.status END AS status,o.status AS delivery
    FROM avis_core_v2.payment_requests r LEFT JOIN avis_core_v2.interbank_ip_transfers t USING(transfer_id) LEFT JOIN avis_core_v2.payment_outbox o USING(transfer_id)
    WHERE r.status<>'REVIEW' ${view==='transferrequests'?"AND r.delivery_mode<>'INTERNAL'":''} ORDER BY r.created_at DESC LIMIT 300`)).rows;

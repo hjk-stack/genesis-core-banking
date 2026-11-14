@@ -24,14 +24,14 @@ export class CardPaymentServer extends PaymentServer {
   if(!Number.isFinite(expiry)||expiry<=now||expiry>now+7*86400000)fault('INVALID_FIELD','expiresAt');
   if(!Number.isInteger(input.maxTransactions)||input.maxTransactions<1||input.maxTransactions>5000)fault('INVALID_FIELD','maxTransactions');
   return this.operation(actor,'ISSUE_OFFLINE_ALLOWANCE',input,key,async(db,k)=>{
-   const card=(await db.query(`SELECT c.*,a.currency_code FROM avis_core_v2.avis_cards c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.funding_account_id WHERE core_bank_card_ref=$1 AND c.status='ACTIVE' AND card_rail_mode<>'GLOBAL_SCHEME_ONLY' FOR UPDATE OF c`,[input.cardReference])).rows[0];
+   const card=(await db.query(`SELECT c.*,COALESCE(c.stored_value_account_id,c.funding_account_id) AS funding_account_id,a.currency_code FROM avis_core_v2.avis_cards c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.funding_account_id WHERE core_bank_card_ref=$1 AND c.status='ACTIVE' AND card_rail_mode<>'GLOBAL_SCHEME_ONLY' FOR UPDATE OF c`,[input.cardReference])).rows[0];
    if(!card?.offline_public_key_pem||card.currency_code!=='EUR')fault('OFFLINE_CARD_REQUIRED','cardReference');
    const id=randomUUID(),issuedAt=new Date(now).toISOString(),expiresAt=new Date(expiry).toISOString(),settleBy=new Date(expiry+2*86400000).toISOString();
    const payload={protocol:'AVIS_OFFLINE_V1',grantId:id,cardToken:card.core_bank_card_ref,amount,currency:'EUR',maxTransactions:input.maxTransactions,issuedAt,expiresAt,settleBy};
    let allowance;try{allowance=await this.signAllowance(payload);}catch{fault('OFFLINE_ISSUER_KEY','publicKey',503);}
    if(!allowance||!verified(payload,allowance.signature,allowance.publicKey))fault('OFFLINE_ISSUER_KEY');
    const hold=await this.system(db,'SUSPENSE_CARD_FX','EUR',id),journalId=await this.post(db,actor,k,'OFFLINE_ALLOWANCE',id,[line(card.funding_account_id,'DEBIT',amount),line(hold,'CREDIT',amount)]);
-   await db.query(`INSERT INTO avis_core_v2.offline_card_grants(grant_id,card_id,allowance,max_transactions,issued_at,expires_at,settle_by,signed_allowance,hold_journal_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,[id,card.card_id,amount,input.maxTransactions,issuedAt,expiresAt,settleBy,JSON.stringify(allowance),journalId]);
+   await db.query(`INSERT INTO avis_core_v2.offline_card_grants(grant_id,card_id,allowance,max_transactions,issued_at,expires_at,settle_by,signed_allowance,hold_journal_id,debit_account_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[id,card.card_id,amount,input.maxTransactions,issuedAt,expiresAt,settleBy,JSON.stringify(allowance),journalId,card.funding_account_id]);
    return {id,journalId,allowance};
   });
  }
@@ -70,7 +70,7 @@ export class CardPaymentServer extends PaymentServer {
  }
  async closeOfflineAllowance(actor,input,key){
   return this.operation(actor,'CLOSE_OFFLINE_ALLOWANCE',input,key,async(db,k)=>{
-   const g=(await db.query(`SELECT g.*,c.funding_account_id FROM avis_core_v2.offline_card_grants g JOIN avis_core_v2.avis_cards c USING(card_id) WHERE grant_id=$1 FOR UPDATE OF g`,[input.grantId])).rows[0];
+   const g=(await db.query(`SELECT g.*,COALESCE(g.debit_account_id,c.funding_account_id) AS funding_account_id FROM avis_core_v2.offline_card_grants g JOIN avis_core_v2.avis_cards c USING(card_id) WHERE grant_id=$1 FOR UPDATE OF g`,[input.grantId])).rows[0];
    if(!g||g.status!=='ACTIVE'||Date.now()<=new Date(g.settle_by).getTime())fault('OFFLINE_SETTLEMENT_WINDOW','grantId');
    const spent=/^0(?:\.0+)?$/.test(g.spent)?0n:money(g.spent,6),remaining=money(g.allowance,6)-spent;let journalId=null;
    if(remaining)journalId=await this.post(db,actor,k,'OFFLINE_ALLOWANCE_RELEASE',g.grant_id,[line(await this.system(db,'SUSPENSE_CARD_FX','EUR',g.grant_id),'DEBIT',decimal(remaining,6)),line(g.funding_account_id,'CREDIT',decimal(remaining,6))]);

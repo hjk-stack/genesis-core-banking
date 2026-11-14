@@ -7,7 +7,7 @@ import pg from 'pg';
 import {fault,text} from './src/core.mjs';
 import {migrate} from './src/migrate.mjs';
 import {FxBankingServer} from './src/fx.mjs';
-import {PaymentRegister} from './src/payment-register.mjs';
+import {TransferMethods} from './src/transfer-methods.mjs';
 import {processAvis8583} from './src/pos-switch.mjs';
 import {authenticateMessage,connectorCredentials,dispatchPayment,recoverPaymentDeliveries} from './src/payment-transport.mjs';
 import {buildPacs002,readIso20022} from './src/iso20022.mjs';
@@ -30,6 +30,15 @@ export async function authenticateFineract(username,password,baseUrl,fetcher=fet
  return {id:'fineract:'+account.userId,username:account.username||username,admin:true};
 }
 const messages={
+ INVALID_CARD_NUMBER:'Check the card number.',INVALID_CARD_EXPIRY:'Enter a valid expiry as MM/YYYY.',
+ SELECT_EXTERNAL_CARD:'Select a registered external card.',OFFLINE_INTERNAL_CARD:'Select an AVIS card for offline debit.',
+ CRYPTO_HOLDING_REQUIRED:'Select this account holder’s crypto holding.',AG_PURCHASE_REQUIRED:'Purchase AG before transferring it.',
+ INVALID_CRYPTO_ADDRESS:'Check the receiving blockchain address.',CARD_DELIVERY_KEY:'Card delivery could not be encrypted. Check the card service in Administration.',
+ INVALID_CARD_CODE:'Check the six-digit code.',CARD_CODE_CLOSED:'This code has expired, been used or been locked. Check its card request.',
+ TRANSFER_ALREADY_CLAIMED:'Another administrator has picked up this request.',TRANSFER_PICKUP_REQUIRED:'Pick up this request before processing it.',
+ SETTLEMENT_ACCOUNT_REQUIRED:'Select the funded settlement account used for this payment.',
+ CRYPTO_STOCK_REQUIRED:'Select the institution’s crypto stock and proceeds account.',CRYPTO_OFFER_REQUIRED:'Select an available purchase offer.',CRYPTO_PRICE_CHANGED:'The purchase price changed. Review the current quote.',
+
  INVALID_RECEIVER_ACCOUNT:'Check the receiving account number and its check digits.',
  INVALID_RECEIVER_BIC:'Enter an 8 or 11 character BIC.',RECEIVER_BIC_MISMATCH:'The BIC does not match this receiving account.',
  RECEIVER_BANK_VALIDATION:'Check the receiving account and bank BIC.',
@@ -65,8 +74,8 @@ const messages={
  FORBIDDEN:'You do not have access to this action.',REQUEST_FAILED:'This action could not be completed. Reference this request in Administration.',
  CSRF:'Refresh the page and submit again.',TOO_MANY_ATTEMPTS:'Please wait before trying to sign in again.'
 };
-export function createBankServer({pool,authenticate,release='local',secureCookies=true}) {
- const core=new PaymentRegister(pool),attempts=new Map();
+export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={}}) {
+ const core=new TransferMethods(pool,transferOptions),attempts=new Map();
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  return http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
@@ -96,10 +105,10 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const reply=await buildPacs002({messageId:randomBytes(16).toString('hex'),uetr:original.uetr,senderBic:p.local_bic,receiverBic:p.peer_bic,status:receipt.status,bankReference:receipt.id.replaceAll('-','')});
     res.setHeader('content-type','application/xml');return res.end(reply);
    }
-   if(req.method==='GET'&&['/','/app.mjs','/payment-wizard.mjs','/styles.css'].includes(path)){
-    const file=path==='/'?'index.html':'public'+path;
+   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/styles.css'].includes(path)){
+    const file=path==='/'?'index.html':path==='/card-message'?'public/card-message.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
-    res.setHeader('content-type',path==='/'?'text/html; charset=utf-8':path.endsWith('css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8');return res.end(body);
+    res.setHeader('content-type',(path==='/'||path==='/card-message')?'text/html; charset=utf-8':path.endsWith('css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8');return res.end(body);
    }
    if(!path.startsWith('/api/'))return send(res,404,{code:'NOT_FOUND'});
    let body={};
@@ -148,10 +157,11 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     await pool.query('DELETE FROM avis_core_v2.operator_sessions WHERE token_hash=$1',[digest(token)]);
     res.setHeader('Set-Cookie',`avis_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secureCookies?'; Secure':''}`);return send(res,200,{});
    }
+   if(path==='/api/payments/card-delivery')return send(res,200,await core.cardDelivery(actor,body));
    if(path==='/api/payments/check-receiver')return send(res,200,await core.checkReceiver(actor,body));
    if(path==='/api/abiq')return send(res,200,await processAbiqRequest(core,actor,body));
    if(path==='/api/bankpayments/dispatch')return send(res,200,await dispatchPayment(core,actor,body,req.headers['idempotency-key']));
-   const routes={'payments/review':'preparePayment','payments/transfer':'confirmPayment','payments/cancel':'cancelPayment','customers/profile':'saveCustomerProfile',customers:'openCustomer',currencies:'addCurrencies',transfers:'transfer',shops:'registerShop',
+   const routes={'cards/external':'registerExternalCard','cards/redeem-code':'redeemCode','cards/cancel-code':'cancelCodedDebit','cards/pickup-details':'externalCardDetails','payments/pickup':'pickupTransfer','payments/settle-manual':'settleManualTransfer','crypto/offers':'registerCryptoOffer','crypto/purchase':'purchaseCrypto','payments/review':'preparePayment','payments/transfer':'confirmPayment','payments/cancel':'cancelPayment','customers/profile':'saveCustomerProfile',customers:'openCustomer',currencies:'addCurrencies',transfers:'transfer',shops:'registerShop',
     correspondents:'registerCashAccount',bankprofiles:'registerBankConnector',bankroutes:'linkBankAccount',bankpayments:'initiatePayment','clearing/reconcile':'reconcileStatement',
     'fx/rates/refresh':'refreshFxRates','fx/quote':'quoteFx','fx/execute':'executeFx','fx/cancel':'cancelFx',
     'offline/keys':'configureOffline','offline/allowances':'issueOfflineAllowance','offline/sync':'settleOfflineBatch','offline/close':'closeOfflineAllowance',

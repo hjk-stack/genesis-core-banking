@@ -121,6 +121,20 @@ test('PostgreSQL concurrent confirmations with different keys post only once',{s
  const journals=(await pool.query("SELECT count(*)::int AS n FROM avis_core_v2.ledger_journals WHERE journal_id=(SELECT reservation_journal_id FROM avis_core_v2.payment_requests WHERE request_id=$1)",[r.id])).rows[0].n;assert.equal(journals,1);
  await core.cancelPayment(actor,{requestId:r.id},key());
 });
+test('a connection lost after review accepts the funded instruction for manual pickup without duplicate debit',async()=>{
+ core.transport={credentials:()=>({})};const before=await bal(connected),r=await core.preparePayment(actor,input({from:connected.abiqIban,amount:'1'}),key());assert.equal(r.mode,'CONNECTED');
+ core.transport.credentials=()=>{throw Object.assign(new Error('CONNECTOR_CONFIGURATION'),{code:'CONNECTOR_CONFIGURATION'});};
+ const result=await confirm(r);assert.equal(result.delivery_mode,'MANUAL');assert.equal(result.status,'OUTGOING');const held=await bal(connected);await confirm(r);assert.equal(await bal(connected),held);
+ assert.equal((await pool.query('SELECT * FROM avis_core_v2.interbank_ip_transfers WHERE transfer_id=$1',[r.id])).rows.length,0);
+ await core.cancelPayment(actor,{requestId:r.id},key());assert.equal(await bal(connected),before);core.transport={};
+});
+test('insufficient correspondent availability queues the instruction while retaining the original cash reservations',async()=>{
+ core.transport={credentials:()=>({})};const r=await core.preparePayment(actor,input({from:connected.abiqIban,amount:'1'}),key());
+ const prior=(await pool.query('SELECT locked_balance::text,available_balance::text FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[cash.accountId])).rows[0];
+ await pool.query('UPDATE avis_core_v2.ledger_accounts SET locked_balance=available_balance WHERE account_id=$1',[cash.accountId]);
+ try{const result=await confirm(r);assert.equal(result.status,'OUTGOING');assert.equal(result.delivery_mode,'MANUAL');assert.equal((await pool.query('SELECT locked_balance::text FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[cash.accountId])).rows[0].locked_balance,prior.available_balance);await core.cancelPayment(actor,{requestId:r.id},key());}
+ finally{await pool.query('UPDATE avis_core_v2.ledger_accounts SET locked_balance=$2 WHERE account_id=$1',[cash.accountId,prior.locked_balance]);core.transport={};}
+});
 test('authenticated HTTP exposes the wizard, receiver lookup, register and field-level validation',async()=>{
  server=createBankServer({pool,authenticate:async()=>({...actor,username:'fixture'}),secureCookies:false});await new Promise(r=>server.listen(0,'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;
  const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:'fixture',password:'fixture'})});
@@ -129,5 +143,7 @@ test('authenticated HTTP exposes the wizard, receiver lookup, register and field
  const invalid=await fetch(base+'/api/payments/check-receiver',{method:'POST',headers,body:JSON.stringify(input({receiverAccount:'invalid'}))});assert.equal(invalid.status,422);assert.equal((await invalid.json()).field,'receiverAccount');
  assert.equal((await fetch(base+'/api/views/transferrequests',{headers})).status,200);assert.equal((await fetch(base+'/api/views/transferrequests')).status,401);
  const module=await fetch(base+'/payment-wizard.mjs');assert.equal(module.status,200);assert.match(module.headers.get('content-type'),/javascript/);
+ for(const view of ['cryptoholdings','cryptooffers','transfercards','externalcards','codedcards','transferalerts'])assert.equal((await fetch(base+'/api/views/'+view,{headers})).status,200,view);
+ assert.equal((await fetch(base+'/card-message.mjs')).status,200);assert.equal((await fetch(base+'/card-message')).status,200);
  assert.equal((await pool.query(`SELECT journal_id FROM avis_core_v2.ledger_entries GROUP BY journal_id HAVING sum(CASE direction WHEN 'DEBIT' THEN amount ELSE -amount END)<>0`)).rows.length,0);
 });
