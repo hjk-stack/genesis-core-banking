@@ -231,11 +231,11 @@ export class SovereignCore {
  async list(actor,view) {
   if(!actor?.admin)fault('FORBIDDEN',null,403);
   const queries={
-   accounts:`SELECT b.abiq_iban,b.currency_code,b.participant_code,p.abiq_bic,lpad(b.account_number::text,14,'0') AS account_number,b.user_id,u.full_name,u.account_type,u.account_role,a.available_balance::text,a.locked_balance::text,b.status
-    FROM avis_core_v2.abiq_routing_bridge b JOIN avis_core_v2.sovereign_users u USING(user_id) JOIN avis_core_v2.abiq_network_participants p USING(participant_code) JOIN avis_core_v2.ledger_accounts a ON a.account_id=b.ledger_account_id ORDER BY u.user_id,b.currency_code LIMIT 300`,
-   customers:'SELECT user_id,full_name,account_type,account_role,created_at FROM avis_core_v2.sovereign_users ORDER BY user_id DESC LIMIT 300',
+   accounts:`SELECT b.abiq_iban,b.currency_code,b.participant_code,p.abiq_bic,lpad(b.account_series::text,5,'0') || b.customer_number::text AS account_number,b.customer_number::text AS customer_number,b.user_id,u.full_name,u.account_type,u.account_role,a.available_balance::text,a.locked_balance::text,b.status
+    FROM avis_core_v2.abiq_routing_bridge b JOIN avis_core_v2.sovereign_users u USING(user_id) JOIN avis_core_v2.abiq_network_participants p USING(participant_code) JOIN avis_core_v2.ledger_accounts a ON a.account_id=b.ledger_account_id ORDER BY u.user_id,b.account_series NULLS LAST,b.currency_code LIMIT 300`,
+   customers:'SELECT u.user_id,u.full_name,u.account_type,u.account_role,u.created_at,n.customer_number::text AS customer_number FROM avis_core_v2.sovereign_users u LEFT JOIN avis_core_v2.abiq_customer_numbers n USING(user_id) ORDER BY u.user_id DESC LIMIT 300',
    issuer:"SELECT i.abiq_code,i.country_code,i.participant_code,p.institution_name FROM avis_core_v2.abiq_issuers i JOIN avis_core_v2.abiq_network_participants p USING(participant_code) WHERE p.is_active",
-   currencies:'SELECT currency_code,iso_numeric_partition FROM avis_core_v2.abiq_currencies ORDER BY currency_code',
+   currencies:'SELECT currency_code,iso_numeric_partition,account_series FROM avis_core_v2.abiq_currencies ORDER BY account_series',
    ledger:`SELECT a.account_id,a.owner_type,a.user_id,u.full_name AS account_holder,a.sub_account_code,a.currency_code,a.network,a.wallet_scope,a.account_category,a.available_balance::text,a.locked_balance::text FROM avis_core_v2.ledger_accounts a LEFT JOIN avis_core_v2.sovereign_users u USING(user_id) ORDER BY a.owner_type,a.currency_code LIMIT 500`,
    transactions:`SELECT j.journal_id,j.created_at,j.event_type,j.reference_id,e.direction,e.amount::text,a.currency_code,a.owner_type,b.abiq_iban
     FROM avis_core_v2.ledger_entries e JOIN avis_core_v2.ledger_journals j USING(journal_id) JOIN avis_core_v2.ledger_accounts a USING(account_id)

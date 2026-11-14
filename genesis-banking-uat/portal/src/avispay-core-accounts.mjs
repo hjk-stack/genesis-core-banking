@@ -5,7 +5,8 @@ import { normalizeIban } from './avispay-correspondent-mapping.mjs';
 export const ABIQ_PARTITIONS = Object.freeze({EUR:'0978',GBP:'0826',CHF:'0756',SEK:'0752',
  NOK:'0578',DKK:'0208',PLN:'0985',CZK:'0203',HUF:'0348',RON:'0946',USD:'0840',
  AED:'0784',SGD:'0702',JPY:'0392'});
-export const ABIQ_ISSUER = Object.freeze({participantCode:'AVIP',abiqCode:'AVIPTN64XXX',countryCode:'TN',accountDigits:14});
+export const ABIQ_ISSUER = Object.freeze({participantCode:'AVIP',abiqCode:'AVIPTN64XXX',countryCode:'TN',accountDigits:12});
+export const ABIQ_ACCOUNT_SERIES = Object.freeze({EUR:1,USD:2,GBP:3,CHF:4,SEK:5,NOK:6,DKK:7,PLN:8,CZK:9,HUF:10,RON:11,AED:12,SGD:13,JPY:14});
 const fail = code => { throw Object.assign(new Error(code),{code}); };
 function field(value,code,max=128) {
  if(typeof value!=='string'||!value.trim()||value.trim().length>max||/[\x00-\x1f\x7f]/.test(value)) fail(code);
@@ -37,8 +38,11 @@ export function generateAbiqIban({userId,participantCode,currency}) {
  const bban=nodeCode(participantCode)+ABIQ_PARTITIONS[currencyCode(currency)]+customerId(userId).padStart(14,'0');
  return 'AQ'+String(98-abiqMod97(bban+'AQ00')).padStart(2,'0')+bban;
 }
-export function generateIssuedAbiqIban({accountNumber,currency}) {
- const bban=ABIQ_ISSUER.participantCode+ABIQ_PARTITIONS[currencyCode(currency)].slice(1)+customerId(accountNumber).padStart(14,'0');
+export function generateIssuedAbiqIban({customerNumber,currency}) {
+ const curr=currencyCode(currency),ref=String(customerNumber);
+ if(!/^\d{7}$/.test(ref)||BigInt(ref)<1000101n) fail('ABIQ_INVALID_CUSTOMER_NUMBER');
+ const suffix=String(ABIQ_ACCOUNT_SERIES[curr]).padStart(5,'0')+ref;
+ const bban=ABIQ_ISSUER.participantCode+'000'+ABIQ_PARTITIONS[curr].slice(1)+suffix;
  return ABIQ_ISSUER.countryCode+String(98-abiqMod97(bban+ABIQ_ISSUER.countryCode+'00')).padStart(2,'0')+bban;
 }
 export function isAbiqIdentifier(value) {
@@ -47,12 +51,17 @@ export function isAbiqIdentifier(value) {
 }
 export function parseAbiqIban(value) {
  const identifier=field(value,'ABIQ_INVALID_IDENTIFIER',40).replace(/\s/g,'').toUpperCase();
+ const numbered=/^TN(\d{2})(AVIP)000(\d{3})(\d{5})(\d{7})$/.exec(identifier);
  const current=/^TN(\d{2})(AVIP)(\d{3})(\d{14})$/.exec(identifier);
  const legacy=/^AQ(\d{2})([A-Z0-9]{4})(0\d{3})(\d{14})$/.exec(identifier);
- const match=current||legacy;
+ const match=numbered||current||legacy;
  if(!match||abiqMod97(identifier.slice(4)+identifier.slice(0,4))!==1) fail('ABIQ_INVALID_IDENTIFIER');
- const currency=Object.keys(ABIQ_PARTITIONS).find(c=>ABIQ_PARTITIONS[c]===(current?'0'+match[3]:match[3]));
+ const currency=Object.keys(ABIQ_PARTITIONS).find(c=>ABIQ_PARTITIONS[c]===(numbered||current?'0'+match[3]:match[3]));
  if(!currency) fail('ABIQ_UNSUPPORTED_CURRENCY');
+ if(numbered){
+  if(Number(match[4])!==ABIQ_ACCOUNT_SERIES[currency]||Number(match[5])<1000101) fail('ABIQ_INVALID_IDENTIFIER');
+  return {identifier,participantCode:match[2],currency,countryCode:'TN',abiqCode:ABIQ_ISSUER.abiqCode,accountNumber:match[4]+match[5],accountSeries:match[4],customerNumber:match[5]};
+ }
  const sequence=customerId(match[4]);
  return {identifier,participantCode:match[2],currency,...(current?
   {countryCode:'TN',abiqCode:ABIQ_ISSUER.abiqCode,accountNumber:sequence.padStart(14,'0')}:{userId:sequence})};
@@ -89,7 +98,7 @@ export async function linkAbiqBankRoute(db,{userId,participantCode,abiqIban,bank
   SELECT b.bridge_id,b.currency_code FROM avis_core_v2.abiq_routing_bridge b
   JOIN avis_core_v2.abiq_network_participants p USING(participant_code)
   JOIN avis_core_v2.platform_connectors c ON c.connector_code=$4
-  WHERE b.abiq_iban=$1 AND b.user_id=$2 AND b.participant_code=$3
+  WHERE b.bridge_id IN (SELECT bridge_id FROM avis_core_v2.abiq_identifier_routes WHERE identifier=$1) AND b.user_id=$2 AND b.participant_code=$3
    AND b.status='ACTIVE' AND p.is_active AND c.is_enabled FOR SHARE OF b,p,c
  )
  INSERT INTO avis_core_v2.abiq_bank_routes AS old
@@ -110,7 +119,7 @@ export async function resolveAbiqAccount(db,{identifier,currency}) {
   if(route.currency!==curr) fail('ABIQ_CURRENCY_MISMATCH');
   const result=await db.query(`SELECT b.bridge_id,b.ledger_account_id,b.user_id,b.participant_code,b.currency_code
    FROM avis_core_v2.abiq_routing_bridge b JOIN avis_core_v2.abiq_network_participants p USING(participant_code)
-   WHERE b.abiq_iban=$1 AND b.currency_code=$2 AND b.status='ACTIVE' AND p.is_active`,[route.identifier,curr]);
+   WHERE b.bridge_id IN (SELECT bridge_id FROM avis_core_v2.abiq_identifier_routes WHERE identifier=$1) AND b.currency_code=$2 AND b.status='ACTIVE' AND p.is_active`,[route.identifier,curr]);
   return result.rows[0]||null;
  }
  const iban=normalizeIban(raw);

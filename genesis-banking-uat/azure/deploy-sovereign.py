@@ -124,12 +124,14 @@ def main():
                 raise RuntimeError('ABIQ currency accounts missing')
             for account in suite:
                 identifier = account['abiq_iban']
-                if not re.fullmatch(r'TN[0-9]{2}AVIP[0-9]{17}', identifier) or account['abiq_bic'] != 'AVIPTN64XXX':
+                if not re.fullmatch(r'TN[0-9]{2}AVIP000[0-9]{15}', identifier) or account['abiq_bic'] != 'AVIPTN64XXX':
                     raise RuntimeError('ABIQ account format mismatch')
+                if identifier[-7:] != holders[uid]['customer_number'] or identifier[-12:] != account['account_number']:
+                    raise RuntimeError('ABIQ customer number mismatch')
                 expanded = ''.join(str(ord(c) - 55) if c.isalpha() else c for c in identifier[4:] + identifier[:4])
                 if int(expanded) % 97 != 1:
                     raise RuntimeError('ABIQ checksum mismatch')
-        print('Verified ABIQ issuer, corporate user 1, frontend user 2 and EUR/USD/GBP account checksums')
+        print('Verified ABIQ issuer, corporate user 1, frontend user 2 and EUR/USD/GBP customer numbering and checksums')
         stage = 'published FX data verification'
         expected_fx = {'EUR', 'GBP', 'CHF', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'HUF', 'RON', 'USD', 'SGD', 'JPY'}
         # Startup refresh is asynchronous. Read public price metadata only; never submit a conversion.
