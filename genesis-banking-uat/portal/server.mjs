@@ -7,7 +7,8 @@ import pg from 'pg';
 import {fault,text} from './src/core.mjs';
 import {migrate} from './src/migrate.mjs';
 import {FxBankingServer} from './src/fx.mjs';
-import {TransferMethods} from './src/transfer-methods.mjs';
+import {CardManagement} from './src/card-management.mjs';
+import {CustomerAccess} from './src/customer-access.mjs';
 import {processAvis8583} from './src/pos-switch.mjs';
 import {authenticateMessage,connectorCredentials,dispatchPayment,recoverPaymentDeliveries} from './src/payment-transport.mjs';
 import {buildPacs002,readIso20022} from './src/iso20022.mjs';
@@ -26,10 +27,13 @@ export async function authenticateFineract(username,password,baseUrl,fetcher=fet
  if(response.status===401||response.status===403)fault('SIGN_IN_FAILED','password',401);
  if(!response.ok)fault('SIGN_IN_SERVICE',null,503);
  const account=await response.json();
- if(account.authenticated!==true||account.isTwoFactorAuthenticationRequired===true||!account.permissions?.includes('ALL_FUNCTIONS'))fault('OPERATOR_ACCESS_REQUIRED','username',403);
- return {id:'fineract:'+account.userId,username:account.username||username,admin:true};
+ if(account.authenticated!==true||account.isTwoFactorAuthenticationRequired===true||!/^\d+$/.test(String(account.userId||'')))fault('OPERATOR_ACCESS_REQUIRED','username',403);
+ return {id:'fineract:'+account.userId,username:account.username||username,admin:account.permissions?.includes('ALL_FUNCTIONS')===true};
 }
 const messages={
+ INVALID_CODE_WINDOW:'Choose a start and end time with a validity of up to 48 hours.',
+ CARD_CODE_NOT_STARTED:'This card code is not active yet.',CARD_CODE_BLOCKED:'This card is blocked or expired.',
+ INVALID_CARD_PIN:'Enter a PIN containing four to six digits.',IDENTITY_ALREADY_BOUND:'This login is already linked to another account holder.',
  INVALID_CARD_NUMBER:'Check the card number.',INVALID_CARD_EXPIRY:'Enter a valid expiry as MM/YYYY.',
  SELECT_EXTERNAL_CARD:'Select a registered external card.',OFFLINE_INTERNAL_CARD:'Select an AVIS card for offline debit.',
  CRYPTO_HOLDING_REQUIRED:'Select this account holder’s crypto holding.',AG_PURCHASE_REQUIRED:'Purchase AG before transferring it.',
@@ -75,7 +79,7 @@ const messages={
  CSRF:'Refresh the page and submit again.',TOO_MANY_ATTEMPTS:'Please wait before trying to sign in again.'
 };
 export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={}}) {
- const core=new TransferMethods(pool,transferOptions),attempts=new Map();
+ const core=new CardManagement(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map();
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  return http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
@@ -105,7 +109,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const reply=await buildPacs002({messageId:randomBytes(16).toString('hex'),uetr:original.uetr,senderBic:p.local_bic,receiverBic:p.peer_bic,status:receipt.status,bankReference:receipt.id.replaceAll('-','')});
     res.setHeader('content-type','application/xml');return res.end(reply);
    }
-   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/styles.css'].includes(path)){
+   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/styles.css'].includes(path)){
     const file=path==='/'?'index.html':path==='/card-message'?'public/card-message.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     res.setHeader('content-type',(path==='/'||path==='/card-message')?'text/html; charset=utf-8':path.endsWith('css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8');return res.end(body);
@@ -130,45 +134,64 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     if(attempts.size>10000)for(const[k,v]of attempts)if(now-v.since>60000)attempts.delete(k);
     if(attempts.size>=10000&&!previous)fault('TOO_MANY_ATTEMPTS',null,429);
     attempts.set(bucket,previous&&now-previous.since<60000?{since:previous.since,count:previous.count+1}:{since:now,count:1});
-    const actor=await authenticate(username,password);if(!actor?.admin)fault('FORBIDDEN',null,403);
+    const actor=await authenticate(username,password);if(!actor?.id)fault('FORBIDDEN',null,403);
+    const binding=actor.admin?null:(await pool.query('SELECT user_id FROM avis_core_v2.customer_logins WHERE principal_id=$1',[actor.id])).rows[0];
+    if(!actor.admin&&!binding)fault('FORBIDDEN',null,403);
     const token=randomBytes(32).toString('base64url'),csrf=sessionCsrf(token);
     await pool.query('DELETE FROM avis_core_v2.operator_sessions WHERE expires_at<now()');
-    await pool.query("INSERT INTO avis_core_v2.operator_sessions(token_hash,csrf_hash,actor_id,username,expires_at) VALUES($1,$2,$3,$4,now()+interval '1 hour')",[digest(token),digest(csrf),actor.id,actor.username]);
+    await pool.query("INSERT INTO avis_core_v2.operator_sessions(token_hash,csrf_hash,actor_id,username,is_admin,customer_user_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,now()+interval '1 hour')",[digest(token),digest(csrf),actor.id,actor.username,actor.admin===true,binding?.user_id||null]);
     res.setHeader('Set-Cookie',`avis_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600${secureCookies?'; Secure':''}`);
-    return send(res,200,{username:actor.username,csrf});
+    return send(res,200,{username:actor.username,csrf,admin:actor.admin===true,customerUserId:binding?String(binding.user_id):null,canSwitchWorkspace:actor.admin===true});
    }
    const token=/(?:^|;\s*)avis_session=([A-Za-z0-9_-]+)/.exec(req.headers.cookie||'')?.[1];
    if(!token)fault('UNAUTHORIZED',null,401);
    const session=(await pool.query('SELECT * FROM avis_core_v2.operator_sessions WHERE token_hash=$1 AND expires_at>now()',[digest(token)])).rows[0];
    if(!session)fault('UNAUTHORIZED',null,401);
-   const actor={id:session.actor_id,username:session.username,admin:true};
+   const holder=session.is_admin?session.workspace_user_id:session.customer_user_id;
+   if(!session.is_admin){const binding=(await pool.query('SELECT user_id FROM avis_core_v2.customer_logins WHERE principal_id=$1',[session.actor_id])).rows[0];if(!binding||String(binding.user_id)!==String(holder))fault('FORBIDDEN',null,403);}
+   const actor={id:session.actor_id+(session.is_admin&&holder?':customer:'+holder:''),username:session.username,admin:session.is_admin&&!holder,customerUserId:holder?String(holder):null};
+   const sessionData=()=>({username:actor.username,csrf:sessionCsrf(token),admin:actor.admin,customerUserId:actor.customerUserId,canSwitchWorkspace:session.is_admin});
+   const invoke=(method,input,key,...extra)=>actor.admin?core[method](actor,input,key,...extra):customerAccess.invoke(actor,method,input,key,...extra);
    if(path==='/api/session'&&req.method==='GET'){
     // Restore the same token in every tab. Adopt sessions issued before this
     // release once; new sessions need no write when restoring the workspace.
     const csrf=sessionCsrf(token);
     if(session.csrf_hash!==digest(csrf))await pool.query('UPDATE avis_core_v2.operator_sessions SET csrf_hash=$2 WHERE token_hash=$1',[digest(token),digest(csrf)]);
-    return send(res,200,{username:actor.username,csrf});
+    return send(res,200,sessionData());
    }
-   if(req.method==='GET'&&/^\/api\/payment-requests\/[0-9a-f-]{36}$/.test(path))return send(res,200,await core.paymentRequest(actor,path.split('/').at(-1)));
-   if(req.method==='GET'&&path.startsWith('/api/views/'))return send(res,200,{rows:await core.list(actor,path.split('/').at(-1))});
+   if(path==='/api/workspaces'&&req.method==='GET'){if(!session.is_admin)fault('FORBIDDEN',null,403);return send(res,200,{rows:(await pool.query("SELECT user_id,full_name FROM avis_core_v2.sovereign_users WHERE account_role='CUSTOMER' ORDER BY user_id")).rows});}
+   if(req.method==='GET'&&/^\/api\/cards\/[0-9a-f-]{36}$/.test(path))return send(res,200,await invoke('managedCardDetails',{cardId:path.split('/').at(-1)}));
+   if(req.method==='GET'&&/^\/api\/payment-requests\/[0-9a-f-]{36}$/.test(path))return send(res,200,await (actor.admin?core:customerAccess).paymentRequest(actor,path.split('/').at(-1)));
+   if(req.method==='GET'&&path.startsWith('/api/views/'))return send(res,200,{rows:await (actor.admin?core:customerAccess).list(actor,path.split('/').at(-1))});
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
    if(path==='/api/logout'){
     await pool.query('DELETE FROM avis_core_v2.operator_sessions WHERE token_hash=$1',[digest(token)]);
     res.setHeader('Set-Cookie',`avis_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secureCookies?'; Secure':''}`);return send(res,200,{});
    }
-   if(path==='/api/payments/card-delivery')return send(res,200,await core.cardDelivery(actor,body));
-   if(path==='/api/payments/check-receiver')return send(res,200,await core.checkReceiver(actor,body));
+   if(path==='/api/workspace'){
+    if(!session.is_admin)fault('FORBIDDEN',null,403);
+    const id=body.userId||null;
+    if(id&&!(await pool.query("SELECT user_id FROM avis_core_v2.sovereign_users WHERE user_id=$1 AND account_role='CUSTOMER'",[id])).rows.length)fault('ABIQ_CUSTOMER_NOT_FOUND','userId');
+    await pool.query('UPDATE avis_core_v2.operator_sessions SET workspace_user_id=$2 WHERE token_hash=$1',[digest(token),id]);
+    return send(res,200,{...sessionData(),admin:!id,customerUserId:id?String(id):null});
+   }
+   if(path==='/api/payments/crypto-receiver'){
+    const r=(await pool.query('SELECT full_name FROM avis_core_v2.sovereign_users WHERE user_id=$1',[body.receiverUserId])).rows[0];if(!r)fault('ABIQ_CUSTOMER_NOT_FOUND','receiverUserId');return send(res,200,{receiverName:r.full_name});
+   }
+   if(path==='/api/payments/card-delivery')return send(res,200,await invoke('cardDelivery',body));
+   if(path==='/api/payments/check-receiver')return send(res,200,await invoke('checkReceiver',body));
+   if((path==='/api/abiq'||path==='/api/bankpayments/dispatch')&&!actor.admin)fault('FORBIDDEN',null,403);
    if(path==='/api/abiq')return send(res,200,await processAbiqRequest(core,actor,body));
    if(path==='/api/bankpayments/dispatch')return send(res,200,await dispatchPayment(core,actor,body,req.headers['idempotency-key']));
-   const routes={'cards/external':'registerExternalCard','cards/redeem-code':'redeemCode','cards/cancel-code':'cancelCodedDebit','cards/pickup-details':'externalCardDetails','payments/pickup':'pickupTransfer','payments/settle-manual':'settleManualTransfer','crypto/offers':'registerCryptoOffer','crypto/purchase':'purchaseCrypto','payments/review':'preparePayment','payments/transfer':'confirmPayment','payments/cancel':'cancelPayment','customers/profile':'saveCustomerProfile',customers:'openCustomer',currencies:'addCurrencies',transfers:'transfer',shops:'registerShop',
+   const routes={'cards/issue':'issueManagedCard','cards/load':'loadManagedCard','cards/status':'setCardStatus','cards/pin':'resetCardPin','cards/delivery':'managedCardDelivery','accounts/suspense':'moveToSuspense','access/customer':'bindCustomerLogin','crypto/sell':'sellCrypto','cards/external':'registerExternalCard','cards/redeem-code':'redeemCode','cards/cancel-code':'cancelCodedDebit','cards/pickup-details':'externalCardDetails','payments/pickup':'pickupTransfer','payments/settle-manual':'settleManualTransfer','crypto/offers':'registerCryptoOffer','crypto/purchase':'purchaseCrypto','payments/review':'preparePayment','payments/transfer':'confirmPayment','payments/cancel':'cancelPayment','customers/profile':'saveCustomerProfile',customers:'openCustomer',currencies:'addCurrencies',transfers:'transfer',shops:'registerShop',
     correspondents:'registerCashAccount',bankprofiles:'registerBankConnector',bankroutes:'linkBankAccount',bankpayments:'initiatePayment','clearing/reconcile':'reconcileStatement',
     'fx/rates/refresh':'refreshFxRates','fx/quote':'quoteFx','fx/execute':'executeFx','fx/cancel':'cancelFx',
     'offline/keys':'configureOffline','offline/allowances':'issueOfflineAllowance','offline/sync':'settleOfflineBatch','offline/close':'closeOfflineAllowance',
     'checkouts/capture':'captureCheckout','checkouts/release':'releaseCheckout','checkouts/refund':'refundCheckout',
     cards:'registerCard',terminals:'registerTerminal','cards/authorize':'authorizeCard','cards/capture':'settleCard','cards/reverse':'settleCard'};
    const action=path.slice(5),method=routes[action];if(!method)fault('NOT_FOUND',null,404);
-   const result=await core[method](actor,body,req.headers['idempotency-key'],action==='cards/reverse');
+   const result=await invoke(method,body,req.headers['idempotency-key'],action==='cards/reverse');
    if(action==='fx/execute'&&result.status==='EXPIRED')fault('FX_QUOTE_EXPIRED','quoteId',409);
    return send(res,200,result);
   }catch(e){

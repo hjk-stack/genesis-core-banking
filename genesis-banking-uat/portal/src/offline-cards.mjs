@@ -24,7 +24,7 @@ export class CardPaymentServer extends PaymentServer {
   if(!Number.isFinite(expiry)||expiry<=now||expiry>now+7*86400000)fault('INVALID_FIELD','expiresAt');
   if(!Number.isInteger(input.maxTransactions)||input.maxTransactions<1||input.maxTransactions>5000)fault('INVALID_FIELD','maxTransactions');
   return this.operation(actor,'ISSUE_OFFLINE_ALLOWANCE',input,key,async(db,k)=>{
-   const card=(await db.query(`SELECT c.*,COALESCE(c.stored_value_account_id,c.funding_account_id) AS funding_account_id,a.currency_code FROM avis_core_v2.avis_cards c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.funding_account_id WHERE core_bank_card_ref=$1 AND c.status='ACTIVE' AND card_rail_mode<>'GLOBAL_SCHEME_ONLY' FOR UPDATE OF c`,[input.cardReference])).rows[0];
+   const card=(await db.query(`SELECT c.*,COALESCE(c.stored_value_account_id,c.funding_account_id) AS funding_account_id,a.currency_code FROM avis_core_v2.avis_cards c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.funding_account_id WHERE core_bank_card_ref=$1 AND c.status='ACTIVE' AND (c.expires_at IS NULL OR c.expires_at>now()) AND card_rail_mode<>'GLOBAL_SCHEME_ONLY' FOR UPDATE OF c`,[input.cardReference])).rows[0];
    if(!card?.offline_public_key_pem||card.currency_code!=='EUR')fault('OFFLINE_CARD_REQUIRED','cardReference');
    const id=randomUUID(),issuedAt=new Date(now).toISOString(),expiresAt=new Date(expiry).toISOString(),settleBy=new Date(expiry+2*86400000).toISOString();
    const payload={protocol:'AVIS_OFFLINE_V1',grantId:id,cardToken:card.core_bank_card_ref,amount,currency:'EUR',maxTransactions:input.maxTransactions,issuedAt,expiresAt,settleBy};

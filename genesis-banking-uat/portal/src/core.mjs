@@ -197,7 +197,7 @@ export class SovereignCore {
   return this.operation(actor,'AVIS_CARD_AUTHORIZE',input,key,async(db,k)=>{
    const card=(await db.query(`SELECT c.*,COALESCE(c.stored_value_account_id,c.funding_account_id) AS funding_account_id,a.currency_code FROM avis_core_v2.avis_cards c
     JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.funding_account_id
-    WHERE core_bank_card_ref=$1 AND c.status='ACTIVE' FOR SHARE OF c`,[input.cardReference])).rows[0];
+    WHERE core_bank_card_ref=$1 AND c.status='ACTIVE' AND (c.expires_at IS NULL OR c.expires_at>now()) FOR SHARE OF c`,[input.cardReference])).rows[0];
    if(!card||card.card_rail_mode==='GLOBAL_SCHEME_ONLY')fault('SELECT_AVIS_CARD','cardReference');
    if(card.currency_code!==input.currency)fault('CURRENCY_MISMATCH','currency');
    const terminal=(await db.query(`SELECT t.terminal_id,m.commission_rate_bps FROM avis_core_v2.pos_terminals t JOIN avis_core_v2.marketplace_merchants m USING(merchant_id)

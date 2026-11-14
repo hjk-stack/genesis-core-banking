@@ -5,14 +5,15 @@ import {createPaymentWizard} from '../public/payment-wizard.mjs';
 let dom,wizard;const originalFormData=globalThis.FormData;
 const account={user_id:'1',abiq_iban:'TN89AVIP000978000011000101',full_name:'Sender',currency_code:'EUR',available_balance:'1234567890123456.120000000000000000'};
 const address={street:'Receiver Road 1',city:'London',postalCode:'SW1A',country:'GB'};
-function setup(handler,views={}){
+function setup(handler,views={},options={}){
  dom=new JSDOM('<!doctype html><body></body>',{url:'https://bank.invalid',pretendToBeVisual:true});globalThis.document=dom.window.document;globalThis.FormData=dom.window.FormData;
  dom.window.HTMLDialogElement.prototype.showModal=function(){this.open=true;};dom.window.HTMLDialogElement.prototype.close=function(){this.open=false;};
  const calls=[],notices=[];let refreshes=0;
  wizard=createPaymentWizard({api:async(path,body,key)=>{calls.push({path,body,key});if(handler)return handler(path,body,key);if(path==='payments/check-receiver')return {account:'TN62AVIP000978000011000102',bic:'AVIPTN64XXX',receiverName:'Internal Receiver',address,addressSource:'REGISTERED',receiverBridgeId:'receiver'};
+  if(path==='payments/crypto-receiver')return {receiverName:views.customers?.find(r=>String(r.user_id)===body.receiverUserId)?.full_name||'Crypto Receiver'};
   if(path==='payments/review')return {id:'request',messageHash:'review-hash',message:'<message>exact</message>',format:'ISO20022',mode:'INTERNAL',instruction:body};
   if(path==='payments/transfer')return {current_status:'COMPLETED',delivery_mode:'INTERNAL'};
- },accounts:()=>[account],data:v=>views[v]||[],refresh:async()=>refreshes++,notice:s=>notices.push(s)});wizard.open();return {calls,notices,refreshes:()=>refreshes};
+ },accounts:()=>[account],data:v=>views[v]||[],refresh:async()=>refreshes++,notice:s=>notices.push(s),...options});wizard.open();return {calls,notices,refreshes:()=>refreshes};
 }
 const q=s=>document.querySelector(s),fields=()=>q('form').elements;
 const fill=(name,value)=>{fields()[name].value=value;fields()[name].dispatchEvent(new dom.window.Event('input',{bubbles:true}));};
@@ -46,29 +47,35 @@ test('double submit while lookup is in flight advances one panel only',async()=>
 });
 test('crypto selector filters holdings by sender and preserves exact crypto quantity through review',async()=>{
  const views={cryptoholdings:[{account_id:'own-eth',user_id:'1',currency_code:'ETH',network:'ETHEREUM',available_balance:'2.123456789012345678'},{account_id:'other-eth',user_id:'2',currency_code:'ETH',network:'ETHEREUM',available_balance:'99'}],customers:[{user_id:'2',full_name:'Crypto Receiver'}]};
- const state=setup(undefined,views);fill('from',account.abiq_iban);fill('method','CRYPTO');fill('cryptoAccount','own-eth');fill('amount','0.123456789012345678');
+ const state=setup(undefined,views,{isAdmin:()=>false,userId:()=> '1'});fill('method','CRYPTO');fill('cryptoAccount','own-eth');fill('amount','0.123456789012345678');
  assert.equal(fields().cryptoAccount.querySelector('[value=other-eth]'),null);assert.match(q('[data-balance]').textContent,/2.123456789012345678 ETH/);
  await next();fill('receiverUserId','2');await next();assert.equal(fields().receiverName.value,'Crypto Receiver');assert.equal(fields().street.disabled,true);await next();fill('reference','Crypto fixture');await next();
  const reviewed=state.calls.find(c=>c.path==='payments/review');assert.equal(reviewed.body.method,'CRYPTO');assert.equal(reviewed.body.cryptoAccount,'own-eth');assert.equal(reviewed.body.amount,'0.123456789012345678');assert.equal(reviewed.body.receiverUserId,'2');
  assert.equal(state.calls.some(c=>c.path==='payments/check-receiver'),false);
 });
-test('new coded card does not require hidden bank fields and shows the six-digit delivery receipt',async()=>{
+const cards={transfercards:[{card_id:'own-card',user_id:'1',full_name:'Sender',card_number:'AVIS-1234',currency_code:'EUR',available_balance:'75',card_rail_mode:'AVIS_PROPRIETARY_ONLY'}]};
+test('code-secured force payment uses the card balance, accepts a validity window and shows its six-digit receipt',async()=>{
  const state=setup(async(path,body)=>{
-  if(path==='payments/review')return {id:'coded-request',mode:'INTERNAL',format:'AVIS_TRANSFER_V1',message:'Card instruction',messageHash:'hash',instruction:{...body,receiverName:'Sender',destinationLabel:'New AVIS card'}};
+  if(path==='payments/review')return {id:'coded-request',mode:'INTERNAL',format:'AVIS_TRANSFER_V1',message:'Card instruction',messageHash:'hash',instruction:{...body,receiverName:'Sender',destinationLabel:'Code delivery'}};
   if(path==='payments/transfer')return {request_id:'coded-request',current_status:'COMPLETED',delivery_mode:'INTERNAL',hasDelivery:true};
-  if(path==='payments/card-delivery')return {holder:'Sender',amount:'12',currency:'EUR',code:'012345',redemptionToken:'isolated-token',expiresAt:'2099-01-01T00:00:00Z'};
- });
- fill('from',account.abiq_iban);fill('method','CODED_CARD');fill('amount','12');await next();fill('cardDestination','NEW');await next();
- assert.equal(fields().receiverName.value,'Sender');assert.equal(fields().street.disabled,true);assert.equal(fields().receiverAccount.disabled,true);await next();fill('reference','Coded card fixture');await next();await next();
- assert.equal(q('.card-code').textContent,'012345');assert.equal(q('dialog').open,true);assert.equal(q('[data-next]').hidden,true);assert.equal(state.calls.find(c=>c.path==='payments/review').body.offlineDebit,true);
+  if(path==='payments/card-delivery')return {holder:'Sender',amount:'12',currency:'EUR',code:'012345',redemptionToken:'isolated-token',validFrom:'2098-12-31T00:00:00Z',expiresAt:'2099-01-01T00:00:00Z'};
+ },cards);
+ fill('method','CODED_CARD');fill('amount','12');fields().offlineDebit.checked=true;fields().offlineDebit.dispatchEvent(new dom.window.Event('input',{bubbles:true}));
+ assert.equal(fields().from.disabled,true);assert.equal(fields().sourceCardId.value,'own-card');assert.match(q('[data-balance]').textContent,/75.00 EUR/);assert.equal(fields().codeStart.disabled,false);
+ await next();assert.equal(q('[data-code-delivery]').hidden,false);await next();assert.equal(fields().receiverName.value,'Sender');assert.equal(fields().street.disabled,true);await next();fill('reference','Coded card fixture');await next();await next();
+ assert.equal(q('.card-code').textContent,'012345');assert.equal(q('dialog').open,true);assert.equal(q('[data-next]').hidden,true);
+ const body=state.calls.find(c=>c.path==='payments/review').body;assert.equal(body.sourceCardId,'own-card');assert.equal(body.from,undefined);assert.equal(body.offlineDebit,true);assert.ok(Date.parse(body.codeEnd)-Date.parse(body.codeStart)<=48*3600000);
  await next();assert.equal(state.calls.filter(c=>c.path==='payments/transfer').length,1);
 });
-test('external card number is registered separately and excluded from reviewed transfer content',async()=>{
- const views={externalcards:[]};const state=setup(async(path,body)=>{
-  if(path==='cards/external')return {id:'external-card',lastFour:'1111'};
-  if(path==='payments/review')return {id:'request',mode:'MANUAL',format:'AVIS_TRANSFER_V1',message:'External load',messageHash:'hash',instruction:{...body,destinationLabel:'External card ending 1111'}};
- },views);
- fill('from',account.abiq_iban);fill('method','CARD');fill('amount','20');await next();fields().offlineDebit.checked=true;fill('cardDestination','EXTERNAL');assert.equal(fields().offlineDebit.checked,false);assert.equal(fields().offlineDebit.disabled,true);fill('externalCardId','NEW');fill('cardNumber','4111111111111111');fill('expiry','12/2099');fill('holderName','External Receiver');await next();
- assert.equal(fields().receiverName.value,'External Receiver');assert.equal(fields().cardNumber.value,'');await next();fill('reference','External load');await next();
- const reviewed=state.calls.find(c=>c.path==='payments/review');assert.equal(reviewed.body.externalCardId,'external-card');assert.equal(reviewed.body.offlineDebit,false);assert.equal(JSON.stringify(reviewed.body).includes('4111111111111111'),false);assert.equal(state.calls.filter(c=>c.path==='cards/external').length,1);
+test('changing force payment to normal card clears the code option and restores recipient fields',async()=>{
+ const state=setup(undefined,cards);fill('method','CODED_CARD');fields().offlineDebit.checked=true;fill('amount','10');fill('method','CARD');
+ assert.equal(fields().offlineDebit.checked,false);assert.equal(fields().offlineDebit.disabled,true);assert.equal(fields().codeStart.disabled,true);assert.equal(fields().from.disabled,true);
+ await next();fill('receiverAccount','000011000102');await next();await next();fill('reference','Card payment');await next();
+ const body=state.calls.find(c=>c.path==='payments/review').body;assert.equal(body.method,'CARD');assert.equal(body.sourceCardId,'own-card');assert.equal(body.offlineDebit,false);assert.equal(body.from,undefined);
+ assert.equal(body.receiverName,'Internal Receiver');assert.equal(q('.payment-error').textContent,'');
+});
+test('requested copy and labels replace redundant payment headings and sender prompts',()=>{
+ setup(undefined,cards);assert.equal(q('.eyebrow'),null);assert.equal(q('dialog').textContent.includes('Account and amount'),false);assert.equal(q('dialog').textContent.includes('Select the account to display its balance.'),false);
+ fill('method','CRYPTO');assert.equal(fields().from.disabled,true);assert.match(q('dialog').textContent,/AG and AGi as payment media/);assert.match(q('dialog').textContent,/purchase now/);
+ assert.equal(fields().method.querySelector('[value=CODED_CARD]').textContent,'Make a force payment');
 });
