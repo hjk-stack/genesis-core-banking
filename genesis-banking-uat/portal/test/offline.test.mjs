@@ -52,6 +52,7 @@ test('offline allowance is issuer-signed, reserved from funding, and cannot be d
  grant=await core.issueOfflineAllowance(actor,{cardReference:cardToken,amount:'50',maxTransactions:5,expiresAt:new Date(Date.now()+3600000).toISOString()},key());assert.equal(grant.allowance.payload.protocol,'AVIS_OFFLINE_V1');assert.equal(await balance(buyer.accounts[0].accountId),'40.000000000000000000');
  await assert.rejects(core.issueOfflineAllowance(actor,{cardReference:cardToken,amount:'10',maxTransactions:5,expiresAt:new Date(Date.now()+3600000).toISOString()},key()),/duplicate key/);assert.equal(await balance(buyer.accounts[0].accountId),'40.000000000000000000');
  await assert.rejects(core.configureOffline(actor,{kind:'CARD',reference:cardToken,publicKey:pem(issuer.publicKey)},key()),/OFFLINE_KEY_NOT_UPDATED/);
+ const rows=await core.list(actor,'offlinegrants');assert.equal(rows.length,1);assert.equal(rows[0].grant_id,grant.id);assert.equal(rows[0].last_four_digits,'4567');assert.equal(rows[0].status,'ACTIVE');
 });
 test('valid signed offline batch settles fees once; repeated ATC requires identical transaction',async()=>{
  const tx=transaction(1,'10'),input=batch([tx]),k=key();const r=await core.settleOfflineBatch(actor,input,k);assert.equal(r.settled,1);assert.deepEqual(await core.settleOfflineBatch(actor,input,k),r);assert.equal((await core.settleOfflineBatch(actor,batch([tx]),key())).duplicates,1);

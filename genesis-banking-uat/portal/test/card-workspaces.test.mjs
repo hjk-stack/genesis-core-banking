@@ -109,6 +109,11 @@ test('authenticated customer sessions and administrator customer workspaces enfo
  assert.equal((await request(operator,'workspace',{userId:null})).admin,true);assert.ok((await request(operator,'views/accounts')).rows.some(a=>String(a.user_id)===bob.userId));
  const authenticated=await authenticateFineract('customer','fixture','https://identity.invalid',async()=>({ok:true,json:async()=>({authenticated:true,userId:101,permissions:['READ_CLIENT']})}));assert.equal(authenticated.admin,false);
 });
+test('all release verification views remain readable with the card workspace schema',async()=>{
+ for(const view of ['accounts','customers','issuer','ledger','cardaccounts','cryptoholdings','cryptooffers','transfercards','externalcards','codedcards','transferalerts','paymentregister','transferrequests','bankpayments','bankroutes','clearing','offlinegrants','fxrates','fxquotes','audit']){
+  assert.ok(Array.isArray(await core.list(admin,view)),view);
+ }
+});
 test('PostgreSQL concurrent issuance shares one card account without duplicate loading',{skip:!process.env.TEST_DATABASE_URL},async()=>{
  const results=await Promise.all([core.issueManagedCard(admin,{from:alice.abiqIban,currency:'EUR',product:'GOLD_DIAMOND'},key()),core.issueManagedCard(admin,{from:alice.abiqIban,currency:'EUR',product:'GOLD_STANDARD'},key())]);assert.equal(results[0].accountId,results[1].accountId);assert.equal(results[0].accountId,aCard.accountId);
 });
