@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {processAbiqRequest} from './src/abiq-interface.mjs';
 import {readFile} from 'node:fs/promises';
 import {createHash,randomBytes} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
@@ -28,6 +29,10 @@ export async function authenticateFineract(username,password,baseUrl,fetcher=fet
  return {id:'fineract:'+account.userId,username:account.username||username,admin:true};
 }
 const messages={
+ ABIQ_ACCOUNT_ORDER_COUNT:'Request one identifier when opening a currency account.',
+ ABIQ_UNSUPPORTED_CURRENCY:'Select an accepted account currency.',ABIQ_INVALID_CURRENCIES:'Select at least one account currency.',
+ ABIQ_CUSTOMER_NOT_FOUND:'Select an existing account holder.',ABIQ_INVALID_CUSTOMER:'Select a valid account holder.',
+ ABIQ_ACCOUNT_NOT_ACTIVE:'Select an active account.',ABIQ_IDEMPOTENCY_CONFLICT:'This request reference has already been used for different currencies.',
  FX_ACCOUNT_PAIR:'Select two different currency accounts belonging to the same customer.',FX_RATE_REQUIRED:'Refresh rates or select a currency with a current quote.',
  FX_LIQUIDITY_REQUIRED:'The treasury has insufficient available funds in the receiving currency.',FX_QUOTE_CLOSED:'Request a new quote for this conversion.',
  FX_QUOTE_EXPIRED:'This quote expired. Its treasury reservation has been released; request a new quote.',FX_SOURCE_DATE:'The reference-rate publication date is outside the accepted range.',
@@ -136,6 +141,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     await pool.query('DELETE FROM avis_core_v2.operator_sessions WHERE token_hash=$1',[digest(token)]);
     res.setHeader('Set-Cookie',`avis_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secureCookies?'; Secure':''}`);return send(res,200,{});
    }
+   if(path==='/api/abiq')return send(res,200,await processAbiqRequest(core,actor,body));
    if(path==='/api/bankpayments/dispatch')return send(res,200,await dispatchPayment(core,actor,body,req.headers['idempotency-key']));
    const routes={customers:'openCustomer',currencies:'addCurrencies',transfers:'transfer',shops:'registerShop',
     correspondents:'registerCashAccount',bankprofiles:'registerBankConnector',bankroutes:'linkBankAccount',bankpayments:'initiatePayment','clearing/reconcile':'reconcileStatement',

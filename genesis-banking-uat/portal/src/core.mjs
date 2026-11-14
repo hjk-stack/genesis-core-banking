@@ -1,5 +1,5 @@
 import {createHash,randomUUID} from 'node:crypto';
-import {ABIQ_PARTITIONS,generateAbiqIban,provisionAbiqAccounts,resolveAbiqAccount} from './avispay-core-accounts.mjs';
+import {ABIQ_PARTITIONS,ABIQ_ISSUER,provisionAbiqAccounts,resolveAbiqAccount} from './avispay-core-accounts.mjs';
 
 export function fault(code,field,status=422) {throw Object.assign(new Error(code),{code,field,status});}
 export function text(value,field,max=128) {
@@ -53,7 +53,8 @@ export class SovereignCore {
  async userFunding(db,userId,currency) {
   const rows=(await db.query(`SELECT b.ledger_account_id FROM avis_core_v2.abiq_routing_bridge b
    JOIN avis_core_v2.abiq_network_participants p USING(participant_code) WHERE b.user_id=$1 AND b.currency_code=$2
-   AND b.participant_code='AVIS' AND b.status='ACTIVE' AND p.is_active`,[userId,currency])).rows;
+   AND b.participant_code IN ('AVIP','AVIS') AND b.status='ACTIVE' AND p.is_active
+   ORDER BY (b.participant_code='AVIS') DESC LIMIT 1`,[userId,currency])).rows;
   if(rows.length!==1)fault('ACCOUNT_NOT_FOUND','ownerUserId',404);return rows[0].ledger_account_id;
  }
  async openCustomer(actor,input,key) {
@@ -61,16 +62,17 @@ export class SovereignCore {
   if(!['PERSONAL','BUSINESS'].includes(input.accountType))fault('INVALID_FIELD','accountType');
   const currencies=input.currencies;
   if(!Array.isArray(currencies)||currencies.length===0||currencies.length>14||currencies.some(c=>!Object.hasOwn(ABIQ_PARTITIONS,c)))fault('INVALID_FIELD','currencies');
-  const node=input.participantCode||'AVIS';
+  const node=input.participantCode||ABIQ_ISSUER.participantCode;
   return this.operation(actor,'OPEN_CUSTOMER',input,key,async(db,k)=>{
    const id=String((await db.query("SELECT nextval('avis_core_v2.sovereign_user_ids') AS id")).rows[0].id);
-   const identifier=generateAbiqIban({userId:id,participantCode:node,currency:currencies[0]});
+   const identifier='AVIP-'+id.padStart(14,'0');
    await db.query(`INSERT INTO avis_core_v2.sovereign_users(user_id,avis_account_no,full_name,account_type)
     VALUES($1,$2,$3,$4)`,[id,identifier,name,input.accountType]);
    const accounts=await provisionAbiqAccounts(db,{userId:id,participantCode:node,currencies,idempotencyKey:k});
+   await db.query('UPDATE avis_core_v2.sovereign_users SET avis_account_no=$2 WHERE user_id=$1',[id,accounts[0].abiqIban]);
    for(const currency of new Set(currencies)) for(const scope of ['MARGIN','CUSTODY'])
     await db.query(`INSERT INTO avis_core_v2.ledger_accounts(owner_type,user_id,sub_account_code,currency_code,wallet_scope,account_category)
-     VALUES('USER',$1,$2,$3,$4,'LIABILITY')`,[id,'ABIQ:'+node,currency,scope]);
+     VALUES('USER',$1,$2,$3,$4,'LIABILITY') ON CONFLICT DO NOTHING`,[id,'ABIQ:'+node,currency,scope]);
    // Connector work is asynchronous and cannot veto sovereign account creation.
    await db.query(`INSERT INTO avis_core_v2.user_external_connectors(user_id,connector_code)
     SELECT $1,connector_code FROM avis_core_v2.platform_connectors WHERE is_enabled AND auto_provision ON CONFLICT DO NOTHING`,[id]);
@@ -82,7 +84,7 @@ export class SovereignCore {
  }
  async addCurrencies(actor,input,key) {
   return this.operation(actor,'ADD_CURRENCIES',input,key,async(db,k)=>{
-   const node=input.participantCode||'AVIS';
+   const node=input.participantCode||ABIQ_ISSUER.participantCode;
    const accounts=await provisionAbiqAccounts(db,{userId:input.userId,participantCode:node,currencies:input.currencies,idempotencyKey:k});
    for(const a of accounts)for(const scope of ['MARGIN','CUSTODY'])
     await db.query(`INSERT INTO avis_core_v2.ledger_accounts(owner_type,user_id,sub_account_code,currency_code,wallet_scope,account_category)
@@ -229,11 +231,12 @@ export class SovereignCore {
  async list(actor,view) {
   if(!actor?.admin)fault('FORBIDDEN',null,403);
   const queries={
-   accounts:`SELECT b.abiq_iban,b.currency_code,b.participant_code,b.user_id,u.full_name,u.account_type,a.available_balance::text,a.locked_balance::text,b.status
-    FROM avis_core_v2.abiq_routing_bridge b JOIN avis_core_v2.sovereign_users u USING(user_id) JOIN avis_core_v2.ledger_accounts a ON a.account_id=b.ledger_account_id ORDER BY u.user_id,b.currency_code LIMIT 300`,
-   customers:'SELECT user_id,full_name,account_type,created_at FROM avis_core_v2.sovereign_users ORDER BY user_id DESC LIMIT 300',
+   accounts:`SELECT b.abiq_iban,b.currency_code,b.participant_code,p.abiq_bic,lpad(b.account_number::text,14,'0') AS account_number,b.user_id,u.full_name,u.account_type,u.account_role,a.available_balance::text,a.locked_balance::text,b.status
+    FROM avis_core_v2.abiq_routing_bridge b JOIN avis_core_v2.sovereign_users u USING(user_id) JOIN avis_core_v2.abiq_network_participants p USING(participant_code) JOIN avis_core_v2.ledger_accounts a ON a.account_id=b.ledger_account_id ORDER BY u.user_id,b.currency_code LIMIT 300`,
+   customers:'SELECT user_id,full_name,account_type,account_role,created_at FROM avis_core_v2.sovereign_users ORDER BY user_id DESC LIMIT 300',
+   issuer:"SELECT i.abiq_code,i.country_code,i.participant_code,p.institution_name FROM avis_core_v2.abiq_issuers i JOIN avis_core_v2.abiq_network_participants p USING(participant_code) WHERE p.is_active",
    currencies:'SELECT currency_code,iso_numeric_partition FROM avis_core_v2.abiq_currencies ORDER BY currency_code',
-   ledger:`SELECT account_id,owner_type,user_id,sub_account_code,currency_code,network,wallet_scope,account_category,available_balance::text,locked_balance::text FROM avis_core_v2.ledger_accounts ORDER BY owner_type,currency_code LIMIT 500`,
+   ledger:`SELECT a.account_id,a.owner_type,a.user_id,u.full_name AS account_holder,a.sub_account_code,a.currency_code,a.network,a.wallet_scope,a.account_category,a.available_balance::text,a.locked_balance::text FROM avis_core_v2.ledger_accounts a LEFT JOIN avis_core_v2.sovereign_users u USING(user_id) ORDER BY a.owner_type,a.currency_code LIMIT 500`,
    transactions:`SELECT j.journal_id,j.created_at,j.event_type,j.reference_id,e.direction,e.amount::text,a.currency_code,a.owner_type,b.abiq_iban
     FROM avis_core_v2.ledger_entries e JOIN avis_core_v2.ledger_journals j USING(journal_id) JOIN avis_core_v2.ledger_accounts a USING(account_id)
     LEFT JOIN avis_core_v2.abiq_routing_bridge b ON b.ledger_account_id=a.account_id ORDER BY e.entry_id DESC LIMIT 300`,
