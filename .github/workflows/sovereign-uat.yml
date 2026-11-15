@@ -63,7 +63,10 @@ jobs:
         working-directory: genesis-banking-uat/portal
         env:
           TEST_DATABASE_URL: postgres://avispay_ci:avispay_ci@localhost:5432/avispay_ci
-        run: npm test
+        run: |
+          export AVIS_TRADING_TEST_PYTHON="$(command -v python)"
+          env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 TZ=UTC "$AVIS_TRADING_TEST_PYTHON" -I -c 'import nautilus_trader; print(nautilus_trader.__version__)'
+          npm test
       - name: Build banking application container
         run: docker build -t avispay-sovereign:ci genesis-banking-uat/portal
       - name: Verify payment popup layout in Chromium
