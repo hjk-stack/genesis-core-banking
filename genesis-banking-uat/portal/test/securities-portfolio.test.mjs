@@ -148,3 +148,14 @@ test('mixed-case catalogue and stored symbols resolve to the same security and p
  assert.equal((await pool.query('SELECT count(*)::int AS count FROM avis_core_v2.portfolio_securities WHERE upper(exchange_symbol)=$1',['REGRESSION'])).rows[0].count,1);
  core.readCatalogue=saved;core.catalogueCache=null;
 });
+
+test('publication changes cannot relabel existing banking orders with different currency or denomination',async()=>{
+ const saved=core.readCatalogue;
+ try{
+  for(const changed of [{currency:'USD'},{denomination:'100'},{quoteBasis:'UNIT'},{quantityDecimals:2},{isin:'US5949181045'}]){
+   core.readCatalogue=async()=>[{...securityMetadata(meta),symbol:'REGRESSION',referencePrice:'98',...changed}];core.catalogueCache=null;
+   await assert.rejects(core.publicExchangeMarket('REGRESSION'),/SECURITY_TERMS_CHANGED/);
+  }
+ }finally{core.readCatalogue=saved;core.catalogueCache=null;}
+ assert.equal((await core.publicExchangeMarket('REGRESSION')).currency,'EUR');
+});
