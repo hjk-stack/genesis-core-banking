@@ -44,6 +44,7 @@ jobs:
           node --check public/card-message.mjs
           node --check public/cards.mjs
           node --check public/accounts.mjs
+          node --check public/portfolio.mjs
           python3 -m py_compile ../azure/deploy-sovereign.py
           python3 -m unittest discover -s ../azure -p test_deploy_sovereign.py
       - name: Verify sovereign banking on PostgreSQL

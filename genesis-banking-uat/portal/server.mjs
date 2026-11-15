@@ -7,7 +7,7 @@ import pg from 'pg';
 import {fault,text} from './src/core.mjs';
 import {migrate} from './src/migrate.mjs';
 import {FxBankingServer} from './src/fx.mjs';
-import {AccountManagement} from './src/account-management.mjs';
+import {SecuritiesPortfolio} from './src/securities-portfolio.mjs';
 import {CustomerAccess} from './src/customer-access.mjs';
 import {processAvis8583} from './src/pos-switch.mjs';
 import {authenticateMessage,connectorCredentials,dispatchPayment,recoverPaymentDeliveries} from './src/payment-transport.mjs';
@@ -31,6 +31,14 @@ export async function authenticateFineract(username,password,baseUrl,fetcher=fet
  return {id:'fineract:'+account.userId,username:account.username||username,admin:account.permissions?.includes('ALL_FUNCTIONS')===true};
 }
 const messages={
+ SECURITY_CATALOGUE_READ:'The Green Bond catalogue could not be refreshed. Try Refresh catalogue again.',
+ SECURITY_TERMS_CHANGED:'The security denomination or currency changed. Select the security again.',
+ SECURITY_NOT_FOUND:'Select a registered security.',POSITION_CHANGED:'This holding changed. Reopen it before saving.',
+ SECURITY_QUANTITY_PRECISION:'Enter a quantity in the security’s registered unit size.',
+ SECURITY_QUANTITY_RESERVED:'The quantity cannot be reduced below the units reserved for sell orders.',
+ ORDER_TOTAL_CHANGED:'Check the quantity, price and calculated total.',INSUFFICIENT_SECURITIES:'This portfolio has insufficient available units to sell.',
+ ORDER_NOT_FOUND:'Select an existing exchange order.',ORDER_REVIEW_CHANGED:'This order review expired or changed. Review the order again.',
+ ORDER_ALREADY_FILLED:'This order has already executed.',
  INVALID_CODE_WINDOW:'Choose a start and end time with a validity of up to 48 hours.',
  CARD_CODE_NOT_STARTED:'This card code is not active yet.',CARD_CODE_BLOCKED:'This card is blocked or expired.',
  INVALID_CARD_PIN:'Enter a PIN containing four to six digits.',IDENTITY_ALREADY_BOUND:'This login is already linked to another account holder.',
@@ -79,7 +87,7 @@ const messages={
  CSRF:'Refresh the page and submit again.',TOO_MANY_ATTEMPTS:'Please wait before trying to sign in again.'
 };
 export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={}}) {
- const core=new AccountManagement(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map();
+ const core=new SecuritiesPortfolio(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map();
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  return http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
@@ -109,7 +117,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const reply=await buildPacs002({messageId:randomBytes(16).toString('hex'),uetr:original.uetr,senderBic:p.local_bic,receiverBic:p.peer_bic,status:receipt.status,bankReference:receipt.id.replaceAll('-','')});
     res.setHeader('content-type','application/xml');return res.end(reply);
    }
-   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/styles.css'].includes(path)){
+   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/portfolio.mjs','/styles.css'].includes(path)){
     const file=path==='/'?'index.html':path==='/card-message'?'public/card-message.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     res.setHeader('content-type',(path==='/'||path==='/card-message')?'text/html; charset=utf-8':path.endsWith('css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8');return res.end(body);
@@ -160,6 +168,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     return send(res,200,sessionData());
    }
    if(path==='/api/workspaces'&&req.method==='GET'){if(!session.is_admin)fault('FORBIDDEN',null,403);return send(res,200,{rows:(await pool.query("SELECT user_id,full_name FROM avis_core_v2.sovereign_users WHERE account_role='CUSTOMER' ORDER BY user_id")).rows});}
+   if(req.method==='GET'&&/^\/api\/portfolio\/orders\/[0-9a-f-]{36}$/.test(path))return send(res,200,await invoke('securityOrderDetails',{orderId:path.split('/').at(-1)}));
    if(req.method==='GET'&&/^\/api\/accounts\/[0-9a-f-]{36}$/.test(path))return send(res,200,await invoke('accountDetails',{accountId:path.split('/').at(-1),before:url.searchParams.get('before')}));
    if(req.method==='GET'&&/^\/api\/accounts\/[0-9a-f-]{36}\/movements\/[0-9]+$/.test(path))return send(res,200,await invoke('movementDetails',{accountId:path.split('/').at(-3),entryId:path.split('/').at(-1)}));
    if(req.method==='GET'&&/^\/api\/backoffice-accounts\/[0-9a-f-]{36}\/statement$/.test(path))return send(res,200,await invoke('accountStatement',{accountId:path.split('/').at(-2),before:url.searchParams.get('before')}));
@@ -194,6 +203,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     'checkouts/capture':'captureCheckout','checkouts/release':'releaseCheckout','checkouts/refund':'refundCheckout',
     cards:'registerCard',terminals:'registerTerminal','cards/authorize':'authorizeCard','cards/capture':'settleCard','cards/reverse':'settleCard'};
    routes['accounts/open']='openAccount';
+   Object.assign(routes,{'portfolio/catalogue/sync':'syncSecurities','portfolio/securities':'addSecurity','portfolio/positions':'recordPosition','portfolio/orders/review':'reviewSecurityOrder','portfolio/orders/submit':'submitSecurityOrder','portfolio/orders/cancel':'cancelSecurityOrder'});
    const action=path.slice(5),method=routes[action];if(!method)fault('NOT_FOUND',null,404);
    const result=await invoke(method,body,req.headers['idempotency-key'],action==='cards/reverse');
    if(action==='fx/execute'&&result.status==='EXPIRED')fault('FX_QUOTE_EXPIRED','quoteId',409);
