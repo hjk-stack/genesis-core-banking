@@ -8,8 +8,9 @@ spec.loader.exec_module(module)
 
 
 class TreasuryInitializationTests(unittest.TestCase):
-    def fixture(self, name='AVISPay PLC', chain=1, split=False, mode='DEMO'):
+    def fixture(self, name='AVISPay PLC', chain=1, split=False, mode='DEMO', stale=False):
         calls=[]
+        approved={}
         def request(path, body=None, key=None):
             calls.append((path, body, key))
             if path.endswith('/customers'):
@@ -17,7 +18,11 @@ class TreasuryInitializationTests(unittest.TestCase):
             if path.endswith('/check-network'):
                 return {'chainId':chain}
             if path.endswith('/cryptocatalogue'):
-                return {'rows':[{'asset_id':a,'currency_code':c,'networks':[{'network':'ETHEREUM','approved':False}]} for a,c in [('avis-green','AG'),('avis-green-investment','AGi')]]}
+                return {'rows':[{'asset_id':a,'currency_code':c,'networks':[{'network':'ETHEREUM','approved':approved.get(a,False),'verifiedAt':'2026-11-15T12:00:00Z' if approved.get(a) else None}]} for a,c in [('avis-green','AG'),('avis-green-investment','AGi')]]}
+            if path.endswith('/approve'):
+                if not stale:
+                    approved[body['assetId']]=True
+                return {'approved':True}
             if path.endswith('/activate'):
                 return {'addressId': '2' if split and body['assetId']=='avis-green-investment' else '1', 'address':'0x'+'1'*40}
             if path.endswith('/wallet'):
@@ -50,6 +55,11 @@ class TreasuryInitializationTests(unittest.TestCase):
             module.initialize(request)
         _, request=self.fixture(split=True)
         with self.assertRaisesRegex(RuntimeError,'reuse'):
+            module.initialize(request)
+
+    def test_old_approval_receipts_cannot_hide_a_later_disabled_mapping(self):
+        _, request=self.fixture(stale=True)
+        with self.assertRaisesRegex(RuntimeError,'remains disabled'):
             module.initialize(request)
 
     def test_existing_real_security_is_never_replaced_with_demo_content(self):

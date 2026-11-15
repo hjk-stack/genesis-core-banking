@@ -38,11 +38,17 @@ def initialize(request):
         wallets.append(wallet)
     if wallets[0]['addressId'] != wallets[1]['addressId'] or wallets[0]['address'] != wallets[1]['address']:
         raise RuntimeError('AG and AGi did not reuse one Ethereum address')
+    # A permanent idempotency receipt must never conceal a later administrator disable.
+    accepted = request('/api/views/cryptocatalogue')['rows']
+    for asset_id in ['avis-green', 'avis-green-investment']:
+        current = next((a for a in accepted if a['asset_id'] == asset_id), None)
+        if not current or not any(n['network'] == 'ETHEREUM' and n.get('approved') and n.get('verifiedAt') for n in current['networks']):
+            raise RuntimeError('Treasury mapping remains disabled or unverified: ' + asset_id)
     cards = request('/api/views/cryptosecurities')['rows']
     first = next((c for c in cards if c['symbol'] == 'aAVISP'), None)
     if first and first['mode'] == 'DEMO' and first['state'] != 'CONVERTED':
         request('/api/crypto/securities/demo-convert', {'cardId': first['card_id']}, 'initial-avispay-demo-conversion')
-    return {'userId': '1', 'network': 'ETHEREUM', 'address': wallets[0]['address'], 'assets': ['AG', 'AGi'], 'qrVerified': True, 'holdingsObserved': 2}
+    return {'userId': '1', 'network': 'ETHEREUM', 'address': wallets[0]['address'], 'assets': ['AG', 'AGi'], 'qrVerified': True, 'holdingsObserved': 2, 'approvedMappingsVerified': True}
 
 
 def main():
