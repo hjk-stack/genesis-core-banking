@@ -32,3 +32,9 @@ Public Binance book/trade streams provide market data; the trading robot never f
 ## Validation
 
 `npm test` exercises the ledger, wallet ownership, catalogue, contract transaction lifecycle, rolling escrow, fees, replay protection, native exchange fills and external venue reconciliation. Ganache tests deploy and execute the compiled Solidity. `python -m unittest discover -s trading -p 'test_*.py'` exercises W conditions, stale/negative INDEX, typed IOC creation, partial-position stops and evaluator throughput. The throughput test measures local pattern evaluation only, not exchange or network latency. `node --test test-browser/*.mjs` checks desktop/tablet/mobile layouts and interaction continuity. CI recompiles contracts and rejects artifact drift, builds the combined Node/Python container, and updates only the existing UAT application.
+
+## Existing provider validation
+
+The administrator's Validate CoinAPI & Alchemy action probes CoinAPI EMS balances and the separately configured Alchemy/CoinAPI Ethereum nodes without placing an order. It reports only account identifiers, chain ID and observed block, never keys. This first engine release routes trading through AVIS or the configured Binance adapter; the existing CoinAPI EMS account is validated for the next execution adapter. Alchemy supplies blockchain RPC and signed-transaction transport, not a second strategy engine.
+
+Deployment reuses the named provider settings from the existing AVIS App Service only when absent in UAT, preserving existing UAT secrets. `CRYPTO_RPC_ETHEREUM`, `COINAPI_NAAS_API_KEY`, `COINAPI_API_KEY`, and `APIBRICKS_COINAPI_KEY` are recognised alongside `ALCHEMY_API_KEY` and the `AVIS_RPC_*` overrides. CoinAPI node credentials are sent only to its node origin. Market rankings refresh every two minutes with actual observation timestamps.

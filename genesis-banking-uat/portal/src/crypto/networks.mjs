@@ -1,4 +1,4 @@
-import {Wallet,getAddress,SigningKey,JsonRpcProvider,Contract,formatUnits,Interface} from 'ethers';
+import {Wallet,getAddress,SigningKey,JsonRpcProvider,FetchRequest,Contract,formatUnits,Interface} from 'ethers';
 import {Wallet as XrpWallet,isValidClassicAddress} from 'xrpl';
 import {Keypair,PublicKey} from '@solana/web3.js';
 import {TronWeb} from 'tronweb';
@@ -29,12 +29,18 @@ export function encryptKey(secret,binding,env=process.env){const iv=randomBytes(
 export function decryptKey(secret,binding,env=process.env){const c=createDecipheriv('aes-256-gcm',encryptionKey(env),Buffer.from(secret.iv,'base64'));c.setAAD(Buffer.from(binding));c.setAuthTag(Buffer.from(secret.tag,'base64'));return JSON.parse(Buffer.concat([c.update(Buffer.from(secret.ciphertext,'base64')),c.final()]).toString());}
 export class ChainAPI {
  constructor({env=process.env,fetcher=fetch}={}){this.env=env;this.fetcher=fetcher;}
- endpoint(network){const n=networkInfo(network),u=new URL(this.env['AVIS_RPC_'+network]||(network==='ETHEREUM'&&this.env.ALCHEMY_API_KEY?'https://eth-mainnet.g.alchemy.com/v2/'+this.env.ALCHEMY_API_KEY:n.rpc));if(u.protocol!=='https:')fault('CRYPTO_CONNECTOR','network');return u.href.replace(/\/$/,'');}
+ connection(network){const n=networkInfo(network),env=this.env,key=env.COINAPI_NAAS_API_KEY||env.COINAPI_API_KEY||env.APIBRICKS_COINAPI_KEY;
+  const selected=env['AVIS_RPC_'+network]||env['CRYPTO_RPC_'+network]||(network==='ETHEREUM'?(env.ALCHEMY_API_KEY?'https://eth-mainnet.g.alchemy.com/v2/'+env.ALCHEMY_API_KEY:key?'https://ethereum-mainnet.node.coinapi.io':n.rpc):n.rpc);
+  let u;try{u=new URL(selected);}catch{fault('CRYPTO_CONNECTOR','network');}if(u.protocol!=='https:'||u.username||u.password)fault('CRYPTO_CONNECTOR','network');
+  const headers={'content-type':'application/json'};if(u.origin==='https://ethereum-mainnet.node.coinapi.io'){if(!key||/[\r\n]/.test(key))fault('CRYPTO_CONNECTOR','network');headers['X-CoinAPI-Key']=key;}
+  return {url:u.href.replace(/\/$/,''),headers,provider:u.hostname.endsWith('.alchemy.com')?'Alchemy':u.hostname==='ethereum-mainnet.node.coinapi.io'?'CoinAPI NaaS':env['AVIS_RPC_'+network]||env['CRYPTO_RPC_'+network]?'Configured RPC':'Public RPC'};
+ }
+ endpoint(network){return this.connection(network).url;}
  async request(network,method,params=[]){const n=networkInfo(network),url=this.endpoint(network);try{
   const body=n.kind==='XRPL'?{method,params:[params]}:{jsonrpc:'2.0',id:1,method,params};
-  const response=await this.fetcher(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(12000),redirect:'error'});if(!response.ok)throw Error('HTTP');const r=await response.json();if(n.kind==='XRPL'&&method==='account_info'&&r.result?.error==='actNotFound')return {account_data:{Balance:'0'},exists:false};if(r.error||r.result?.error)throw Error('RPC');return r.result;
+  const response=await this.fetcher(url,{method:'POST',headers:this.connection(network).headers,body:JSON.stringify(body),signal:AbortSignal.timeout(12000),redirect:'error'});if(!response.ok)throw Error('HTTP');const r=await response.json();if(n.kind==='XRPL'&&method==='account_info'&&r.result?.error==='actNotFound')return {account_data:{Balance:'0'},exists:false};if(r.error||r.result?.error)throw Error('RPC');return r.result;
  }catch{fault('CRYPTO_CONNECTOR','network',502);}}
- provider(network){const n=networkInfo(network);if(n.kind!=='EVM')fault('CRYPTO_EVM_REQUIRED','network');return new JsonRpcProvider(this.endpoint(network),undefined,{batchMaxCount:1});}
+ provider(network){const n=networkInfo(network);if(n.kind!=='EVM')fault('CRYPTO_EVM_REQUIRED','network');const config=this.connection(network),request=new FetchRequest(config.url);request.allowInsecureAuthentication=false;request.timeout=12000;request.preflightFunc=async r=>{if(r.url!==config.url)fault('CRYPTO_CONNECTOR','network');return r;};for(const [key,value]of Object.entries(config.headers))request.setHeader(key,value);return new JsonRpcProvider(request,undefined,{batchMaxCount:1});}
  async check(network){const n=networkInfo(network);if(n.kind==='EVM'){const actual=Number(await this.request(network,'eth_chainId'));if(actual!==n.chainId)fault('CRYPTO_WRONG_CHAIN','network');return {network,chainId:actual};}if(n.kind==='SOLANA')return {network,slot:await this.request(network,'getSlot',[{commitment:'finalized'}])};if(n.kind==='XRPL')return {network,ledger:(await this.request(network,'server_info',{})).info.validated_ledger.seq};if(n.kind==='TRON'){const r=await this.http(network,'/walletsolidity/getnowblock',{});return {network,block:r.block_header?.raw_data?.number};}const r=await this.http(network,'/blocks/tip/height');return {network,block:Number(r)};}
  async http(network,path,body){try{const r=await this.fetcher(this.endpoint(network)+path,{method:body===undefined?'GET':'POST',headers:{'content-type':'application/json',...(network==='TRON'&&this.env.TRONGRID_API_KEY?{'TRON-PRO-API-KEY':this.env.TRONGRID_API_KEY}:{})},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(12000),redirect:'error'});if(!r.ok)throw Error('HTTP');const data=await r.json();if(data.Error||data.error)throw Error('API');return data;}catch{fault('CRYPTO_CONNECTOR','network',502);}}
  async inspectAsset(network,address){const n=networkInfo(network);await this.check(network);if(!address)return {decimals:n.decimals};if(!validAddress(network,address))fault('INVALID_CRYPTO_ADDRESS','contractAddress');
