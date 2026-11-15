@@ -76,6 +76,7 @@ export class SecuritiesPortfolio extends AccountManagement {
  async publicExchangeMarket(symbol){
   const published=await this.publishedSecurity(symbol);
   const s=(await this.pool.query(securitySelect+" WHERE upper(exchange_symbol)=$1 AND source='GREEN_BOND'",[published.symbol])).rows[0];
+  if(s&&(s.currency_code!==published.currency||money(s.denomination)!==money(published.denomination)||s.quote_basis!==published.quoteBasis||s.quantity_decimals!==published.quantityDecimals))fault('SECURITY_TERMS_CHANGED','symbol',409);
   const offers=s?(await this.pool.query(`SELECT side,price::text,quantity::text,count(*)::int AS orders FROM avis_core_v2.securities_orders WHERE security_id=$1 AND status='OPEN' GROUP BY side,price,quantity ORDER BY side,price,quantity LIMIT 200`,[s.security_id])).rows:[];
   // One BUY row per settled pair; no customer, order, journal or account identifiers.
   const trades=s?(await this.pool.query(`SELECT price::text,quantity::text,executed_at FROM avis_core_v2.securities_orders WHERE security_id=$1 AND status='FILLED' AND side='BUY' ORDER BY executed_at DESC LIMIT 100`,[s.security_id])).rows:[];
