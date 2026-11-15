@@ -71,6 +71,14 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           node --test test-browser/*.mjs
+      - name: Save trading test layout evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-test-layout
+          path: genesis-banking-uat/portal/test-results/crypto-trading-tests-*.png
+          if-no-files-found: ignore
+          retention-days: 7
   deploy:
     needs: verify
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.deploy_existing_uat)
