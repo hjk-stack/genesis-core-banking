@@ -41,7 +41,10 @@ test('precise valuation, metadata check digits and public Green Bond mapping',as
 });
 test('catalogue import is idempotent and does not rewrite existing account data or book nominal supply',async()=>{
  const before=await core.list(admin,'accountsummaries'),journal=(await core.list(admin,'transactions')).length,k=key();
- assert.equal((await core.syncSecurities(admin,{},k)).imported,1);await core.syncSecurities(admin,{},k);
+ assert.equal((await core.syncSecurities(admin,{},k)).imported,1);
+ const read=core.readCatalogue;core.readCatalogue=async()=>{throw Error('FEED_UNAVAILABLE_AFTER_COMMIT');};
+ assert.equal((await core.syncSecurities(admin,{},k)).imported,1);
+ await assert.rejects(core.syncSecurities(admin,{},key()),/FEED_UNAVAILABLE_AFTER_COMMIT/);core.readCatalogue=read;
  const rows=await core.list(admin,'securities');assert.equal(rows.length,1);securityId=rows[0].security_id;assert.equal(rows[0].source,'GREEN_BOND');
  assert.deepEqual(await core.list(admin,'accountsummaries'),before);assert.equal((await core.list(admin,'transactions')).length,journal);assert.deepEqual(await core.list(admin,'securitypositions'),[]);
  const added=await core.addSecurity(admin,{name:'Manual fund',shortName:'MANUAL',currency:'CHF',denomination:'1',quoteBasis:'UNIT',kind:'fund'},key());assert.ok(added.id);
@@ -56,6 +59,8 @@ test('manual position quantity and prices produce a portfolio value with version
  await assert.rejects(pool.query('DELETE FROM avis_core_v2.portfolio_movements'),/APPEND_ONLY_RECORD/);
 });
 test('buy review enforces server total, debit balance and account currency',async()=>{
+ await assert.rejects(review('BUY','2',{quantity:'0.1',total:'98'}),/SECURITY_QUANTITY_PRECISION/);
+ await assert.rejects(core.recordPosition(admin,{userId:'2',securityId,quantity:'0.1',issuingPrice:'100',marketPrice:'98',reference:'Invalid fractional lot'},key()),/SECURITY_QUANTITY_PRECISION/);
  await assert.rejects(review('BUY','2',{total:'1'}),/ORDER_TOTAL_CHANGED/);
  await assert.rejects(review('BUY','2',{denomination:'10'}),/SECURITY_TERMS_CHANGED/);
  await assert.rejects(review('BUY','2',{quantity:'100',total:'98000'}),/INSUFFICIENT_FUNDS/);

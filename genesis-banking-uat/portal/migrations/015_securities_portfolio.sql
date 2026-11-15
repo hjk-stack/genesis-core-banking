@@ -4,6 +4,7 @@ CREATE TABLE avis_core_v2.portfolio_securities (
  currency_code varchar(3) NOT NULL, isin varchar(12), cusip varchar(9),
  denomination numeric(36,18) NOT NULL CHECK(denomination>0 AND denomination<>'NaN'::numeric),
  quote_basis varchar(10) NOT NULL CHECK(quote_basis IN ('PERCENT','UNIT')),
+ quantity_decimals smallint NOT NULL DEFAULT 0 CHECK(quantity_decimals BETWEEN 0 AND 18),
  kind varchar(20) NOT NULL, source varchar(20) NOT NULL CHECK(source IN ('GREEN_BOND','MANUAL')),
  exchange_symbol varchar(80), reference_price numeric(36,18), source_updated_at timestamptz,
  created_by varchar(180) NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),

@@ -34,6 +34,7 @@ const messages={
  SECURITY_CATALOGUE_READ:'The Green Bond catalogue could not be refreshed. Try Refresh catalogue again.',
  SECURITY_TERMS_CHANGED:'The security denomination or currency changed. Select the security again.',
  SECURITY_NOT_FOUND:'Select a registered security.',POSITION_CHANGED:'This holding changed. Reopen it before saving.',
+ SECURITY_QUANTITY_PRECISION:'Enter a quantity in the security’s registered unit size.',
  SECURITY_QUANTITY_RESERVED:'The quantity cannot be reduced below the units reserved for sell orders.',
  ORDER_TOTAL_CHANGED:'Check the quantity, price and calculated total.',INSUFFICIENT_SECURITIES:'This portfolio has insufficient available units to sell.',
  ORDER_NOT_FOUND:'Select an existing exchange order.',ORDER_REVIEW_CHANGED:'This order review expired or changed. Review the order again.',

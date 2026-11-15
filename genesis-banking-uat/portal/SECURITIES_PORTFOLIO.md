@@ -36,6 +36,11 @@ The portfolio value is calculated using decimal integer arithmetic:
 
 Prices on percentage-quoted rows carry a `%` suffix. Currency totals are never
 added across currencies without an explicit conversion.
+The catalogue's quantity precision is retained: a whole-unit bond cannot be
+booked or traded as a fractional denomination. Manually added securities default
+to whole units; the registration API accepts an explicit `quantityDecimals`
+between 0 and 18 where an instrument supports fractional units. A repeated
+catalogue request returns its committed receipt before contacting the source.
 
 ## Five-step order popup
 

@@ -9,6 +9,7 @@ const hash=v=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const actualAdmin=a=>{if(!a?.admin||a.customerUserId)fault('FORBIDDEN',null,403);};
 const access=(a,userId)=>{if(!a?.admin||(a.customerUserId&&String(a.customerUserId)!==String(userId)))fault('FORBIDDEN',null,403);};
 const quantum=currency=>currency==='JPY'?scale:10n**16n;
+const quantityUnits=(value,security)=>{const n=units(value);if(n%(10n**BigInt(18-security.quantity_decimals))!==0n)fault('SECURITY_QUANTITY_PRECISION','quantity');return n;};
 export function securityValue(quantity,denomination,price,basis,currency){
  const q=units(quantity),p=units(price),d=money(String(denomination));
  const numerator=basis==='PERCENT'?q*d*p:q*p,divisor=basis==='PERCENT'?scale*scale*100n:scale;
@@ -24,7 +25,8 @@ export function securityMetadata(input){
  if(isin){const digits=[...isin].map(c=>/[A-Z]/.test(c)?String(c.charCodeAt(0)-55):c).join('');let sum=0;[...digits].reverse().forEach((v,i)=>{let n=Number(v)*(i%2?2:1);sum+=n>9?n-9:n;});if(sum%10)fault('INVALID_FIELD','isin');}
  if(cusip){let sum=0;[...cusip.slice(0,8)].forEach((c,i)=>{let n=(/[A-Z]/.test(c)?c.charCodeAt(0)-55:/[0-9]/.test(c)?Number(c):{'*':36,'@':37,'#':38}[c])*(i%2?2:1);sum+=Math.floor(n/10)+n%10;});if((10-sum%10)%10!==Number(cusip[8]))fault('INVALID_FIELD','cusip');}
  const kind=['bond','note','cd','share','fund','other'].includes(input.kind)?input.kind:'other';
- return {name,shortName,currency,denomination,quoteBasis:input.quoteBasis,isin,cusip,kind};
+ const quantityDecimals=Number(input.quantityDecimals??0);if(!Number.isInteger(quantityDecimals)||quantityDecimals<0||quantityDecimals>18)fault('INVALID_FIELD','quantityDecimals');
+ return {name,shortName,currency,denomination,quoteBasis:input.quoteBasis,quantityDecimals,isin,cusip,kind};
 }
 export async function greenBondCatalogue(fetcher=fetch){
  const response=await fetcher('https://avis.land/api/xchg/markets',{redirect:'error',signal:AbortSignal.timeout(20000),headers:{accept:'application/json'}});
@@ -34,11 +36,11 @@ export async function greenBondCatalogue(fetcher=fetch){
  if(!Array.isArray(feed.markets))fault('SECURITY_CATALOGUE_READ',null,503);
  // The exchange publication filter is authoritative. Do not read its private databank.
  return feed.markets.filter(s=>['bond','note','cd','share','fund'].includes(s.kind)&&s.status==='listed').map(s=>({
-  ...securityMetadata({name:s.name,shortName:s.shortName||s.name,currency:s.currency,denomination:String(s.nominal||'1'),quoteBasis:['bond','note','cd'].includes(s.kind)?'PERCENT':'UNIT',isin:s.isin,cusip:s.cusip,kind:s.kind}),
+  ...securityMetadata({name:s.name,shortName:s.shortName||s.name,currency:s.currency,denomination:String(s.nominal||'1'),quoteBasis:['bond','note','cd'].includes(s.kind)?'PERCENT':'UNIT',quantityDecimals:s.decimals||0,isin:s.isin,cusip:s.cusip,kind:s.kind}),
   symbol:text(s.symbol,'symbol',80),referencePrice:decimal(money(String(s.last||s.refPrice)))
  }));
 }
-const securitySelect=`SELECT security_id,name,short_name,currency_code,isin,cusip,denomination::text,quote_basis,kind,source,exchange_symbol,reference_price::text,source_updated_at FROM avis_core_v2.portfolio_securities`;
+const securitySelect=`SELECT security_id,name,short_name,currency_code,isin,cusip,denomination::text,quote_basis,quantity_decimals,kind,source,exchange_symbol,reference_price::text,source_updated_at FROM avis_core_v2.portfolio_securities`;
 const positionSelect=`SELECT p.position_id,p.user_id,u.full_name,s.security_id,s.name,s.short_name,s.currency_code,s.isin,s.cusip,s.denomination::text,s.quote_basis,s.source,s.exchange_symbol,
  p.quantity::text,p.reserved_quantity::text,(p.quantity-p.reserved_quantity)::text AS available_quantity,p.issuing_price::text,p.market_price::text,p.version,p.updated_at
  FROM avis_core_v2.portfolio_positions p JOIN avis_core_v2.portfolio_securities s USING(security_id) JOIN avis_core_v2.sovereign_users u USING(user_id)`;
@@ -46,15 +48,16 @@ const positionSelect=`SELECT p.position_id,p.user_id,u.full_name,s.security_id,s
 export class SecuritiesPortfolio extends AccountManagement {
  constructor(pool,options={}){super(pool,options);this.readCatalogue=options.readCatalogue||greenBondCatalogue;}
  async syncSecurities(actor,input,key){
-  actualAdmin(actor);const rows=await this.readCatalogue();
+  actualAdmin(actor);
   return this.operation(actor,'SYNC_SECURITIES_CATALOGUE',{},key,async db=>{
+   const rows=await this.readCatalogue();
    let imported=0;
    for(const s of rows){
     const old=(await db.query('SELECT * FROM avis_core_v2.portfolio_securities WHERE exchange_symbol=$1 OR (isin IS NOT NULL AND isin=$2) FOR UPDATE',[s.symbol,s.isin])).rows[0];
     if(old){
-     if(old.currency_code!==s.currency||money(old.denomination)!==money(s.denomination)||old.quote_basis!==s.quoteBasis||(old.isin&&s.isin&&old.isin!==s.isin))fault('SECURITY_TERMS_CHANGED','securityId',409);
+     if(old.currency_code!==s.currency||money(old.denomination)!==money(s.denomination)||old.quote_basis!==s.quoteBasis||old.quantity_decimals!==s.quantityDecimals||(old.isin&&s.isin&&old.isin!==s.isin))fault('SECURITY_TERMS_CHANGED','securityId',409);
      await db.query(`UPDATE avis_core_v2.portfolio_securities SET name=$2,short_name=$3,cusip=COALESCE($4,cusip),exchange_symbol=$5,source='GREEN_BOND',reference_price=$6,source_updated_at=now() WHERE security_id=$1`,[old.security_id,s.name,s.shortName,s.cusip,s.symbol,s.referencePrice]);
-    }else await db.query(`INSERT INTO avis_core_v2.portfolio_securities(name,short_name,currency_code,isin,cusip,denomination,quote_basis,kind,source,exchange_symbol,reference_price,source_updated_at,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'GREEN_BOND',$9,$10,now(),$11)`,[s.name,s.shortName,s.currency,s.isin,s.cusip,s.denomination,s.quoteBasis,s.kind,s.symbol,s.referencePrice,actor.id]);
+    }else await db.query(`INSERT INTO avis_core_v2.portfolio_securities(name,short_name,currency_code,isin,cusip,denomination,quote_basis,kind,source,exchange_symbol,reference_price,source_updated_at,created_by,quantity_decimals) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'GREEN_BOND',$9,$10,now(),$11,$12)`,[s.name,s.shortName,s.currency,s.isin,s.cusip,s.denomination,s.quoteBasis,s.kind,s.symbol,s.referencePrice,actor.id,s.quantityDecimals]);
     imported++;
    }
    return {imported,source:'https://avis.land/api/xchg/markets'};
@@ -63,14 +66,14 @@ export class SecuritiesPortfolio extends AccountManagement {
  async addSecurity(actor,input,key){
   actualAdmin(actor);const s=securityMetadata(input);
   return this.operation(actor,'ADD_PORTFOLIO_SECURITY',input,key,async db=>{
-   const id=randomUUID();await db.query(`INSERT INTO avis_core_v2.portfolio_securities(security_id,name,short_name,currency_code,isin,cusip,denomination,quote_basis,kind,source,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'MANUAL',$10)`,[id,s.name,s.shortName,s.currency,s.isin,s.cusip,s.denomination,s.quoteBasis,s.kind,actor.id]);return {id};
+   const id=randomUUID();await db.query(`INSERT INTO avis_core_v2.portfolio_securities(security_id,name,short_name,currency_code,isin,cusip,denomination,quote_basis,kind,source,created_by,quantity_decimals) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'MANUAL',$10,$11)`,[id,s.name,s.shortName,s.currency,s.isin,s.cusip,s.denomination,s.quoteBasis,s.kind,actor.id,s.quantityDecimals]);return {id};
   });
  }
  async security(db,id){const s=(await db.query(securitySelect+' WHERE security_id=$1',[id])).rows[0];if(!s)fault('SECURITY_NOT_FOUND','securityId',404);return s;}
  async recordPosition(actor,input,key){
   actualAdmin(actor);const qty=decimal(units(input.quantity)),issue=decimal(units(input.issuingPrice)),market=decimal(units(input.marketPrice)),reference=text(input.reference,'reference',128);
   return this.operation(actor,'RECORD_PORTFOLIO_POSITION',input,key,async(db,k)=>{
-   await this.security(db,input.securityId);
+   quantityUnits(qty,await this.security(db,input.securityId));
    await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",['securities:'+input.securityId]);
    const old=(await db.query('SELECT * FROM avis_core_v2.portfolio_positions WHERE user_id=$1 AND security_id=$2 FOR UPDATE',[input.userId,input.securityId])).rows[0];
    if(old&&Number(input.version)!==old.version)fault('POSITION_CHANGED','quantity',409);
@@ -106,6 +109,7 @@ export class SecuritiesPortfolio extends AccountManagement {
   const quantity=decimal(money(input.quantity)),price=decimal(money(input.price)),reference=text(input.reference,'reference',128);
   return this.operation(actor,'REVIEW_SECURITY_ORDER',input,key,async db=>{
    const s=await this.security(db,input.securityId),{source,offer}=await this.orderSource(db,actor,input,s);
+   quantityUnits(quantity,s);
    if(money(input.denomination)!==money(s.denomination))fault('SECURITY_TERMS_CHANGED','denomination');
    const total=securityValue(quantity,s.denomination,price,s.quote_basis,s.currency_code);
    if(units(total)<=0n||units(total)!==money(input.total))fault('ORDER_TOTAL_CHANGED','total');
