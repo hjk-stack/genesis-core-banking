@@ -92,3 +92,29 @@ prices, insufficient balances/holdings, card block and expiry, crypto conversion
 reservation, cancellation, atomic delivery versus payment and PostgreSQL
 concurrent submissions. Chromium checks cover all five populated steps at
 1440, 834 and 390 pixels, card/crypto selection and draft preservation.
+
+## Exchange button and login integration
+
+The exchange client can open `/#exchange?symbol=<symbol>&side=BUY|SELL` with
+optional decimal `quantity` and `price`. Only public draft fields are accepted.
+The existing banking login restores that draft in the five-step popup. A link
+cannot select another user's debit account, submit an order, or change the
+reviewed total. An already authenticated holder continues directly to review.
+A session expiry retains public draft choices for sign-in and requires fresh
+account selection. `?own=1` provides a close button for a separate trade window.
+
+`POST /api/portfolio/exchange-security` resolves the selected published security
+for an authenticated holder. Its catalogue registration creates no cash,
+securities inventory or order. `GET /api/exchange/markets/:symbol` publishes
+anonymous open lots and settled trades from the same Portfolio order tables.
+It checks the current public catalogue (a five-second cache) and excludes
+private securities, account identifiers, customer identities and payment data.
+
+The Portfolio link opens `https://avis.land/exchange?banking=1`. This explicit
+banking mode uses the companion exchange adapter, shared window opener and
+publication filter. Ordinary exchange visits retain their existing wallet and
+broker-ticket behavior; the UAT integration does not redirect production trades. It reads this public book and directs Buy/Sell to this
+application; settlement still occurs in this application's existing database.
+Existing exchange-wallet balances and broker-ticket records are not migrated or
+combined with the banking ledger. The companion exchange deployment must be
+verified separately before describing the button integration as live.
