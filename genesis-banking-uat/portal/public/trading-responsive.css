@@ -1,0 +1,18 @@
+/* W-Effect responsive workspace: scoped to the trading panel. */
+.w-effect-home,.w-effect-floor,.w-effect-allowance{box-sizing:border-box;width:100%;max-width:none;min-width:0;margin-inline:0}
+.w-effect-home *, .w-effect-floor *, .w-effect-allowance *{box-sizing:border-box}
+.w-effect-home button,.w-effect-allowance button{min-height:44px;touch-action:manipulation}
+.w-effect-floor [data-trade-robots] .crypto-scroller{display:flex;overflow-x:auto;max-width:100%;scroll-snap-type:x proximity;gap:12px}
+.w-effect-floor [data-trade-robots] article{min-width:min(270px,85vw);scroll-snap-align:start}
+.w-effect-floor [data-trade-orders-wrap]{max-width:100%;overflow:auto;overscroll-behavior-x:contain}
+.w-effect-floor table{width:100%;min-width:740px;border-collapse:collapse}
+.w-effect-floor td,.w-effect-floor th{padding:9px;text-align:left;white-space:nowrap}
+.w-effect-allowance [data-allowance-scroller]{display:flex;overflow-x:auto;max-width:100%;gap:8px;padding-block:8px;scroll-snap-type:x proximity}
+.w-effect-allowance [data-allowance-scroller] button{flex:0 0 auto;scroll-snap-align:start}
+.w-effect-allowance dialog{width:min(560px,calc(100vw - 24px));max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;margin:auto}
+.w-effect-allowance dialog::backdrop{background:rgba(18,30,34,.55)}
+.w-effect-allowance dialog form{display:grid;gap:14px}
+.w-effect-allowance dialog input[type=number]{display:block;width:100%;min-height:44px;margin-top:8px;font-size:16px}
+@media(max-width:760px){.w-effect-home{padding:12px!important}.w-effect-floor{padding:12px!important}.w-effect-floor [data-trade-updated]{font-size:12px}.w-effect-allowance dialog{padding:16px!important}.w-effect-home header{align-items:flex-start!important}}
+@media(max-width:420px){.w-effect-home h2{font-size:1.3rem}.w-effect-allowance [data-allowance-scroller] button{min-width:118px!important}}
+@media(prefers-reduced-motion:reduce){.w-effect-home *,.w-effect-floor *,.w-effect-allowance *{scroll-behavior:auto!important}}
