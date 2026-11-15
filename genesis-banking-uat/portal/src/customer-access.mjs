@@ -28,13 +28,14 @@ export class CustomerAccess {
   else if(method==='sellCrypto'){await this.owns(actor,'ledger_accounts',input.cryptoAccount);const r=await this.pool.query(`SELECT p.currency_code FROM avis_core_v2.crypto_sale_offers o JOIN avis_core_v2.ledger_accounts p ON p.account_id=o.proceeds_account_id WHERE offer_id=$1`,[input.offerId]);await this.ownsBank(actor,input.to,r.rows[0]?.currency_code);}
   else if(['addCurrencies','saveCustomerProfile'].includes(method)){if(String(input.userId)!==String(actor.customerUserId))fault('FORBIDDEN','userId',403);}
   else if(method==='redeemCode')await this.ownsBank(actor,input.to,input.currency);
+  else if(['accountDetails','movementDetails'].includes(method))await this.owns(actor,'ledger_accounts',input.accountId);
   else if(!['checkReceiver'].includes(method))fault('FORBIDDEN',null,403);
   return this.core[method](operator,input,key,...extra);
  }
  async paymentRequest(actor,id){await this.ownsRequest(actor,id);return this.core.paymentRequest(this.operator(actor),id);}
  async list(actor,view){
   const operator=this.operator(actor),id=actor.customerUserId;
-  if(['cards','transfercards','cardaccounts','cryptooffers','fxrates','currencies','issuer'].includes(view))return this.core.list(operator,view);
+  if(['cards','transfercards','cardaccounts','cryptooffers','fxrates','currencies','issuer','portfolio','accountsummaries'].includes(view))return this.core.list(operator,view);
   const queries={
    accounts:`SELECT b.abiq_iban,b.currency_code,b.user_id,u.full_name,u.account_type,u.account_role,b.status,p.abiq_bic,a.available_balance::text,a.locked_balance::text FROM avis_core_v2.abiq_routing_bridge b JOIN avis_core_v2.sovereign_users u USING(user_id) JOIN avis_core_v2.abiq_network_participants p USING(participant_code) JOIN avis_core_v2.ledger_accounts a ON a.account_id=b.ledger_account_id WHERE b.user_id=$1 ORDER BY b.account_series LIMIT 300`,
    customers:`SELECT user_id,full_name,account_type,account_role,postal_address FROM avis_core_v2.sovereign_users WHERE user_id=$1`,
