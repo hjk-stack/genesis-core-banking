@@ -55,6 +55,15 @@ test('HTTP enforces customer scope and customer cannot enumerate admin catalogue
  assert.equal((await reconcile({accountId:foreign.account_id,addressId:foreign.address_id,txHash:'0x'+'a'.repeat(64)})).status,403);
  const own=rows.rows.find(w=>w.network==='ETHEREUM'),invalid=await reconcile({accountId:own.account_id,addressId:own.address_id,txHash:'invalid'}),issue=await invalid.json();
  assert.equal(invalid.status,422);assert.equal(issue.code,'CRYPTO_DEPOSIT_HASH');assert.equal(issue.field,'txHash');
+ for(const network of ['ETHEREUM','SOLANA'])await core.approveCrypto(admin,{assetId:'usd-coin',network,approved:true},key());
+ const beforeEntries=(await core.list(admin,'transactions')).length,activationHeaders={...headers,'idempotency-key':key()},activationInput={userId:'2',assetId:'usd-coin'};
+ const activate=input=>fetch(base+'/api/crypto/activate',{method:'POST',headers:activationHeaders,body:JSON.stringify(input)});
+ assert.equal((await activate({...activationInput,userId:'1'})).status,403);
+ const activated=await activate(activationInput),currency=await activated.json();assert.equal(activated.status,200);assert.equal(currency.assetId,'usd-coin');
+ assert.deepEqual(currency.wallets.map(w=>w.network),['ETHEREUM','SOLANA']);assert.equal(currency.wallets.find(w=>w.network==='ETHEREUM').addressId,String(own.address_id));
+ assert.deepEqual(await(await activate(activationInput)).json(),currency,'one currency activation must replay without duplicating any network');
+ for(const wallet of currency.wallets){const details=await(await fetch(base+'/api/crypto/wallet',{method:'POST',headers,body:JSON.stringify({addressId:wallet.addressId})})).json();assert.equal(details.network,wallet.network);assert.equal(details.public_address,wallet.address);assert.match(details.qr,/^data:image\/png;base64,/);assert.equal(details.encrypted_key,undefined);}
+ assert.equal((await core.list(admin,'transactions')).length,beforeEntries,'currency activation must not post or alter financial balances');
 });
 test('blockchain connector rejects wrong chain and malformed tokens and handles new XRPL addresses',async()=>{
  let method;const chain=new ChainAPI({fetcher:async(u,o)=>{method=JSON.parse(o.body).method;return new Response(JSON.stringify({result:method==='eth_chainId'?'0x38':'0x'}));}});await assert.rejects(chain.check('ETHEREUM'),/CRYPTO_WRONG_CHAIN/);
