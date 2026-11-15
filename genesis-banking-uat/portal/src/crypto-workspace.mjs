@@ -32,16 +32,28 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
   const inspected=input.approved?await this.chain.inspectAsset(row.network,row.contract_address):null;
   return this.operation(actor,'CRYPTO_APPROVAL',input,key,async db=>{const current=(await db.query('SELECT * FROM avis_core_v2.crypto_asset_networks WHERE asset_id=$1 AND network=$2 FOR UPDATE',[input.assetId,input.network])).rows[0];if(current.contract_address!==row.contract_address)fault('CRYPTO_DOSSIER_CHANGED','assetId');await db.query('UPDATE avis_core_v2.crypto_asset_networks SET approved=$3,decimals=COALESCE($4,decimals),verified_at=CASE WHEN $3 THEN now() ELSE verified_at END WHERE asset_id=$1 AND network=$2',[input.assetId,input.network,input.approved,inspected?.decimals??null]);return {assetId:input.assetId,network:input.network,approved:input.approved};});
  }
- async activateCrypto(actor,input,key){access(actor,input.userId);if(!/^\d+$/.test(String(input.userId)))fault('INVALID_FIELD','userId');networkInfo(input.network);
+ async activateCrypto(actor,input,key){access(actor,input.userId);if(!/^\d+$/.test(String(input.userId)))fault('INVALID_FIELD','userId');
+  const allNetworks=input.network===undefined;
+  if(!allNetworks)networkInfo(input.network);
+  const networks=allNetworks?Object.keys(NETWORKS).sort():[input.network];
   return this.operation(actor,'CRYPTO_ACTIVATE',input,key,async db=>{
-   const asset=(await db.query('SELECT a.currency_code,n.* FROM avis_core_v2.crypto_assets a JOIN avis_core_v2.crypto_asset_networks n USING(asset_id) WHERE asset_id=$1 AND network=$2 AND approved AND verified_at IS NOT NULL FOR SHARE OF n',[input.assetId,input.network])).rows[0];if(!asset)fault('CRYPTO_APPROVAL_REQUIRED','assetId');
-   if(!(await db.query('SELECT 1 FROM avis_core_v2.sovereign_users WHERE user_id=$1',[input.userId])).rows.length)fault('ABIQ_CUSTOMER_NOT_FOUND','userId');
-   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['wallet:'+input.userId+':'+input.network]);
-   let wallet=(await db.query('SELECT * FROM avis_core_v2.user_deposit_addresses WHERE user_id=$1 AND network=$2',[input.userId,input.network])).rows[0];
-   if(!wallet){const created=newWallet(input.network);const encrypted=encryptKey(created.key,'wallet:'+input.userId+':'+input.network,this.secretEnv);wallet=(await db.query('INSERT INTO avis_core_v2.user_deposit_addresses(user_id,network,public_address) VALUES($1,$2,$3) RETURNING *',[input.userId,input.network,created.address])).rows[0];await db.query('INSERT INTO avis_core_v2.crypto_wallet_keys(address_id,encrypted_key) VALUES($1,$2)',[wallet.address_id,JSON.stringify(encrypted)]);}
-   const accountId=await this.networkAccount(db,'USER',asset.currency_code,input.network,'CRYPTO',input.userId);
-   await db.query('INSERT INTO avis_core_v2.crypto_activations(user_id,asset_id,network,account_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[input.userId,input.assetId,input.network,accountId]);
-   return {addressId:String(wallet.address_id),accountId,address:wallet.public_address,network:input.network,assetId:input.assetId};
+   const assets=(await db.query('SELECT a.currency_code,n.* FROM avis_core_v2.crypto_assets a JOIN avis_core_v2.crypto_asset_networks n USING(asset_id) WHERE a.asset_id=$1 AND n.network=ANY($2::varchar[]) AND n.approved AND n.verified_at IS NOT NULL ORDER BY n.network FOR SHARE OF a,n',[input.assetId,networks])).rows;
+   if(!assets.length)fault('CRYPTO_APPROVAL_REQUIRED','assetId');
+   const user=(await db.query('SELECT user_id FROM avis_core_v2.sovereign_users WHERE user_id=$1',[input.userId])).rows[0];
+   if(!user)fault('ABIQ_CUSTOMER_NOT_FOUND','userId');
+   const userId=String(user.user_id),wallets=[];
+   // Every currency uses the same per-holder/network locks. Acquire the full
+   // sorted set before creating anything so overlapping currency batches agree.
+   for(const asset of assets)await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['wallet:'+userId+':'+asset.network]);
+   for(const asset of assets){
+    const network=asset.network;
+    let wallet=(await db.query('SELECT * FROM avis_core_v2.user_deposit_addresses WHERE user_id=$1 AND network=$2',[userId,network])).rows[0];
+    if(!wallet){const created=newWallet(network);const encrypted=encryptKey(created.key,'wallet:'+userId+':'+network,this.secretEnv);wallet=(await db.query('INSERT INTO avis_core_v2.user_deposit_addresses(user_id,network,public_address) VALUES($1,$2,$3) RETURNING *',[userId,network,created.address])).rows[0];await db.query('INSERT INTO avis_core_v2.crypto_wallet_keys(address_id,encrypted_key) VALUES($1,$2)',[wallet.address_id,JSON.stringify(encrypted)]);}
+    const accountId=await this.networkAccount(db,'USER',asset.currency_code,network,'CRYPTO',userId);
+    await db.query('INSERT INTO avis_core_v2.crypto_activations(user_id,asset_id,network,account_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[userId,input.assetId,network,accountId]);
+    wallets.push({addressId:String(wallet.address_id),accountId,address:wallet.public_address,network,assetId:input.assetId});
+   }
+   return allNetworks?{userId,assetId:input.assetId,currency:assets[0].currency_code,wallets}:wallets[0];
   });
  }
  async cryptoWallet(actor,input){const r=(await this.pool.query('SELECT address_id,user_id,network,public_address,destination_tag FROM avis_core_v2.user_deposit_addresses WHERE address_id=$1',[input.addressId])).rows[0];if(!r)fault('CRYPTO_WALLET_REQUIRED','addressId');access(actor,r.user_id);return {...r,qr:await QRCode.toDataURL(r.public_address,{margin:2,width:256,errorCorrectionLevel:'M'})};}
