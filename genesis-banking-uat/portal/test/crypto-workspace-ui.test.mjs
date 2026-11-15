@@ -17,6 +17,7 @@ async function mount(views={},send=()=>{},action=()=>{throw new Error('Unexpecte
   api:async(path,input,key)=>{
    if(path.startsWith('views/'))return {rows:views[path.slice(6)]||[]};
    if(path==='crypto/trading/index-policy'&&input===undefined)return {policyVersion:0,instructions:'Use primary-source event evidence.',taxonomy:[]};
+   if(path.startsWith('crypto/trading/live')&&input===undefined)return {schemaVersion:1,observedAt:new Date().toISOString(),profiles:[],selectedRobotId:null,market:null,audit:null,liquidity:null};
    if(path.startsWith('crypto/securities/'))return views.cryptosecurities.find(s=>path.endsWith(s.card_id));
    return action(path,input,key);
   },

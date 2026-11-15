@@ -1,13 +1,13 @@
 import {engineStatus} from './trading/runtime.mjs';
 import {randomUUID} from 'node:crypto';
-import {TradingTestingCore} from './trading-testing.mjs';
+import {TradingInstructionsCore} from './trading-instructions.mjs';
 import {fault,text,money,decimal} from './core.mjs';
 import {securityValue} from './securities-portfolio.mjs';
 import {ChainAPI} from './crypto/networks.mjs';
 import {BinanceSpot} from './trading/binance.mjs';
 const S=10n**18n,U=x=>/^0(?:\.0+)?$/.test(String(x))?0n:money(String(x)),admin=a=>{if(!a?.admin||a.customerUserId)fault('FORBIDDEN',null,403);};
 export const ROBOT_MESSAGES={ROBOT_SYMBOL:'Select the exact market symbol on this venue.',ROBOT_API_KEY:'Enter the configured trading API secret reference.',ROBOT_ACCOUNT:'Select an institution trading account.',ROBOT_INDEX:'The selected security needs a fresh Press INDEX with supporting sources.',ROBOT_LIMIT:'Enter valid order, daily trading and loss limits.',ROBOT_VENUE_RESPONSE:'The venue request could not complete. Check this order in Trading diagnostics.',ROBOT_BUSY:'The previous order is being reconciled.',ROBOT_POSITION:'Close the robot’s position before changing its market settings.'};
-export class TradingRobotCore extends TradingTestingCore {
+export class TradingRobotCore extends TradingInstructionsCore {
  constructor(pool,options={}){super(pool,options);this.venue=options.tradingVenue||new BinanceSpot({env:this.secretEnv});}
  async validateRobotProviders(actor){admin(actor);const env=this.secretEnv;
   const ems=async()=>{const key=env.COINAPI_EMS_API_KEY;if(!key)return {provider:'CoinAPI EMS',configured:false,verified:false,setting:'COINAPI_EMS_API_KEY'};try{const response=await this.cryptoFetch('https://global.ems.coinapi.net/v1/balances',{headers:{'X-CoinAPI-Key':key,accept:'application/json'},signal:AbortSignal.timeout(10000),redirect:'error'});if(!response.ok)throw Error('EMS_HTTP_'+response.status);const rows=await response.json();if(!Array.isArray(rows))throw Error('EMS_SCHEMA');return {provider:'CoinAPI EMS',configured:true,verified:true,accounts:rows.map(r=>r.exchange_id).filter(Boolean),capability:'Execution API account connection',checkedAt:new Date().toISOString()};}catch(e){return {provider:'CoinAPI EMS',configured:true,verified:false,code:/^EMS_/.test(e.message)?e.message:'EMS_TRANSPORT'};}};
@@ -45,8 +45,8 @@ export class TradingRobotCore extends TradingTestingCore {
   }else if(q>U(r.position_quantity))fault('ROBOT_POSITION');
   const old=(await db.query('SELECT * FROM avis_core_v2.trading_robot_orders WHERE robot_id=$1 AND signal_id=$2',[r.robot_id,input.signalId])).rows[0];if(old)return {id:old.id,status:old.status};
   if((await db.query("SELECT 1 FROM avis_core_v2.trading_robot_orders WHERE robot_id=$1 AND status IN('CREATED','DISPATCHING','ACKNOWLEDGED')",[r.robot_id])).rows.length)fault('ROBOT_BUSY');
-  const eventAdvice=await this.indexOrderEvidence(db,actor,r,input);
-  const id=randomUUID(),client='AVIS'+id.replaceAll('-','');await db.query('INSERT INTO avis_core_v2.trading_robot_orders(id,robot_id,signal_id,client_order_id,side,quantity,price,instruction,notional) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[id,r.robot_id,input.signalId,client,input.side,decimal(q),decimal(p),JSON.stringify({...input,eventAdvice}),decimal(notional)]);return {id,status:'CREATED'};
+  const eventAdvice=await this.indexOrderEvidence(db,actor,r,input),tradingInstructions=await this.robotInstructionEvidence(db,r);
+  const id=randomUUID(),client='AVIS'+id.replaceAll('-','');await db.query('INSERT INTO avis_core_v2.trading_robot_orders(id,robot_id,signal_id,client_order_id,side,quantity,price,instruction,notional) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[id,r.robot_id,input.signalId,client,input.side,decimal(q),decimal(p),JSON.stringify({...input,eventAdvice,tradingInstructions}),decimal(notional)]);return {id,status:'CREATED'};
  });}
  async entryDispatchRejection(db,robot,order){
   if(order.side!=='BUY')return null;

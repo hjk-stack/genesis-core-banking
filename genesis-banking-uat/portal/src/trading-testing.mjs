@@ -19,7 +19,7 @@ export const TRADING_TEST_MESSAGES = {
 };
 export const TRADING_TEST_LIMITS = Object.freeze({maxTicks: 10_000, maxIndices: 10_000,
   maxInputBytes: 2 * 1024 * 1024, maxReportBytes: TRADING_TEST_OUTPUT_BYTES, maxRecords: 1000,
-  maxQueued: 20, timeoutMs: TRADING_TEST_TIMEOUT_MS});
+  maxQueued: 20, timeoutMs: TRADING_TEST_TIMEOUT_MS, maxRevisionWaitMs: 30 * 60_000});
 const VERSION = '1.231.0';
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -37,6 +37,8 @@ const inputFault = field => fault('TRADING_TEST_INPUT', field);
 const safeText = (value, max) => typeof value === 'string' && value.length <= max && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value);
 
 const implementationFiles = [
+  './trading-instructions.mjs', './trading-live.mjs', './trading/live-market.mjs',
+  './trading/live-liquidity.mjs', './trading/live-audit.mjs',
   '../trading/w_effect.py', '../trading/worker.py', '../trading/test_runner.py', '../trading/requirements.txt',
   './trading/test-runner.mjs', './trading-testing.mjs', './trading-robot.mjs',
   './trading/runtime.mjs', './trading/binance.mjs', './index-event-advice.mjs',
@@ -270,17 +272,26 @@ export class TradingTestingCore extends IndexEventAdviceCore {
   }
 
   async claimTradingTest() {
+    const fingerprint = await this.tradingTestingFingerprint();
     const db = await this.pool.connect();
     try {
       await db.query('BEGIN');
       await db.query("SELECT pg_advisory_xact_lock(hashtextextended('trading-test-queue',0))");
       await db.query(`UPDATE avis_core_v2.trading_test_runs SET status='FAILED',error_code='TRADING_TEST_INTERRUPTED',completed_at=now()
         WHERE status='RUNNING' AND lease_expires_at<=now()`);
+      // A rolling deployment may have workers from two revisions. Leave a fresh
+      // request for its matching worker; retire orphaned revisions after a bounded
+      // wait longer than the full 20-job queue at its 75-second lease limit.
+      await db.query(`UPDATE avis_core_v2.trading_test_runs SET status='FAILED',error_code='TRADING_TEST_CHANGED',completed_at=now()
+        WHERE status='QUEUED' AND engine_fingerprint<>$1
+          AND created_at<=now()-($2::double precision*interval '1 millisecond')`,
+      [fingerprint, TRADING_TEST_LIMITS.maxRevisionWaitMs]);
       if ((await db.query("SELECT 1 FROM avis_core_v2.trading_test_runs WHERE status='RUNNING'")).rows.length) {
         await db.query('COMMIT');
         return null;
       }
-      const run = (await db.query("SELECT * FROM avis_core_v2.trading_test_runs WHERE status='QUEUED' ORDER BY created_at,run_id LIMIT 1 FOR UPDATE")).rows[0];
+      const run = (await db.query(`SELECT * FROM avis_core_v2.trading_test_runs
+        WHERE status='QUEUED' AND engine_fingerprint=$1 ORDER BY created_at,run_id LIMIT 1 FOR UPDATE`, [fingerprint])).rows[0];
       if (run) {
         run.runner_token = randomUUID();
         await db.query(`UPDATE avis_core_v2.trading_test_runs SET status='RUNNING',started_at=now(),runner_token=$2,
