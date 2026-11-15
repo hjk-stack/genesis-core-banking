@@ -19,6 +19,7 @@ for line in sys.stdin:
                 old=robots.get(settings['id'])
                 if not old or old.settings.get('version')!=settings.get('version'):robots[settings['id']]=WEffectStrategy(settings)
         elif kind=='INDEX' and robot:robot.index=data['index']
+        elif kind=='EVENT_ADVICE' and robot:robot.event_advice=data['candidates']
         elif kind=='ACK' and robot:robot.acknowledge(data['state'])
         elif kind=='TICK' and robot:
             result=robot.receive(data['tick'],int(time.time()*1000))

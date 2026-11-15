@@ -158,5 +158,56 @@ class ExistingProviderSettingsTests(unittest.TestCase):
             self.assertEqual(deploy.existing_crypto_settings([]),[])
 
 
+class IndexAccessVerificationTests(unittest.TestCase):
+    def fixture(self, expose_customer=False, bad_policy=False):
+        operator, anonymous = object(), object()
+        calls, scope = [], {'customer': False}
+        instructions = 'private-model-instruction-fixture'
+        policy = {'schemaVersion': 1, 'policyVersion': 2,
+                  'policyHash': deploy.hashlib.sha256(instructions.encode()).hexdigest(),
+                  'instructions': instructions,
+                  'taxonomy': [{'id': prefix + str(i).zfill(2)} for prefix, count in
+                               [('EQ', 18), ('CM', 6), ('CR', 10), ('MA', 4)] for i in range(1, count + 1)]}
+        if bad_policy:
+            policy['taxonomy'].pop()
+
+        def request(client, base, path, body=None, csrf=None):
+            calls.append((path, body))
+            if path == '/api/workspace':
+                scope['customer'] = body['userId'] is not None
+                return {}
+            if client is anonymous or scope['customer'] and not expose_customer:
+                raise deploy.urllib.error.HTTPError(base + path, 401 if client is anonymous else 403, '', {}, None)
+            if path.endswith('index-policy') or scope['customer']:
+                return policy
+            return {'schemaVersion': 1, 'policyHash': policy['policyHash'], 'lastAccepted': None}
+        return operator, anonymous, request, calls, scope
+
+    def test_verifies_policy_and_denials_without_logging_private_instructions_or_mutating_finance(self):
+        operator, anonymous, request, calls, scope = self.fixture()
+        with patch.object(deploy, 'api', side_effect=request), patch.object(deploy.urllib.request, 'build_opener', return_value=anonymous), contextlib.redirect_stdout(io.StringIO()) as output:
+            deploy.verify_index_access(operator, 'https://bank.example', 'fixture-csrf')
+        self.assertFalse(scope['customer'])
+        self.assertNotIn('private-model-instruction-fixture', output.getvalue())
+        self.assertIn('38 categories', output.getvalue())
+        self.assertEqual([(path, body) for path, body in calls if body is not None],
+                         [('/api/workspace', {'userId': '2'}), ('/api/workspace', {'userId': None})])
+
+    def test_customer_leak_fails_and_always_restores_administrator_workspace(self):
+        operator, anonymous, request, calls, scope = self.fixture(expose_customer=True)
+        with patch.object(deploy, 'api', side_effect=request), patch.object(deploy.urllib.request, 'build_opener', return_value=anonymous):
+            with self.assertRaisesRegex(RuntimeError, 'crossed an access boundary'):
+                deploy.verify_index_access(operator, 'https://bank.example', 'fixture-csrf')
+        self.assertFalse(scope['customer'])
+        self.assertEqual(calls[-1], ('/api/workspace', {'userId': None}))
+
+    def test_incomplete_taxonomy_fails_before_workspace_switch(self):
+        operator, anonymous, request, calls, scope = self.fixture(bad_policy=True)
+        with patch.object(deploy, 'api', side_effect=request):
+            with self.assertRaisesRegex(RuntimeError, 'schema mismatch'):
+                deploy.verify_index_access(operator, 'https://bank.example', 'fixture-csrf')
+        self.assertEqual(len(calls), 1)
+
+
 if __name__ == '__main__':
     unittest.main()
