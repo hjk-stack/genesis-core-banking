@@ -52,8 +52,34 @@ class OpeningConsoleTests(unittest.TestCase):
             start.assert_not_called()
 
 
-if __name__ == '__main__':
-    unittest.main()
+class AzureDiagnosticsTests(unittest.TestCase):
+    def test_retains_known_azure_error_codes_without_secret_arguments_or_messages(self):
+        errors = [
+            ('ERROR: (AuthorizationFailed) private-provider-fixture', 'AuthorizationFailed'),
+            ('{"error":{"code":"ResourceGroupNotFound","message":"private-provider-fixture"}}',
+             'ResourceGroupNotFound'),
+            ('Code: SubscriptionNotFound\nMessage: private-provider-fixture', 'SubscriptionNotFound'),
+        ]
+        for stderr, expected in errors:
+            with self.subTest(code=expected):
+                result = subprocess.CompletedProcess([], 1, stdout='', stderr=stderr)
+                with patch.object(deploy.subprocess, 'run', return_value=result):
+                    with self.assertRaises(deploy.AzureOperationError) as caught:
+                        deploy.az('containerapp', 'secret', 'set', '--secrets',
+                                  'provider=private-provider-fixture')
+                self.assertEqual(caught.exception.azure_code, expected)
+                self.assertIn('containerapp secret set', str(caught.exception))
+                self.assertNotIn('private-provider-fixture', str(caught.exception))
+
+    def test_unrecognized_error_fields_cannot_be_echoed_as_error_codes(self):
+        result = subprocess.CompletedProcess([], 1, stdout='',
+                                             stderr='ERROR: (PrivateProviderFixture) request failed')
+        with patch.object(deploy.subprocess, 'run', return_value=result):
+            with self.assertRaises(deploy.AzureOperationError) as caught:
+                deploy.az('webapp', 'config', 'appsettings', 'list')
+        self.assertEqual(caught.exception.azure_code, 'AZURE_CLI_ERROR')
+        self.assertNotIn('PrivateProviderFixture', str(caught.exception))
+
 
 class ExistingProviderSettingsTests(unittest.TestCase):
     def test_only_named_existing_crypto_settings_are_copied_and_current_values_win(self):
@@ -71,7 +97,66 @@ class ExistingProviderSettingsTests(unittest.TestCase):
         self.assertEqual(len(calls),2)
         self.assertNotIn('fixture-ems',output.getvalue())
         self.assertNotIn('never-copy',str(calls))
+        self.assertIn('Key Vault reference: COINAPI_API_KEY', output.getvalue())
+        self.assertNotIn('SecretUri=fixture', output.getvalue())
+
+    def test_imports_supported_multichain_rpc_settings_without_replacing_existing_endpoints(self):
+        settings = [
+            {'name': 'AVIS_RPC_TRON', 'value': 'https://node.example/private-tron-fixture'},
+            {'name': 'CRYPTO_RPC_XRPL', 'value': 'https://node.example/private-xrpl-fixture'},
+            {'name': 'AVIS_RPC_ETHEREUM', 'value': 'https://node.example/do-not-replace'},
+            {'name': 'AVIS_WALLET_ENCRYPTION_KEY', 'value': 'never-copy-wallet-key'},
+            {'name': 'AVIS_RPC_UNKNOWN', 'value': 'never-copy-unknown-chain'},
+        ]
+        calls = []
+        def azure(*args):
+            calls.append(args)
+            return settings if args[0] == 'webapp' else None
+        current = [{'name': 'AVIS_RPC_ETHEREUM', 'secretRef': 'existing-node'}]
+        with patch.object(deploy, 'az', side_effect=azure), contextlib.redirect_stdout(io.StringIO()) as output:
+            result = deploy.existing_crypto_settings(current)
+        self.assertEqual(result, [
+            'AVIS_RPC_TRON=secretref:avispay-provider-avis-rpc-tron',
+            'CRYPTO_RPC_XRPL=secretref:avispay-provider-crypto-rpc-xrpl',
+        ])
+        self.assertEqual(current, [{'name': 'AVIS_RPC_ETHEREUM', 'secretRef': 'existing-node'}])
+        self.assertEqual(len(calls), 2)
+        self.assertIn('avispay-provider-avis-rpc-tron=https://node.example/private-tron-fixture', calls[1])
+        self.assertIn('avispay-provider-crypto-rpc-xrpl=https://node.example/private-xrpl-fixture', calls[1])
+        self.assertNotIn('do-not-replace', str(calls))
+        self.assertNotIn('never-copy', str(calls))
+        self.assertNotIn('https://node.example', output.getvalue())
+
+    def test_recovers_existing_target_secret_binding_without_reading_or_overwriting_credentials(self):
+        current = [{'name': name, 'secretRef': 'existing'} for name in deploy.CRYPTO_PROVIDER_SETTINGS
+                   if name != 'COINAPI_EMS_API_KEY']
+        known = [{'name': 'avispay-provider-coinapi-ems-api-key'}]
+        with patch.object(deploy, 'az') as azure, contextlib.redirect_stdout(io.StringIO()):
+            result = deploy.existing_crypto_settings(current, known)
+        self.assertEqual(result, ['COINAPI_EMS_API_KEY=secretref:avispay-provider-coinapi-ems-api-key'])
+        azure.assert_not_called()
+
+    def test_source_denial_preserves_existing_secret_binding_and_reports_only_safe_error_code(self):
+        error = deploy.AzureOperationError(('webapp', 'config', 'appsettings', 'list'),
+                                           'ERROR: (AuthorizationFailed) private-source-fixture')
+        with patch.object(deploy, 'az', side_effect=error) as azure, contextlib.redirect_stdout(io.StringIO()) as output:
+            result = deploy.existing_crypto_settings([], [{'name': 'avispay-provider-coinapi-ems-api-key'}])
+        self.assertEqual(result, ['COINAPI_EMS_API_KEY=secretref:avispay-provider-coinapi-ems-api-key'])
+        self.assertEqual(azure.call_count, 1)
+        self.assertIn('AuthorizationFailed', output.getvalue())
+        self.assertIn('genesis-email-automation-rg/genesis-email-bd74cf8', output.getvalue())
+        self.assertNotIn('private-source-fixture', output.getvalue())
+
+    def test_explicit_current_settings_are_preserved_even_when_empty(self):
+        current = [{'name': name, 'value': ''} for name in deploy.CRYPTO_PROVIDER_SETTINGS]
+        with patch.object(deploy, 'az') as azure:
+            self.assertEqual(deploy.existing_crypto_settings(current), [])
+        azure.assert_not_called()
 
     def test_read_failure_does_not_replace_current_configuration(self):
         with patch.object(deploy,'az',side_effect=RuntimeError('access')),contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(deploy.existing_crypto_settings([]),[])
+
+
+if __name__ == '__main__':
+    unittest.main()
