@@ -8,7 +8,7 @@ import {fault,text} from './src/core.mjs';
 import {migrate} from './src/migrate.mjs';
 import {FxBankingServer} from './src/fx.mjs';
 import {TradingRobotCore,ROBOT_MESSAGES} from './src/trading-robot.mjs';
-import {TradingRuntime} from './src/trading/runtime.mjs';
+import {TradingRuntime,engineStatus} from './src/trading/runtime.mjs';
 import {CRYPTO_MESSAGES} from './src/crypto-workspace.mjs';
 import {CustomerAccess} from './src/customer-access.mjs';
 import {processAvis8583} from './src/pos-switch.mjs';
@@ -99,6 +99,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
   try {
    const url=new URL(req.url,'http://localhost'),path=url.pathname;
    if(req.method==='GET'&&path==='/healthz')return send(res,200,{status:'ok',release});
+   if(req.method==='GET'&&path==='/api/crypto/trading/index-receipt')return send(res,200,engineStatus.indexReceipt||{producer:'AVIS_W_EFFECT_ROBOT',source:'AVIS_PRESS_ROBOT',sequence:null,receivedAt:null});
    if(req.method==='GET'&&path==='/readyz'){await pool.query('SELECT 1');return send(res,200,{status:'ready',release});}
    const ingress=/^\/network\/([A-Z0-9_]{1,35})\/(iso20022|iso8583|offline-batch)$/.exec(path);
    if(ingress&&req.method==='POST'){
