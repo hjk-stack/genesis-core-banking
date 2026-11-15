@@ -23,7 +23,7 @@ before(async()=>{
   res.end(await readFile(new URL('../public'+req.url,import.meta.url)));
  });
  await new Promise(r=>server.listen(0,'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;
- browser=await chromium.launch();
+ browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
 });
 for(const method of ['CRYPTO','CARD','CODED_CARD'])test(`${method} destination and receiver fields stay visible on mobile`,async()=>{
  const page=await browser.newPage({viewport:{width:390,height:1000}});
