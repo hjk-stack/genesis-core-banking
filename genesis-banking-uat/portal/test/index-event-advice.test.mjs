@@ -90,6 +90,26 @@ test('corrections and cancellations supersede the prior event and revoke robot c
  assert.deepEqual((await pool.query('SELECT state FROM avis_core_v2.index_event_candidates WHERE event_id=$1 ORDER BY event_version',[first.event_id])).rows.map(r=>r.state),['SUPERSEDED','SUPERSEDED','CANCELLED']);
 });
 
+test('multiline source quotes survive atomic cancellation and replacement when an exact instrument becomes known',async()=>{
+ const evidence=['Issuer announces a new contract.','The contract remains subject to final approval.'].join('\n'),exposure='The issuer names its supplier.\r\n\tThe supplier confirms the relationship.';
+ const first=candidate({evidence_summary:evidence,affected_role:'supplier',exposure_evidence:{source_urls:['https://issuer.example/announcement'],summary:exposure},entry_condition:'Check final approval.\n\tCheck a current executable quote.',invalidation_condition:'A cancellation is published.\r\nThe candidate expires.'});
+ const initial=await core.ingestIndexCandidates(service,await batch([first]));assert.equal(initial.matched,0);
+ const cancelled={...first,signal_id:hex(),event_version:2,event_status:'CANCELLED',supersedes_signal_id:first.signal_id,evidence_summary:'Prior unresolved attribution is withdrawn.\nAn exact catalogue instrument is now available.'};
+ const replacement=matched({event_id:first.event_id,evidence_summary:evidence}),b=await batch([cancelled,replacement]),receipt=await core.ingestIndexCandidates(service,b);assert.equal(receipt.accepted,2);assert.equal(receipt.matched,1);assert.deepEqual(await core.ingestIndexCandidates(service,b),receipt);
+ const rows=(await pool.query('SELECT signal_id,state,payload FROM avis_core_v2.index_event_candidates WHERE event_id=$1',[first.event_id])).rows,old=rows.find(r=>r.signal_id===first.signal_id),withdrawn=rows.find(r=>r.signal_id===cancelled.signal_id),current=rows.find(r=>r.signal_id===replacement.signal_id);
+ assert.equal(old.state,'SUPERSEDED');assert.equal(withdrawn.state,'CANCELLED');assert.equal(current.state,'ACTIVE');assert.equal(old.payload.evidence_summary,evidence);assert.equal(old.payload.exposure_evidence.summary,exposure);assert.equal(old.payload.entry_condition,first.entry_condition);assert.equal(old.payload.invalidation_condition,first.invalidation_condition);assert.equal(withdrawn.payload.evidence_summary,cancelled.evidence_summary);
+ const advice=(await core.robotIndexAdvice(admin,[robotId]))[robotId];assert.equal(advice.some(c=>c.signalId===replacement.signal_id),true);assert.equal(advice.some(c=>[first.signal_id,cancelled.signal_id].includes(c.signalId)),false);
+});
+
+test('multiline prose retains control, blank and size guards while identifiers remain single-line',()=>{
+ const set=(field,value)=>field==='exposure_evidence.summary'?candidate({exposure_evidence:{source_urls:['https://issuer.example/announcement'],summary:value}}):candidate({[field]:value});
+ for(const [field,max]of [['evidence_summary',4000],['exposure_evidence.summary',2000],['entry_condition',2000],['invalidation_condition',2000]]){
+  assert.doesNotThrow(()=>validateIndexCandidate(set(field,'First paragraph.\nSecond paragraph.\r\n\tIndented detail.'),Date.now()));assert.doesNotThrow(()=>validateIndexCandidate(set(field,'x'.repeat(max)),Date.now()));
+  for(const value of ['\n\t\r\n','x'.repeat(max+1),...['\x00','\x0b','\x1b','\x7f','\r'].map(control=>'First'+control+'Second')])assert.throws(()=>validateIndexCandidate(set(field,value),Date.now()),e=>e.code==='INVALID_FIELD'&&e.field===field);
+ }
+ for(const field of ['signal_id','ticker','model_version'])assert.throws(()=>validateIndexCandidate(candidate({[field]:'first\nsecond'}),Date.now()),e=>e.code==='INVALID_FIELD'&&e.field===field);
+});
+
 test('batch failure rolls back every candidate and immutable receipt',async()=>{
  const good=matched(),bad=matched({event_version:2}),b=await batch([good,bad]);await rejects(core.ingestIndexCandidates(service,b),'INDEX_EVENT_VERSION');assert.equal((await pool.query('SELECT 1 FROM avis_core_v2.index_event_candidates WHERE signal_id=$1',[good.signal_id])).rows.length,0);assert.equal((await pool.query('SELECT 1 FROM avis_core_v2.index_event_batches WHERE batch_id=$1',[b.batchId])).rows.length,0);
 });

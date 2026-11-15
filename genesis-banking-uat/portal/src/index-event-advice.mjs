@@ -34,6 +34,9 @@ const actualAdmin=a=>{if(!a?.admin||a.customerUserId)fault('FORBIDDEN',null,403)
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const nullableText=(v,field,max=500)=>v===null?null:text(v,field,max);
+// Evidence and conditions can contain source paragraphs. Preserve their exact
+// text, allowing ordinary line breaks/tabs without relaxing identifier rules.
+const prose=(v,field,max)=>{if(typeof v!=='string'||!v.trim()||v.length>max||/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(v)||/\r(?!\n)/.test(v))fault('INVALID_FIELD',field);return v;};
 const id=(v,field,max=128)=>{const s=text(v,field,max);if(v!==s||!/^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/.test(s))fault('INDEX_CANDIDATE',field);return s;};
 const timestamp=(v,field,nullable=false)=>{if(nullable&&v===null)return null;if(typeof v!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(v)||!Number.isFinite(Date.parse(v))||new Date(v).toISOString()!==v.replace(/(?:\.(\d{1,3}))?Z$/,(_,fraction)=>'.'+(fraction||'').padEnd(3,'0')+'Z'))fault('INDEX_CANDIDATE',field);return Date.parse(v);};
 const decimalValue=(v,field,nonnegative=false)=>{if(v===null)return;if(!(typeof v==='number'&&Number.isFinite(v)||typeof v==='string'&&/^-?\d{1,30}(\.\d{1,18})?$/.test(v))||nonnegative&&Number(v)<0)fault('INDEX_CANDIDATE',field);};
@@ -48,8 +51,9 @@ export function validateIndexCandidate(input,generatedAt){
  for(const key of INDEX_CANDIDATE_FIELDS)if(!Object.hasOwn(input,key))fault('INDEX_CANDIDATE',key);
  const c=structuredClone(input);id(c.signal_id,'signal_id');id(c.event_id,'event_id');
  if(!Number.isInteger(c.event_version)||c.event_version<1||c.event_version>2147483647||!INDEX_TAXONOMY.some(t=>t.id===c.event_category)||!statuses.includes(c.event_status)||!INDEX_ACTIONS.includes(c.proposed_action))fault('INDEX_CANDIDATE','event_category');
- urls(c.source_urls,'source_urls');text(c.original_language,'original_language',40);text(c.evidence_summary,'evidence_summary',4000);text(c.model_version,'model_version',150);
- for(const k of ['issuer_or_asset_name','ticker','exchange_mic','currency','isin','cusip','figi','chain_id','token_contract','venue_pair','units','expectation_source','forecast_horizon','entry_condition','invalidation_condition'])nullableText(c[k],k,k.endsWith('condition')?2000:500);
+ urls(c.source_urls,'source_urls');text(c.original_language,'original_language',40);prose(c.evidence_summary,'evidence_summary',4000);text(c.model_version,'model_version',150);
+ for(const k of ['issuer_or_asset_name','ticker','exchange_mic','currency','isin','cusip','figi','chain_id','token_contract','venue_pair','units','expectation_source','forecast_horizon'])nullableText(c[k],k);
+ for(const k of ['entry_condition','invalidation_condition'])if(c[k]!==null)prose(c[k],k,2000);
  if(c.instrument_id!==null)id(c.instrument_id,'instrument_id',200);
  if(c.supersedes_signal_id!==null)id(c.supersedes_signal_id,'supersedes_signal_id');
  if(c.affected_role!==null&&!roles.includes(c.affected_role))fault('INDEX_CANDIDATE','affected_role');
@@ -74,7 +78,7 @@ export function validateIndexCandidate(input,generatedAt){
   if(['NATIVE_CRYPTO','TOKEN','CRYPTO_DERIVATIVE'].includes(i.type)&&(c.isin!==null||c.cusip!==null))fault('INDEX_CANDIDATE','isin');
   if(i.type==='NATIVE_CRYPTO'&&c.token_contract!==null)fault('INDEX_CANDIDATE','token_contract');
  }
- if(c.exposure_evidence!==null){const e=c.exposure_evidence;if(!object(e)||Object.keys(e).some(k=>!['source_urls','summary'].includes(k)))fault('INDEX_CANDIDATE','exposure_evidence');urls(e.source_urls,'exposure_evidence.source_urls');text(e.summary,'exposure_evidence.summary',2000);}
+ if(c.exposure_evidence!==null){const e=c.exposure_evidence;if(!object(e)||Object.keys(e).some(k=>!['source_urls','summary'].includes(k)))fault('INDEX_CANDIDATE','exposure_evidence');urls(e.source_urls,'exposure_evidence.source_urls');prose(e.summary,'exposure_evidence.summary',2000);}
  if(c.affected_role!==null&&c.affected_role!=='direct'&&!c.exposure_evidence)fault('INDEX_CANDIDATE','exposure_evidence');
  if(c.metric_basis!==null){if(!object(c.metric_basis)||Object.keys(c.metric_basis).some(k=>!['measure','period','basis','source_vintage'].includes(k)))fault('INDEX_CANDIDATE','metric_basis');for(const [k,v]of Object.entries(c.metric_basis))nullableText(v,'metric_basis.'+k,300);}
  if(actionable.has(c.proposed_action)){
