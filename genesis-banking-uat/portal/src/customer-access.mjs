@@ -19,6 +19,7 @@ export class CustomerAccess {
   const operator=this.operator(actor);
   if(method==='activateCrypto'){if(String(input.userId)!==String(actor.customerUserId))fault('FORBIDDEN','userId',403);}
   else if(['cryptoWallet','cryptoChainBalance','cryptoSecurityDetails'].includes(method)){}
+  else if(method==='reconcileCryptoDeposit')await this.owns(actor,'ledger_accounts',input.accountId);
   else if(method==='reviewSecurityOrder')await this.owns(actor,'ledger_accounts',input.accountId);
   else if(['submitSecurityOrder','cancelSecurityOrder','securityOrderDetails'].includes(method))await this.owns(actor,'securities_orders',input.orderId,'user_id','order_id');
   else if(['issueManagedCard','loadManagedCard','registerExternalCard','purchaseCrypto'].includes(method))await this.ownsBank(actor,input.from,input.currency||((await this.pool.query(`SELECT p.currency_code FROM avis_core_v2.crypto_sale_offers o JOIN avis_core_v2.ledger_accounts p ON p.account_id=o.proceeds_account_id WHERE offer_id=$1`,[input.offerId])).rows[0]?.currency_code));

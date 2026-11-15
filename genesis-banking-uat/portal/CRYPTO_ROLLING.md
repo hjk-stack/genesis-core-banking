@@ -12,6 +12,16 @@ The v3 contract retains its dossier, registrar/master-hub/algorithm roles, AG/AG
 
 Signed transactions are stored before broadcast. Recovery retries the same signed bytes and verifies the canonical receipt. REVIEW can be cancelled; SIGNED/SUBMITTED is reconciled. Locked security collateral and actual AG/AGi escrow/fee movements are booked against confirmed events. Treasury fee receipts are not labelled investment return.
 
+### Ethereum Send and Receive
+
+The payment wizard routes new external Ethereum wallet transfers through the durable blockchain action outbox. It also accepts registered Ethereum security holdings in CUSTODY. Review binds the owned account, approved token contract, exact quantity, destination and maximum ETH network fee. Confirmation reserves both the principal and maximum fee, persists one signed transaction, then broadcasts those bytes. A retry after an uncertain response reuses the same hash and nonce. Other existing payment routes retain their settlement process.
+
+Settlement requires the canonical receipt, at least twelve confirmations and an Ethereum finalized head covering that receipt. ERC20 settlement verifies the actual contract, exact transfer and net sender/recipient movements. Only settlement charges actual gas and releases the unused fee reservation; a reverted transaction returns its principal and charges the gas actually used. A destination belonging to another AVISPay wallet receives its credit in the same balanced settlement. Pending receipts can be refreshed without submitting another transfer.
+
+Receive offers explicit transaction-hash reconciliation for Ethereum funding wallets and registered security custody wallets. The server verifies account/address ownership, the approved currency mapping, canonical transaction and receipt, and finalization before crediting the wallet against CHAIN_CUSTODY. Native ETH requires a direct transfer to the ordinary receiving address; token receipts use the selected contract's net Transfer events. Reading a blockchain balance alone never posts a ledger entry.
+
+Each incoming claim is unique by network, transaction, receiving address and asset contract, with block identity and transaction-relative event proofs. Repeated requests return the existing booking. Transactions already owned by a managed action cannot create a second deposit. A changed canonical proof is retained in reconciliation diagnostics for review; it does not silently change account balances. Migrations 018 and 019 add the transfer link and deposit claims without replacing existing wallets, keys or ledger history.
+
 ## W-effect engine and Press INDEX
 
 The separate Python process imports the unmodified, pinned NautilusTrader 1.231.0 package. Its typed QuoteTick and IOC LimitOrder objects are used by `WEffectStrategy`. AVIS owns durable order routing and reconciliation. This is a custom integration of Nautilus's strategy and order primitives, not its complete TradingNode brokerage stack.

@@ -50,6 +50,11 @@ test('HTTP enforces customer scope and customer cannot enumerate admin catalogue
  const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:'fixture',password:'fixture'})}),session=await login.json(),headers={origin:base,cookie:login.headers.get('set-cookie').split(';')[0],'content-type':'application/json','x-csrf-token':session.csrf,'idempotency-key':key()};
  const rows=await(await fetch(base+'/api/views/cryptowallets',{headers})).json();assert.ok(rows.rows.every(w=>String(w.user_id)==='2'));assert.ok(!JSON.stringify(rows).includes('encrypted_key'));const catalog=await(await fetch(base+'/api/views/cryptocatalogue',{headers})).json();assert.ok(catalog.rows.every(a=>a.networks.every(n=>n.approved)));
  assert.equal((await fetch(base+'/api/crypto/actions/review',{method:'POST',headers,body:'{}'})).status,403);assert.equal((await fetch(base+'/api/crypto/approve',{method:'POST',headers,body:'{}'})).status,403);
+ const foreign=(await core.list(admin,'cryptowallets')).find(w=>String(w.user_id)==='1');
+ const reconcile=body=>fetch(base+'/api/crypto/deposits/reconcile',{method:'POST',headers,body:JSON.stringify(body)});
+ assert.equal((await reconcile({accountId:foreign.account_id,addressId:foreign.address_id,txHash:'0x'+'a'.repeat(64)})).status,403);
+ const own=rows.rows.find(w=>w.network==='ETHEREUM'),invalid=await reconcile({accountId:own.account_id,addressId:own.address_id,txHash:'invalid'}),issue=await invalid.json();
+ assert.equal(invalid.status,422);assert.equal(issue.code,'CRYPTO_DEPOSIT_HASH');assert.equal(issue.field,'txHash');
 });
 test('blockchain connector rejects wrong chain and malformed tokens and handles new XRPL addresses',async()=>{
  let method;const chain=new ChainAPI({fetcher:async(u,o)=>{method=JSON.parse(o.body).method;return new Response(JSON.stringify({result:method==='eth_chainId'?'0x38':'0x'}));}});await assert.rejects(chain.check('ETHEREUM'),/CRYPTO_WRONG_CHAIN/);

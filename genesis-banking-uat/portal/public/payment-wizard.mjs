@@ -3,7 +3,7 @@ const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>'
 const amount=s=>{const [whole,fraction='']=String(s).split('.');return whole.replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+fraction.replace(/0+$/,'').padEnd(2,'0');};
 const names=['Payment','Receiving account','Receiver details','Reference','Review & transfer'];
 const field=(name,title,attrs='')=>`<label>${title}<input name="${name}" aria-label="${title}" ${attrs}><span class="field-error" data-error="${name}"></span></label>`;
-const resultLabel=r=>r.current_status==='COMPLETED'?'Transfer completed':r.current_status==='REJECTED'?'Bank rejected the transfer':r.current_status==='CANCELLED'?'Transfer request cancelled':r.delivery_mode==='MANUAL'?'Recorded in Administration · Transfer requests':r.delivery==='UNCERTAIN'?'Delivery requires reconciliation · see Administration':r.delivery==='QUEUED'?'Transfer queued for delivery':'Transfer submitted · awaiting bank settlement';
+const resultLabel=r=>r.current_status==='COMPLETED'?'Transfer completed':r.current_status==='CANCELLED'?'Transfer request cancelled':r.delivery_mode==='BLOCKCHAIN'?(r.current_status==='FAILED'?'Blockchain transaction reverted':r.chain_status==='SIGNED'?'Blockchain transaction signed · awaiting broadcast':'Blockchain transaction submitted · awaiting confirmation'):r.current_status==='REJECTED'?'Bank rejected the transfer':r.delivery_mode==='MANUAL'?'Recorded in Administration · Transfer requests':r.delivery==='UNCERTAIN'?'Delivery requires reconciliation · see Administration':r.delivery==='QUEUED'?'Transfer queued for delivery':'Transfer submitted · awaiting bank settlement';
 
 export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],purchase=()=>{},sell=()=>{},settle=()=>{},isAdmin=()=>true,userId=()=>null}){
  const dialog=document.createElement('dialog');dialog.id='payment-dialog';dialog.className='payment-dialog';
@@ -30,11 +30,12 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
  const method=()=>els().method.value;
  const secured=()=>method()==='CODED_CARD'&&els().offlineDebit.checked;
  const own=rows=>isAdmin()?rows:rows.filter(r=>String(r.user_id)===String(userId()));
+ const cryptoSources=()=>[...new Map([...own(data('cryptoholdings')),...own(data('cryptowallets')).filter(r=>r.wallet_scope==='CUSTODY'&&r.network==='ETHEREUM')].map(r=>[String(r.account_id),r])).values()];
  const bankSource=()=>own(accounts()).find(a=>a.abiq_iban===els().from.value);
  const option=(v,t)=>`<option value="${escape(v)}">${escape(t)}</option>`;
  function fillOptions(name,rows){const current=els()[name].value;els()[name].innerHTML=option('','Select…')+rows.map(r=>option(...r)).join('');if(rows.some(r=>String(r[0])===current))els()[name].value=current;}
  function syncOptions(){
-  fillOptions('cryptoAccount',own(data('cryptoholdings')).map(r=>[r.account_id,`${isAdmin()?r.full_name+' · ':''}${r.currency_code} · ${r.network} · Available ${amount(r.available_balance)}`]));
+  fillOptions('cryptoAccount',cryptoSources().map(r=>[r.account_id,`${isAdmin()?r.full_name+' · ':''}${r.currency_code} · ${r.network}${r.wallet_scope==='CUSTODY'?' · Security token':''} · Available ${amount(r.available_balance)}`]));
   fillOptions('sourceCardId',own(data('transfercards')).filter(r=>r.card_rail_mode!=='GLOBAL_SCHEME_ONLY').map(r=>[r.card_id,`${isAdmin()?r.full_name+' · ':''}${r.card_number||'Card ending '+r.last_four_digits} · ${amount(r.available_balance)} ${r.currency_code}`]));
   for(const n of ['cryptoAccount','sourceCardId'])if(!els()[n].value&&els()[n].options.length===2)els()[n].selectedIndex=1;
   if(isAdmin())fillOptions('receiverUserId',data('customers').map(r=>[r.user_id,r.full_name+' · User '+r.user_id]));
@@ -51,7 +52,7 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
   source();
  }
  function source(){
-  const m=method(),a=m==='BANK'?bankSource():m==='CRYPTO'?own(data('cryptoholdings')).find(r=>r.account_id===els().cryptoAccount.value):own(data('transfercards')).find(r=>r.card_id===els().sourceCardId.value);
+  const m=method(),a=m==='BANK'?bankSource():m==='CRYPTO'?cryptoSources().find(r=>String(r.account_id)===els().cryptoAccount.value):own(data('transfercards')).find(r=>r.card_id===els().sourceCardId.value);
   q('[data-balance]').textContent=a?`Available balance: ${amount(a.available_balance)} ${a.currency_code}${a.network?' · '+a.network:''}`:'';
   q('[data-currency]').textContent=a?.currency_code||'';return a;
  }
@@ -92,7 +93,7 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
  function reviewDisplay(r){
   const v=r.instruction;
   const addr=v.address||{};
-  q('[data-summary]').innerHTML=`<dl class="payment-summary"><dt>From</dt><dd>${escape(v.from)}</dd><dt>Amount</dt><dd>${escape(v.amount)} ${escape(v.currency)}</dd><dt>Receiver</dt><dd>${escape(v.receiverName)}<br>${escape(addr.street||'')}<br>${escape([addr.postalCode,addr.city,addr.country].filter(Boolean).join(' '))}</dd><dt>To</dt><dd>${escape(v.receiverAccount||v.destinationLabel)}<br>${escape(v.receiverBic||v.network||'')}</dd><dt>Reference</dt><dd>${escape(v.reference)}</dd><dt>Delivery</dt><dd>${r.mode==='INTERNAL'?'Internal AVISPay transfer':r.mode==='MANUAL'?'Administration · Transfer requests':'Bank connection'}</dd></dl>`;
+  q('[data-summary]').innerHTML=`<dl class="payment-summary"><dt>From</dt><dd>${escape(v.from)}${v.fromAddress?'<br>'+escape(v.fromAddress):''}</dd><dt>Amount</dt><dd>${escape(v.amount)} ${escape(v.currency)}</dd><dt>Receiver</dt><dd>${escape(v.receiverName)}<br>${escape(addr.street||'')}<br>${escape([addr.postalCode,addr.city,addr.country].filter(Boolean).join(' '))}</dd><dt>To</dt><dd>${escape(v.receiverAccount||v.destinationLabel)}<br>${escape(v.receiverBic||v.network||'')}</dd><dt>Reference</dt><dd>${escape(v.reference)}</dd><dt>Delivery</dt><dd>${r.mode==='BLOCKCHAIN'?'Blockchain transfer':r.mode==='INTERNAL'?'Internal AVISPay transfer':r.mode==='MANUAL'?'Administration · Transfer requests':'Bank connection'}</dd>${r.mode==='BLOCKCHAIN'&&v.networkFeeMaximum!=null?'<dt>Maximum network fee</dt><dd>'+escape(v.networkFeeMaximum)+' '+escape(v.networkFeeCurrency)+'</dd>':''}</dl>`;
   q('[data-message-label]').textContent=r.format==='AVIS_TRANSFER_V1'?'Transfer instruction':r.format==='FIN_MT103'?'FIN MT103 transfer message':'ISO 20022 transfer message';q('[data-message]').textContent=r.message;
  }
  async function next(e){
@@ -117,7 +118,9 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
    }
    if(step===4){
     const r=await api('payments/transfer',{requestId:review.id,messageHash:review.messageHash},transferKey);
-    if(r.hasDelivery){await showDelivery(r);await refresh();return;}close();notice(resultLabel(r));await refresh();return;
+    if(r.hasDelivery){await showDelivery(r);await refresh();return;}
+    if(review.mode==='BLOCKCHAIN'){await view(r.request_id||review.id);await refresh();return;}
+    close();notice(resultLabel(r));await refresh();return;
    }
    show(step+1);
   }catch(e){error(e);}finally{setBusy(false);}
@@ -164,11 +167,19 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
  async function view(id){
   const r=await api('payment-requests/'+id);open();reviewDisplay({instruction:r.instruction,mode:r.delivery_mode,format:r.message_format,message:r.message_content});show(4);
   q('#payment-title').textContent='Transfer request';q('.step-caption').textContent=resultLabel(r);q('.payment-progress').hidden=true;
+  if(r.delivery_mode==='BLOCKCHAIN'){
+   const detail=(name,value)=>{if(value==null)return;const label=document.createElement('dt'),text=document.createElement('dd');label.textContent=name;text.textContent=String(value);q('.payment-summary').append(label,text);};
+   detail('Transaction hash',r.tx_hash);detail('Confirmations',r.confirmations);detail('Network fee',r.gas_fee==null?null:r.gas_fee+' '+(r.instruction.networkFeeCurrency||''));
+  }
   q('[data-back]').hidden=true;q('[data-next]').hidden=true;
   const download=document.createElement('button');download.type='button';download.textContent='Download message';q('.payment-footer').append(download);
-  download.onclick=()=>{const url=URL.createObjectURL(new Blob([r.message_content],{type:r.message_format==='FIN_MT103'?'text/plain':'application/xml'}));const a=document.createElement('a');a.href=url;a.download='AVISPay-'+r.request_id+(r.message_format==='AVIS_TRANSFER_V1'?'.json':r.message_format==='FIN_MT103'?'.fin':'.xml');a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+  download.onclick=()=>{const url=URL.createObjectURL(new Blob([r.message_content],{type:r.message_format==='AVIS_TRANSFER_V1'?'application/json':r.message_format==='FIN_MT103'?'text/plain':'application/xml'}));const a=document.createElement('a');a.href=url;a.download='AVISPay-'+r.request_id+(r.message_format==='AVIS_TRANSFER_V1'?'.json':r.message_format==='FIN_MT103'?'.fin':'.xml');a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+  if(r.delivery_mode==='BLOCKCHAIN'&&!['COMPLETED','CANCELLED','FAILED'].includes(r.current_status)){
+   const check=document.createElement('button');check.type='button';check.textContent='Refresh status';q('.payment-footer').append(check);
+   check.onclick=async()=>{if(busy)return;setBusy(true);try{await view(id);await refresh();}catch(e){error(e);}finally{setBusy(false);}};
+  }
   if(r.hasDelivery){const showCard=document.createElement('button');showCard.type='button';showCard.textContent='Card delivery & code';q('.payment-footer').append(showCard);showCard.onclick=()=>showDelivery(r).catch(error);}
-  if(isAdmin()&&(r.status==='OUTGOING'||r.current_status==='PROCESSING')){
+  if(isAdmin()&&r.delivery_mode!=='BLOCKCHAIN'&&(r.status==='OUTGOING'||r.current_status==='PROCESSING')){
    const pick=document.createElement('button');pick.type='button';pick.textContent='Pick up request';q('.payment-footer').append(pick);pick.onclick=async()=>{setBusy(true);try{await api('payments/pickup',{requestId:id},crypto.randomUUID());pick.textContent='Picked up';await refresh();}catch(e){error(e);}finally{setBusy(false);}};
   }
   if(isAdmin()&&r.delivery_mode==='MANUAL'&&r.status==='OUTGOING'){
