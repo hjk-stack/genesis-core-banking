@@ -2,6 +2,7 @@
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import http.cookiejar
+import hashlib
 import json
 import os
 import re
@@ -13,6 +14,7 @@ import struct
 import termios
 import time
 import urllib.request
+import urllib.error
 
 RG = 'genesis-banking-rg'
 APP = 'genesis-banking-uat'
@@ -79,6 +81,51 @@ def api(opener, base, path, body=None, csrf=None):
     request = urllib.request.Request(base + path, data=None if body is None else json.dumps(body).encode(), headers=headers)
     with opener.open(request, timeout=30) as response:
         return json.load(response)
+
+def verify_index_access(opener, base, csrf):
+    """Read the private policy and verify workspace boundaries without trading."""
+    policy = api(opener, base, '/api/crypto/trading/index-policy')
+    expected = {prefix + str(i).zfill(2) for prefix, count in
+                [('EQ', 18), ('CM', 6), ('CR', 10), ('MA', 4)] for i in range(1, count + 1)}
+    instructions = policy.get('instructions')
+    if (policy.get('schemaVersion') != 1
+            or type(policy.get('policyVersion')) is not int or policy['policyVersion'] < 0
+            or not isinstance(instructions, str) or not instructions.strip()
+            or not re.fullmatch(r'[a-f0-9]{64}', policy.get('policyHash', ''))
+            or hashlib.sha256(instructions.encode()).hexdigest() != policy['policyHash']
+            or len(policy.get('taxonomy', [])) != 38
+            or {row.get('id') for row in policy['taxonomy']} != expected):
+        raise RuntimeError('Private INDEX instruction schema mismatch')
+    delivery = api(opener, base, '/api/crypto/trading/index-delivery')
+    if delivery.get('schemaVersion') != 1 or delivery.get('policyHash') != policy['policyHash']:
+        raise RuntimeError('Private INDEX delivery diagnostics mismatch')
+    accepted = delivery.get('lastAccepted')
+    if accepted is not None and (accepted.get('authentication') not in ('ED25519_JWS', 'BEARER')
+                                 or not re.fullmatch(r'[a-f0-9]{64}', accepted.get('batchId', ''))):
+        raise RuntimeError('Private INDEX accepted delivery receipt mismatch')
+
+    def denied(client, path, status):
+        try:
+            api(client, base, path)
+        except urllib.error.HTTPError as error:
+            if error.code == status:
+                return
+            raise RuntimeError('INDEX access boundary returned an unexpected status') from None
+        raise RuntimeError('Private INDEX data crossed an access boundary')
+
+    anonymous = urllib.request.build_opener()
+    for path in ['/api/crypto/trading/index-policy', '/api/crypto/trading/index-delivery']:
+        denied(anonymous, path, 401)
+    try:
+        api(opener, base, '/api/workspace', {'userId': '2'}, csrf)
+        for path in ['/api/crypto/trading/index-policy', '/api/crypto/trading/index-delivery',
+                     '/api/views/indexpolicies', '/api/views/indexcandidates']:
+            denied(opener, path, 403)
+    finally:
+        api(opener, base, '/api/workspace', {'userId': None}, csrf)
+    # Never log the instruction, candidate text, portfolio or service credentials.
+    print('Verified private INDEX policy: 38 categories; version ' + str(policy['policyVersion'])
+          + '; customer and anonymous access denied; accepted delivery=' + str(accepted is not None))
 
 def apply_authorized_opening(revision, container):
     """Run the fixed, idempotent UAT request inside the existing application."""
@@ -267,6 +314,8 @@ def main():
         if not engine.get('ready') or engine.get('version') != '1.231.0':
             raise RuntimeError('Nautilus trading process did not start')
         print('Verified crypto catalogue, ten security wallets and running NautilusTrader 1.231.0')
+        stage = 'private INDEX instruction and access verification'
+        verify_index_access(opener, base, login['csrf'])
         providers = api(opener, base, '/api/crypto/trading/validate-providers', {}, login['csrf'])['providers']
         for provider in providers:
             print('Provider validation: ' + provider['provider'] + '; configured=' + str(provider['configured']) + '; verified=' + str(provider['verified']))

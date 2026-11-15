@@ -45,6 +45,7 @@ before(async()=>{
   if(req.url==='/'){wallets=initialWallets.map(w=>({...w}));res.setHeader('content-type','text/html');return res.end(html);}
   if(req.url==='/fixture.mjs'){res.setHeader('content-type','text/javascript');return res.end(fixtureScript);}
   const json=v=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(v));};
+  if(req.url==='/api/crypto/trading/index-policy')return json({policyVersion:1,instructions:'Use official announcements and retain unknown values as null.',taxonomy:[{id:'EQ01',label:'Major contracts'}]});
   if(req.url.startsWith('/api/views/'))return json({rows:({
    cryptocatalogue:catalogue,cryptomarkets:catalogue,cryptosecurities:cards,
    cryptowallets:wallets,
@@ -68,7 +69,7 @@ before(async()=>{
    }
    return json({id:'result'});
   }
-  if(['/crypto-workspace.mjs','/trading-panel.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png'].includes(req.url)){
+  if(['/crypto-workspace.mjs','/trading-panel.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png'].includes(req.url)){
    res.setHeader('content-type',req.url.endsWith('.png')?'image/png':req.url.endsWith('.css')?'text/css':'text/javascript');
    return res.end(await readFile(new URL('../public'+req.url,import.meta.url)));
   }
@@ -174,6 +175,8 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   });
   await page.goto(base);
   await page.getByRole('heading',{name:'AVISPay PLC · Asset contents & conversion'}).waitFor();
+  await page.getByRole('textbox',{name:'Analysis instructions',exact:true}).waitFor();
+  assert.equal(await page.locator('textarea[name=instructions]').count(),1);
   assert.equal(await page.locator('[data-security]').count(),10);
   assert.equal(await page.locator('[data-markets] .crypto-market').count(),100);
   assert.equal(await page.locator('.crypto-currency-row').count(),200);

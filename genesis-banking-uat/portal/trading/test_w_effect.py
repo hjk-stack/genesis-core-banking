@@ -50,4 +50,14 @@ class Tests(unittest.TestCase):
   elapsed=time.perf_counter()-start
   print(f'W evaluation: {1000/elapsed:.0f}/second; {elapsed:.3f} ms average per 250-tick window')
   self.assertLess(elapsed,10)
+ def test_event_advice_is_context_and_never_bypasses_w_or_maps_short_to_sell(self):
+  s=WEffectStrategy(dict(id='r',symbol='BTCUSDT',venue='BINANCE',indexId='BTC',maxNotional='1000',quantityStep='0.01',priceTick='0.01',trailingBps=50));ticks=fixture();now=ticks[-1]['tsMicros']//1000
+  s.index=dict(instrumentId='BTC',score=20,confidence=.5,sourceCount=3,generatedAtMs=now-1000,validUntilMs=now+100000,sequence='seq')
+  s.event_advice=[dict(signalId='fresh-buy',action='BUY',expiresAtMs=now+60000),dict(signalId='expired-buy',action='BUY',expiresAtMs=now-1),dict(signalId='short',action='SHORT',expiresAtMs=now+60000),dict(signalId='watch',action='WATCH',expiresAtMs=now+60000),dict(signalId='fresh-sell',action='SELL',expiresAtMs=now+60000)]
+  for t in ticks[:200]:self.assertIsNone(s.receive(t,now))
+  for t in ticks[200:]:result=s.receive(t,now)
+  self.assertEqual(result['side'],'BUY');self.assertEqual(result['eventSignalIds'],['fresh-buy'])
+  s.acknowledge(dict(positionQuantity='2',stopPrice='100',peakPrice='102'))
+  sell=s.receive(dict(ticks[-1],bid=98.,ask=98.01,tsMicros=(now+6000)*1000),now+6000)
+  self.assertEqual(sell['side'],'SELL');self.assertEqual(sell['eventSignalIds'],['fresh-sell'])
 if __name__=='__main__':unittest.main()

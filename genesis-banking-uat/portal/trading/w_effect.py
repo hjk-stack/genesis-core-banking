@@ -62,6 +62,7 @@ class WEffectStrategy(Strategy):
         self.factory = OrderFactory(TraderId('AVIS-001'), StrategyId('WEFFECT-001'), LiveClock())
         self.instrument = InstrumentId.from_str(settings['symbol']+'.'+settings['venue'])
         self.index = None
+        self.event_advice = []
         self.position = float(settings.get('positionQuantity',0))
         self.stop = float(settings.get('stopPrice',0))
         self.peak = float(settings.get('peakPrice',0))
@@ -117,6 +118,7 @@ class WEffectStrategy(Strategy):
         self.result={'type':'ORDER','robotId':self.settings['id'],'signalId':hashlib.sha256(str(signal_key).encode()).hexdigest(),
                      'order':order.to_dict(),'side':side,'quantity':str(quantity),'price':str(price),'pattern':pattern,
                      'indexSequence':self.index.get('sequence') if self.index else None,'tickTime':self.raw['tsMicros'],
+                     'eventSignalIds':[c['signalId'] for c in self.event_advice if c.get('action')==side and c.get('expiresAtMs',0)>self.now_ms][:20],
                      'stopPrice':pattern['l2']*.999 if pattern else self.stop,'peakPrice':self.peak,'engine':'NautilusTrader 1.231.0'}
 
     def acknowledge(self, state):

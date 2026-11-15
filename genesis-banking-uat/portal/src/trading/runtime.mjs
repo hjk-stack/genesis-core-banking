@@ -13,6 +13,7 @@ export class TradingRuntime {
   this.configs=(await this.core.pool.query('SELECT r.*,s.quote_basis,s.denomination FROM avis_core_v2.trading_robots r LEFT JOIN avis_core_v2.portfolio_securities s USING(security_id) WHERE enabled OR position_quantity>0')).rows;this.send({type:'CONFIG',robots:this.configs.map(r=>this.settings(r))});
   const wanted=new Set(this.configs.filter(r=>r.venue==='BINANCE').map(r=>r.symbol));for(const [s,w]of this.sockets)if(!wanted.has(s)){w.close();this.sockets.delete(s);}for(const s of wanted)if(!this.sockets.has(s))this.connectMarket(s);
   await this.refreshIndex();
+  await this.refreshEventAdvice();
   if(this.configs.length){
    for(const r of this.configs.filter(r=>r.venue==='AVIS'))await this.avisTick(r);
   }
@@ -27,6 +28,12 @@ export class TradingRuntime {
     this.send({type:'INDEX',robotId:r.robot_id,index:snapshot?{...snapshot,generatedAtMs:Date.parse(index.generatedAt),validUntilMs:Date.parse(row.validUntil)}:null});
    }
   }catch{this.log('PRESS_INDEX_READ');}
+ }
+ async refreshEventAdvice(){
+  if(!this.configs.length)return;
+  try{const advice=await this.core.robotIndexAdvice(actor,this.configs.map(r=>r.robot_id));
+   for(const r of this.configs){const candidates=advice[r.robot_id]||[];await this.core.pool.query('UPDATE avis_core_v2.trading_robots SET last_event_advice=$2 WHERE robot_id=$1 AND version=$3',[r.robot_id,JSON.stringify(candidates),r.version]);this.send({type:'EVENT_ADVICE',robotId:r.robot_id,candidates});}
+  }catch{for(const r of this.configs)this.send({type:'EVENT_ADVICE',robotId:r.robot_id,candidates:[]});this.log('INDEX_EVENT_ADVICE_READ');}
  }
  connectMarket(symbol){const name=symbol.toLowerCase(),ws=new this.WebSocketClass('wss://stream.binance.com:9443/stream?streams='+name+'@bookTicker/'+name+'@aggTrade');this.sockets.set(symbol,ws);let sell=0,lastBook=0;
   ws.addEventListener('message',event=>{try{const d=JSON.parse(event.data).data;if(d.s!==symbol)return;if(d.e==='aggTrade'){if(d.m===true)sell+=Number(d.q);return;}if(!(d.u>lastBook))return;lastBook=d.u;const now=Date.now(),tick={tsMicros:now*1000,bid:Number(d.b),ask:Number(d.a),bidSize:Number(d.B),askSize:Number(d.A),sellVolume:sell};sell=0;for(const r of this.configs.filter(r=>r.venue==='BINANCE'&&r.symbol===symbol)){this.send({type:'TICK',robotId:r.robot_id,tick});this.ticks.set(r.robot_id,now);}}catch{}});
