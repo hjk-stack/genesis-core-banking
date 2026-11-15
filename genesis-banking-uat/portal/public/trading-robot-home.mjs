@@ -1,6 +1,8 @@
 // Admin-only home for the W-Effect trading engine.
 export function mountRobotHome({host}) {
  if(!host)return;
+ if(!document.querySelector('link[data-w-effect-styles]')){const link=document.createElement('link');link.rel='stylesheet';link.href=new URL('./trading-responsive.css',import.meta.url).href;link.dataset.wEffectStyles='';document.head.append(link);}
+
  host.innerHTML=`<section class="crypto-market w-effect-home" aria-label="W-Effect robot administration" style="padding:20px;margin-bottom:18px">
  <header style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px"><div><p class="crypto-source">AVISPay · Crypto administration</p><h2>W-Effect · Robot Home</h2><p class="crypto-source">Trading engine · INDEX intelligence · Execution · Settlement</p></div><span class="crypto-source">Administration</span></header>
  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:18px 0">
