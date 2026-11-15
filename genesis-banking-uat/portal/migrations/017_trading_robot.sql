@@ -15,6 +15,7 @@ CREATE TABLE avis_core_v2.trading_robot_orders (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),robot_id uuid NOT NULL REFERENCES avis_core_v2.trading_robots,
  signal_id varchar(64) NOT NULL, client_order_id varchar(36) UNIQUE NOT NULL, side varchar(4) NOT NULL CHECK(side IN('BUY','SELL')),
  quantity numeric(36,18) NOT NULL,price numeric(36,18) NOT NULL, status varchar(16) NOT NULL DEFAULT 'CREATED' CHECK(status IN('CREATED','DISPATCHING','ACKNOWLEDGED','SETTLED','REJECTED')),
+ notional numeric(36,18) NOT NULL CHECK(notional>0 AND notional<>'NaN'::numeric),
  instruction jsonb NOT NULL,response jsonb, journal_id uuid REFERENCES avis_core_v2.ledger_journals, created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),
  UNIQUE(robot_id,signal_id)
 );

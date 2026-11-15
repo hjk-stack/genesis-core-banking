@@ -23,3 +23,11 @@ test('venue timeout recovers the same client order, records partial execution an
 test('Binance adapter uses authenticated IOC API and rejects malformed secret references',async()=>{
  const calls=[],api=new BinanceSpot({env:{TRADING_TEST_KEY:'test-api',TRADING_TEST_SECRET:'test-signing-secret'},fetcher:async(url,options)=>{calls.push({url,options});return new Response('{}');}});await api.submit({symbol:'BTCUSDT',side:'BUY',quantity:'1',price:'100',client_order_id:'AVIS-test'},'TRADING_TEST');const u=new URL(calls[0].url);assert.equal(u.hostname,'api.binance.com');assert.equal(u.searchParams.get('timeInForce'),'IOC');assert.ok(u.searchParams.get('signature'));assert.equal(calls[0].options.method,'POST');assert.ok(!calls[0].url.includes('test-signing-secret'));assert.throws(()=>api.credentials('PGPASSWORD'),/ROBOT_API_KEY/);
 });
+
+test('percentage-quoted AVIS bonds consume their full denomination in the daily purchase limit',async()=>{
+ const s=(await core.addSecurity(actor,{name:'Daily-limit bond',shortName:'BOND',currency:'EUR',denomination:'1000',quoteBasis:'PERCENT',kind:'bond'},key())).id;
+ const id=(await core.configureRobot(actor,{name:'Bond W',userId:'1',venue:'AVIS',symbol:'BOND',indexId:'TEST',securityId:s,accountId:account(1).account_id,maxNotional:'1000',dailyNotional:'1500',maxLoss:'100',trailingBps:50,minimumIndex:0},key())).id;
+ await core.toggleRobot(actor,{robotId:id,enabled:true},key());await index(id);const first=await core.robotOrder(actor,signal(id,'BUY','1'),key());await pool.query("UPDATE avis_core_v2.trading_robot_orders SET status='SETTLED' WHERE id=$1",[first.id]);
+ await assert.rejects(core.robotOrder(actor,signal(id,'BUY','1'),key()),/ROBOT_LIMIT/);
+ await pool.query("UPDATE avis_core_v2.trading_robot_orders SET status='REJECTED' WHERE id=$1",[first.id]);const queued=await core.robotOrder(actor,signal(id,'BUY','1'),key());await pool.query("UPDATE avis_core_v2.trading_robot_orders SET created_at=now()-interval '1 minute' WHERE id=$1",[queued.id]);await core.dispatchRobotOrder(actor,queued.id);assert.equal((await pool.query('SELECT status FROM avis_core_v2.trading_robot_orders WHERE id=$1',[queued.id])).rows[0].status,'REJECTED');
+});
