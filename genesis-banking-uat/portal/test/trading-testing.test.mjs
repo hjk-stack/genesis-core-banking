@@ -311,6 +311,48 @@ test('the pending queue is bounded and draining processes each immutable request
   assert.ok(runs.every(r => r.status === 'PASSED'));
 });
 
+test('rolling-deployment workers claim only their implementation fingerprint, even with the same engine version', async () => {
+  let oldExecutions = 0, newExecutions = 0;
+  const oldWorker = new TradingTestingCore(pool, {tradingTestRunner: async input => { oldExecutions++; return fixtureReport(input); }});
+  const newWorker = new TradingTestingCore(pool, {tradingTestRunner: async input => { newExecutions++; return fixtureReport(input); }});
+  oldWorker.tradingTestingFingerprint = async () => 'a'.repeat(64);
+  newWorker.tradingTestingFingerprint = async () => 'b'.repeat(64);
+  oldWorker.processTradingTests = newWorker.processTradingTests = async () => {};
+  const input = {robotId, mode: 'REPLAY', dataset: dataset()}, requestKey = key();
+  const newer = await newWorker.runTradingTest(admin, input, requestKey);
+  const older = await oldWorker.runTradingTest(admin, input, key());
+  const before = await financialSnapshot();
+  await oldWorker.drainTradingTests();
+  const untouched = (await pool.query('SELECT * FROM avis_core_v2.trading_test_runs WHERE run_id=$1', [newer.runId])).rows[0];
+  assert.equal(untouched.status, 'QUEUED'); assert.equal(untouched.started_at, null); assert.equal(untouched.runner_token, null);
+  assert.equal(oldExecutions, 1); assert.equal(newExecutions, 0);
+  await newWorker.drainTradingTests();
+  const rows = (await pool.query('SELECT * FROM avis_core_v2.trading_test_runs WHERE run_id=ANY($1::uuid[])', [[older.runId, newer.runId]])).rows;
+  assert.ok(rows.every(run => run.status === 'PASSED' && run.report.engineVersion === '1.231.0'));
+  assert.equal(rows.find(run => run.run_id === older.runId).engine_fingerprint, 'a'.repeat(64));
+  assert.equal(rows.find(run => run.run_id === newer.runId).engine_fingerprint, 'b'.repeat(64));
+  assert.deepEqual(await newWorker.runTradingTest(admin, input, requestKey), newer);
+  await newWorker.drainTradingTests();
+  assert.equal(oldExecutions, 1); assert.equal(newExecutions, 1);
+  await rejected(oldWorker.reviewTradingTest(admin, {runId: newer.runId}, key()), 'TRADING_TEST_CHANGED');
+  assert.deepEqual(await financialSnapshot(), before);
+});
+
+test('an incompatible queued revision expires without a runner claim or execution after its bounded wait', async () => {
+  const source = (await pool.query('SELECT * FROM avis_core_v2.trading_test_runs ORDER BY created_at LIMIT 1')).rows[0];
+  const runId = randomUUID(), before = calls;
+  await pool.query(`INSERT INTO avis_core_v2.trading_test_runs
+    (run_id,robot_id,profile_name,mode,configuration,configuration_hash,engine_fingerprint,dataset_hash,input,created_by,created_at)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'orphaned-revision-regression',now()-interval '31 minutes')`,
+  [runId, source.robot_id, source.profile_name, source.mode, JSON.stringify(source.configuration), source.configuration_hash,
+    'e'.repeat(64), source.dataset_hash, JSON.stringify(source.input)]);
+  await core.processTradingTests();
+  const run = (await pool.query('SELECT * FROM avis_core_v2.trading_test_runs WHERE run_id=$1', [runId])).rows[0];
+  assert.equal(run.status, 'FAILED'); assert.equal(run.error_code, 'TRADING_TEST_CHANGED');
+  assert.equal(run.started_at, null); assert.equal(run.runner_token, null); assert.equal(run.report, null);
+  assert.ok(run.completed_at); assert.equal(calls, before);
+});
+
 test('report validation rejects fake engines, failed checks labelled passed and unbounded output', () => {
   const input = {mode: 'REPLAY', initialCash: '10000'}, report = fixtureReport(input);
   for (const patch of [{engine: 'fake'}, {engineVersion: '0'}, {mode: 'ACCEPTANCE'}, {complete: false},
