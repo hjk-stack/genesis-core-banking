@@ -24,7 +24,7 @@ CRYPTO_SOURCE_APP = 'genesis-email-bd74cf8'
 CRYPTO_NETWORKS = ('ETHEREUM', 'BSC', 'POLYGON', 'ARBITRUM', 'BASE', 'AVALANCHE',
                    'GNOSIS', 'TRON', 'XRPL', 'SOLANA', 'BITCOIN')
 CRYPTO_PROVIDER_SETTINGS = {
-    'COINAPI_EMS_API_KEY', 'COINAPI_NAAS_API_KEY', 'COINAPI_API_KEY',
+    'COINAPI_EMS_API_KEY', 'COINAPI_NAAS_API_KEY', 'COINAPI_API_KEY', 'COINAPI_MARKET_DATA_API_KEY',
     'APIBRICKS_COINAPI_KEY', 'ALCHEMY_API_KEY', 'TRONGRID_API_KEY', 'COINGECKO_API_KEY',
 } | {prefix + network for prefix in ('AVIS_RPC_', 'CRYPTO_RPC_') for network in CRYPTO_NETWORKS}
 AZURE_ERROR_CODES = frozenset({
@@ -164,6 +164,74 @@ def verify_trading_tests(opener, base, csrf, release):
         raise RuntimeError('Isolated trading acceptance checks did not pass')
     print('Verified isolated trading acceptance: NautilusTrader 1.231.0; '
           + str(len(checks)) + ' checks passed; no live trading approval')
+
+def verify_live_trading(opener, base):
+    """Read the mounted live feed, instructions and security registration; never trade or review."""
+    path = '/api/crypto/trading/live'
+    state = api(opener, base, path)
+    profiles = state.get('profiles')
+    if state.get('schemaVersion') != 1 or not isinstance(profiles, list):
+        raise RuntimeError('Live trading installation metadata mismatch')
+    selected = state.get('selectedRobotId')
+    if selected is not None:
+        if not re.fullmatch(r'[0-9a-f-]{36}', selected) or not any(p.get('robotId') == selected for p in profiles):
+            raise RuntimeError('Live trading selected profile mismatch')
+        path += '?robotId=' + selected
+    elif profiles or state.get('audit') is not None or state.get('liquidity') is not None:
+        raise RuntimeError('Live reference market created a trading profile')
+    market = state.get('market') or {}
+    provider = market.get('provider')
+    if provider not in ('CoinAPI', 'Binance', 'AVIS'):
+        raise RuntimeError('Live trading market source mismatch')
+    if provider == 'AVIS':
+        book = state.get('liquidity') or {}
+        if book.get('kind') != 'AVIS_ORDER_BOOK' or not isinstance(book.get('bids'), list) or not isinstance(book.get('asks'), list):
+            raise RuntimeError('Live AVIS order book was not read')
+        source_proof = 'current reserved order book'
+    else:
+        if selected is None and market.get('reference') is not True:
+            raise RuntimeError('Live reference market identity mismatch')
+        for attempt in range(20):
+            market = state.get('market') or {}
+            quote = market.get('quote') or {}
+            try:
+                bid, ask = Decimal(str(quote.get('bid'))), Decimal(str(quote.get('ask')))
+                fresh = (bid.is_finite() and ask.is_finite() and 0 < bid <= ask
+                         and quote.get('stale') is False
+                         and isinstance(quote.get('ageMs'), (int, float)) and 0 <= quote['ageMs'] <= 15000
+                         and market.get('connection', {}).get('state') == 'OPEN')
+            except Exception:
+                fresh = False
+            if fresh:
+                break
+            time.sleep(2)
+            state = api(opener, base, path)
+        else:
+            raise RuntimeError('Live market stream did not deliver a current quote')
+        if market.get('provider') != provider or state.get('selectedRobotId') != selected:
+            raise RuntimeError('Live trading source changed during verification')
+        source_proof = 'current timestamped quote'
+    if selected:
+        policy = api(opener, base, '/api/crypto/trading/robot-instructions?robotId=' + selected)
+        try:
+            rules = json.loads(policy.get('instructions', ''))
+        except Exception:
+            rules = None
+        if (policy.get('robotId') != selected or not isinstance(policy.get('version'), int)
+                or not re.fullmatch(r'[a-f0-9]{64}', policy.get('policyHash', ''))
+                or not isinstance(rules, dict)
+                or not {'maxNotional', 'dailyNotional', 'maxLoss', 'minimumIndex', 'trailingBps'}.issubset(rules)):
+            raise RuntimeError('Trading instruction field was not mounted')
+    cards = api(opener, base, '/api/views/cryptosecurities').get('rows')
+    if not isinstance(cards, list):
+        raise RuntimeError('Security registration audit was not read')
+    real_cards = [c for c in cards if c.get('mode') == 'REAL']
+    registered_contracts = sum(bool(c.get('contract_address') and c.get('hub_address')) for c in real_cards)
+    # Counts and provider names only. Never print account values, instructions,
+    # venue credentials or institution wallet/contract addresses into CI logs.
+    print('Verified live trader: provider=' + provider + '; ' + source_proof
+          + '; saved profiles=' + str(len(profiles)) + '; real security registrations=' + str(len(real_cards))
+          + '; registered contract pairs=' + str(registered_contracts) + '; no trading activation')
 
 def apply_authorized_opening(revision, container):
     """Run the fixed, idempotent UAT request inside the existing application."""
@@ -354,6 +422,8 @@ def main():
         print('Verified crypto catalogue, ten security wallets and running NautilusTrader 1.231.0')
         stage = 'isolated trading test installation verification'
         verify_trading_tests(opener, base, login['csrf'], sha)
+        stage = 'live trading feed and instruction installation verification'
+        verify_live_trading(opener, base)
         stage = 'private INDEX instruction and access verification'
         verify_index_access(opener, base, login['csrf'])
         providers = api(opener, base, '/api/crypto/trading/validate-providers', {}, login['csrf'])['providers']

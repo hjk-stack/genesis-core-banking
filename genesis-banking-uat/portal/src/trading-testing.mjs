@@ -37,6 +37,7 @@ const inputFault = field => fault('TRADING_TEST_INPUT', field);
 const safeText = (value, max) => typeof value === 'string' && value.length <= max && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value);
 
 const implementationFiles = [
+  './trading-instructions.mjs', './trading-live.mjs', './trading/live-market.mjs',
   '../trading/w_effect.py', '../trading/worker.py', '../trading/test_runner.py', '../trading/requirements.txt',
   './trading/test-runner.mjs', './trading-testing.mjs', './trading-robot.mjs',
   './trading/runtime.mjs', './trading/binance.mjs', './index-event-advice.mjs',

@@ -258,5 +258,65 @@ class TradingTestVerificationTests(unittest.TestCase):
                         deploy.verify_trading_tests(object(), 'https://bank.example', 'csrf', 'b' * 40)
 
 
+class LiveTraderVerificationTests(unittest.TestCase):
+    def fixture(self, profile=False, quote=True, stale=False, provider='CoinAPI'):
+        robot_id = '11111111-1111-4111-8111-111111111111' if profile else None
+        market = {'provider': provider, 'reference': not profile, 'connection': {'state': 'OPEN'},
+                  'quote': {'bid': '100.123456789012345678', 'ask': '101', 'ageMs': 100, 'stale': stale} if quote else None}
+        state = {'schemaVersion': 1, 'profiles': [{'robotId': robot_id}] if profile else [],
+                 'selectedRobotId': robot_id, 'market': market, 'audit': {} if profile else None,
+                 'liquidity': {'kind': 'AVIS_ORDER_BOOK', 'bids': [], 'asks': []} if provider == 'AVIS' else None}
+        calls = []
+        def request(client, base, path, *args):
+            calls.append((path, args))
+            self.assertFalse(args, 'live verifier must use GET reads only')
+            if path.startswith('/api/crypto/trading/live'):
+                return state
+            if path.startswith('/api/crypto/trading/robot-instructions'):
+                return {'robotId': robot_id, 'version': 3, 'policyHash': 'a' * 64,
+                        'instructions': json.dumps({'maxNotional': '100', 'dailyNotional': '200',
+                                                    'maxLoss': '20', 'minimumIndex': 0, 'trailingBps': 50,
+                                                    'notes': 'private-policy-fixture'})}
+            if path == '/api/views/cryptosecurities':
+                return {'rows': [{'mode': 'REAL', 'contract_address': 'private-contract-fixture',
+                                  'hub_address': 'private-hub-fixture'}]}
+            raise AssertionError(path)
+        return request, calls, state
+
+    def test_verifies_actual_reference_quote_without_creating_or_approving_a_profile(self):
+        request, calls, _ = self.fixture()
+        with patch.object(deploy, 'api', side_effect=request), contextlib.redirect_stdout(io.StringIO()) as output:
+            deploy.verify_live_trading(object(), 'https://bank.example')
+        self.assertEqual(len(calls), 2)
+        self.assertIn('current timestamped quote; saved profiles=0', output.getvalue())
+        self.assertNotIn('private-', output.getvalue())
+
+    def test_reads_selected_instructions_and_exact_empty_avis_book_without_mutation(self):
+        request, calls, _ = self.fixture(profile=True, provider='AVIS', quote=False)
+        with patch.object(deploy, 'api', side_effect=request), contextlib.redirect_stdout(io.StringIO()) as output:
+            deploy.verify_live_trading(object(), 'https://bank.example')
+        self.assertTrue(any('/robot-instructions?' in path for path, _ in calls))
+        self.assertIn('current reserved order book', output.getvalue())
+        self.assertNotIn('private-', output.getvalue())
+
+    def test_missing_and_stale_external_quotes_cannot_pass_as_live_data(self):
+        for settings in ({'quote': False}, {'stale': True}):
+            request, _, _ = self.fixture(**settings)
+            with patch.object(deploy, 'api', side_effect=request), patch.object(deploy.time, 'sleep'):
+                with self.assertRaisesRegex(RuntimeError, 'current quote'):
+                    deploy.verify_live_trading(object(), 'https://bank.example')
+
+    def test_unknown_provider_and_fabricated_reference_profile_fail_verification(self):
+        request, _, state = self.fixture(provider='invented')
+        with patch.object(deploy, 'api', side_effect=request):
+            with self.assertRaisesRegex(RuntimeError, 'source mismatch'):
+                deploy.verify_live_trading(object(), 'https://bank.example')
+        state['market']['provider'] = 'CoinAPI'
+        state['audit'] = {'fabricated': True}
+        with patch.object(deploy, 'api', side_effect=request):
+            with self.assertRaisesRegex(RuntimeError, 'created a trading profile'):
+                deploy.verify_live_trading(object(), 'https://bank.example')
+
+
 if __name__ == '__main__':
     unittest.main()

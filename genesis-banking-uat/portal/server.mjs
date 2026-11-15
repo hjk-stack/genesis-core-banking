@@ -12,6 +12,9 @@ import {TradingRuntime,engineStatus} from './src/trading/runtime.mjs';
 import {IndexServiceAuthenticator} from './src/index-service-auth.mjs';
 import {INDEX_ADVICE_MESSAGES} from './src/index-event-advice.mjs';
 import {TRADING_TEST_MESSAGES} from './src/trading-testing.mjs';
+import {TRADING_INSTRUCTION_MESSAGES} from './src/trading-instructions.mjs';
+import {TRADING_LIVE_MESSAGES} from './src/trading-live.mjs';
+import {LiveMarketFeed} from './src/trading/live-market.mjs';
 import {CRYPTO_MESSAGES} from './src/crypto-workspace.mjs';
 import {CustomerAccess} from './src/customer-access.mjs';
 import {processAvis8583} from './src/pos-switch.mjs';
@@ -35,7 +38,7 @@ export async function authenticateFineract(username,password,baseUrl,fetcher=fet
  if(account.authenticated!==true||account.isTwoFactorAuthenticationRequired===true||!/^\d+$/.test(String(account.userId||'')))fault('OPERATOR_ACCESS_REQUIRED','username',403);
  return {id:'fineract:'+account.userId,username:account.username||username,admin:account.permissions?.includes('ALL_FUNCTIONS')===true};
 }
-const messages={...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX_ADVICE_MESSAGES,...TRADING_TEST_MESSAGES,
+const messages={...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX_ADVICE_MESSAGES,...TRADING_TEST_MESSAGES,...TRADING_INSTRUCTION_MESSAGES,...TRADING_LIVE_MESSAGES,
  SECURITY_CATALOGUE_READ:'The Green Bond catalogue could not be refreshed. Try Refresh catalogue again.',
  SECURITY_TERMS_CHANGED:'The security denomination or currency changed. Select the security again.',
  SECURITY_NOT_FOUND:'Select a registered security.',POSITION_CHANGED:'This holding changed. Reopen it before saving.',
@@ -143,7 +146,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const reply=await buildPacs002({messageId:randomBytes(16).toString('hex'),uetr:original.uetr,senderBic:p.local_bic,receiverBic:p.peer_bic,status:receipt.status,bankReference:receipt.id.replaceAll('-','')});
     res.setHeader('content-type','application/xml');return res.end(reply);
    }
-   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/portfolio.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/trading-panel.mjs','/trading-testing.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png'].includes(path)){
+   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/portfolio.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/trading-panel.mjs','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png'].includes(path)){
     const file=path==='/'?'index.html':path==='/card-message'?'public/card-message.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     res.setHeader('content-type',(path==='/'||path==='/card-message')?'text/html; charset=utf-8':path.endsWith('.png')?'image/png':path.endsWith('css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8');return res.end(body);
@@ -206,6 +209,9 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(req.method==='GET'&&path==='/api/crypto/trading/index-delivery')return send(res,200,await invoke('indexDelivery'));
    if(req.method==='GET'&&path==='/api/crypto/trading/index-policy')return send(res,200,await invoke('indexPolicy'));
    if(req.method==='GET'&&path==='/api/crypto/trading/testing')return send(res,200,await invoke('tradingTesting'));
+   if(req.method==='GET'&&path==='/api/crypto/trading/live')return send(res,200,await invoke('tradingLiveSnapshot',{robotId:url.searchParams.get('robotId')??undefined}));
+   if(req.method==='GET'&&path==='/api/crypto/trading/live/liquidity')return send(res,200,await invoke('tradingLiveLiquidity',{robotId:url.searchParams.get('robotId')}));
+   if(req.method==='GET'&&path==='/api/crypto/trading/robot-instructions')return send(res,200,await invoke('robotInstructions',{robotId:url.searchParams.get('robotId')}));
    if(req.method==='GET'&&path.startsWith('/api/views/'))return send(res,200,{rows:await (actor.admin?core:customerAccess).list(actor,path.split('/').at(-1))});
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
@@ -240,6 +246,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    routes['crypto/deposits/reconcile']='reconcileCryptoDeposit';
    routes['crypto/trading/tests']='runTradingTest';
    routes['crypto/trading/tests/review']='reviewTradingTest';
+   routes['crypto/trading/robot-instructions']='saveRobotInstructions';
    const action=path.slice(5),method=routes[action];if(!method)fault('NOT_FOUND',null,404);
    const result=await invoke(method,body,req.headers['idempotency-key'],action==='cards/reverse');
    if(action==='fx/execute'&&result.status==='EXPIRED')fault('FX_QUOTE_EXPIRED','quoteId',409);
@@ -256,13 +263,14 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   user:process.env.PGUSER,password:process.env.PGPASSWORD,max:8,connectionTimeoutMillis:10000,
   ssl:process.env.PGHOST==='localhost'?false:{rejectUnauthorized:true}});
  const client=await pool.connect();try{await migrate(client);}finally{client.release();}
- createBankServer({pool,authenticate:(u,p)=>authenticateFineract(u,p,process.env.FINERACT_URL),release:process.env.RELEASE_SHA||'local'})
+ const liveMarkets=new LiveMarketFeed({env:process.env});
+ createBankServer({pool,authenticate:(u,p)=>authenticateFineract(u,p,process.env.FINERACT_URL),release:process.env.RELEASE_SHA||'local',transferOptions:{tradingMarketFeed:liveMarkets}})
   .listen(Number(process.env.PORT||8080),'0.0.0.0');
- const robotCore=new TradingRobotCore(pool);let recoveringChain=false;const recoverChain=async()=>{if(recoveringChain)return;recoveringChain=true;try{const pending=(await pool.query("SELECT action_id,status,tx_hash FROM avis_core_v2.crypto_chain_actions WHERE status IN('SIGNED','SUBMITTED') ORDER BY created_at LIMIT 20")).rows;for(const a of pending){try{if(a.status==='SIGNED')await robotCore.broadcastCryptoAction({id:'system:chain-recovery',admin:true},{actionId:a.action_id});await robotCore.confirmCryptoAction({id:'system:chain-recovery',admin:true},{actionId:a.action_id},'confirm:'+a.tx_hash);}catch(e){console.error(JSON.stringify({operation:'CHAIN_RECOVERY',code:e.code||'CHAIN_RECEIPT'}));}}}finally{recoveringChain=false;}};void recoverChain();setInterval(recoverChain,15000).unref();const trading=new TradingRuntime(robotCore).start();
+ const robotCore=new TradingRobotCore(pool,{tradingMarketFeed:liveMarkets});let recoveringChain=false;const recoverChain=async()=>{if(recoveringChain)return;recoveringChain=true;try{const pending=(await pool.query("SELECT action_id,status,tx_hash FROM avis_core_v2.crypto_chain_actions WHERE status IN('SIGNED','SUBMITTED') ORDER BY created_at LIMIT 20")).rows;for(const a of pending){try{if(a.status==='SIGNED')await robotCore.broadcastCryptoAction({id:'system:chain-recovery',admin:true},{actionId:a.action_id});await robotCore.confirmCryptoAction({id:'system:chain-recovery',admin:true},{actionId:a.action_id},'confirm:'+a.tx_hash);}catch(e){console.error(JSON.stringify({operation:'CHAIN_RECOVERY',code:e.code||'CHAIN_RECEIPT'}));}}}finally{recoveringChain=false;}};void recoverChain();setInterval(recoverChain,15000).unref();const trading=new TradingRuntime(robotCore).start();
  const processTradingTests=()=>robotCore.processTradingTests().catch(error=>console.error(JSON.stringify({operation:'TRADING_TESTS',code:error.code||'TRADING_TEST_PROCESS'})));
  void processTradingTests();setInterval(processTradingTests,10000).unref();
  const refreshMarkets=()=>robotCore.refreshCryptoMarkets({id:'system:crypto-markets',admin:true},{},'markets:'+Math.floor(Date.now()/120000)).catch(e=>console.error(JSON.stringify({operation:'CRYPTO_MARKET_REFRESH',code:e.code||'CRYPTO_CATALOGUE'})));void refreshMarkets();setInterval(refreshMarkets,120000).unref();
- process.once('SIGTERM',()=>{void trading.stop();});
+ process.once('SIGTERM',()=>{void trading.stop();liveMarkets.close();});
  const housekeeping=new FxBankingServer(pool);let expiring=false;
  let recovering=false;
  const recoverDeliveries=async()=>{if(recovering)return;recovering=true;try {

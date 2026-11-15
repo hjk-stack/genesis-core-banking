@@ -28,6 +28,10 @@ let wallets=[];
 const robotId='10000000-0000-4000-8000-000000000001',configurationHash='a'.repeat(64);
 const replayDataset={ticks:[{tsMicros:1000000,bid:99,ask:100,bidSize:5,askSize:5,sellVolume:0},{tsMicros:2000000,bid:100,ask:101,bidSize:5,askSize:5,sellVolume:1}],indices:[]};
 let testRuns=[],testReads=0,reviewedRunId=null;
+const execution=(id,side='BUY')=>({id,orderId:'recorded-'+id,side,quantity:'0.123456789012345678',price:'100',quoteValue:'12.3456789012345678',fees:[{asset:'CHF',amount:'0.000000000000000001'}],executedAt:null,recordedAt:new Date().toISOString(),evidence:'AVIS_LEDGER'});
+let liveFills=[],instructionVersion=1,robotInstructions='',backingReads=0;
+const fixtureBook={kind:'AVIS_ORDER_BOOK',observedAt:verifiedAt,securityId:'security-1',baseAsset:'aAVISP',quoteAsset:'CHF',quoteBasis:'CURRENCY',denomination:'1',complete:true,totalOrders:1,bids:[{price:'100',quantity:'5',quoteValue:'500',orders:1}],asks:[],lots:[{orderId:'whole-lot-1',side:'BUY',quantity:'5',price:'100',quoteValue:'500',submittedAt:verifiedAt,reservationConsistent:true}],wholeLotsOnly:true,reservationBasis:'BUY cash hold; SELL aggregate reserved securities consistency.',securityTokens:[{cardId:'registered-card-1',name:'AVISPay PLC',symbol:'aAVISP',network:'ETHEREUM',state:'BOOKED',contractAddress:'0x1111111111111111111111111111111111111111',hubAddress:'0x2222222222222222222222222222222222222222',registeredTokenQuantity:'1000000.123456789012345678',reservedSourceQuantity:'1000000',registeredAt:verifiedAt,liquidityType:'SECURITY_REGISTER'}]};
+const liveSnapshot=()=>({schemaVersion:1,observedAt:new Date().toISOString(),profiles:[{robotId,name:'Treasury W-effect',venue:'AVIS',symbol:'aAVISP',indexId:'aAVISP',baseAsset:'aAVISP',quoteAsset:'CHF',enabled:false,testReviewed:!!reviewedRunId}],selectedRobotId:robotId,market:{provider:'AVIS',symbolId:'aAVISP',baseAsset:'aAVISP',quoteAsset:'CHF',quote:{bid:'100.123456789012345678',ask:'101.123456789012345678',bidSize:'123.456789012345678',askSize:'234.567890123456789',exchangeTime:verifiedAt,providerTime:verifiedAt,receivedAt:verifiedAt,ageMs:0,sourceDelayMs:0,stale:false},trades:[],connection:{state:'OPEN',lastMessageAt:verifiedAt,errorCode:null}},audit:{coverage:{scope:'ALL_RECORDED_ORDERS',complete:true,totalOrders:liveFills.length,ordersIncluded:liveFills.length,from:verifiedAt,to:verifiedAt},orders:liveFills.map(fill=>({id:fill.orderId,side:fill.side,status:'SETTLED',requestedQuantity:fill.quantity,executedQuantity:fill.quantity,quoteValue:fill.quoteValue,averagePrice:fill.price,createdAt:fill.recordedAt,recordedAt:fill.recordedAt,executedAt:fill.executedAt})),fills:liveFills,totals:{baseVolume:'1234.123456789012345678',quoteVolume:'123456.123456789012345678',buyQuantity:'1233',sellQuantity:'1.123456789012345678',buyQuoteValue:'123300',sellQuoteValue:'156.123456789012345678',executedOrders:liveFills.length,buyExecutions:1,sellExecutions:liveFills.length-1,fees:[{asset:'CHF',amount:'0.123456789012345678'}],recordedRealisedPnl:'1.123456789012345678',knownFeeAdjustedPnl:'1.123456789012345678',grossRealisedPnl:'1.246913578024691356',netRealisedPnl:'1.123456789012345678',netPnlComplete:true,unpricedFeeAssets:[],positionQuantity:'1231.876543210987654322',costBasis:'100000.123456789012345678',unrealisedPnl:null},reconciliation:{positionMatches:true,costBasisMatches:true,realisedPnlMatches:true},issues:[]},liquidity:fixtureBook});
 const testReport=mode=>({schemaVersion:1,engine:'NautilusTrader',engineVersion:'1.231.0',mode,status:'PASSED',complete:true,checks:[{id:'round-trip',label:'Buy, sell and close the position',passed:true,detail:'Virtual orders are bounded by the saved profile and the position ends flat.'}],metrics:{initialCash:'10000',finalCash:'10001.123456789012345678',finalEquity:'10001.123456789012345678',realisedPnl:'1.123456789012345678',unrealisedPnl:'0',costBasis:'0',fees:'0.2',finalPosition:'0',drawdown:'0.1',drawdownFraction:'0.00001',filledOrders:2,buyFills:1,sellFills:1,ticksProcessed:250,indexObservationsUsed:1,ordersGenerated:2,rejectedOrders:0,partialFills:0,openOrders:0,duplicateSignalsIgnored:0},orders:[{id:'virtual-order-'+configurationHash,signalId:'signal-1',tsMicros:1000000,side:'BUY',requestedQuantity:'1',limitPrice:'100',filledQuantity:'1',status:'FILLED',reason:null,type:'LIMIT',timeInForce:'IOC'}],fills:[{orderId:'virtual-order-'+configurationHash,tsMicros:1000000,side:'BUY',quantity:'1',price:'100',notional:'100',fee:'0.1',cashAfter:'9899.9',positionAfter:'1'}],assumptions:{referenceSettings:{initialCash:'10000',feeBps:10,slippageBps:5}}});
 const cards=Array.from({length:10},(_,i)=>({card_id:'00000000-0000-4000-8000-'+String(i+1).padStart(12,'0'),sort_order:i+1,name:i?'Demo security '+(i+1):'AVISPay PLC',symbol:i?'DEMO'+i:'aAVISP',mode:'DEMO',state:'DRAFT',token_quantity:'0',dossier:{assetType:'STOCK',currency:'CHF',assetValue:'100000000',issuedVolume:'100000000',faceValue:'1',marginHaircutBps:1500,tradingFeeBps:10,source:'Example dossier'}}));
 const catalogue=Array.from({length:200},(_,i)=>({asset_id:'asset-'+i,currency_code:i?'COIN'+i:'AG',name:i?'Currency '+i:'AVIS Green',market_rank:i+1,market_data:{usd:'1',eur:'.9',chf:'.85',change24h:i%2?-2:3,observedAt:new Date().toISOString()},networks:[{network:'ETHEREUM',approved:i===0,verifiedAt:i===0?verifiedAt:null}]}));
@@ -46,10 +50,13 @@ before(async()=>{
  const html=(await readFile(new URL('../index.html',import.meta.url),'utf8')).replace('src="/app.mjs"','src="/fixture.mjs"');
  for(const address of Object.values(addresses))address.qr=await QRCode.toDataURL(address.public_address,{margin:2,width:256,errorCorrectionLevel:'M'});
  server=http.createServer(async(req,res)=>{
-  if(req.url==='/'){wallets=initialWallets.map(w=>({...w}));testRuns=[];testReads=0;reviewedRunId=null;res.setHeader('content-type','text/html');return res.end(html);}
+  if(req.url==='/'){wallets=initialWallets.map(w=>({...w}));testRuns=[];testReads=0;reviewedRunId=null;backingReads=0;liveFills=[execution('first-fill')];instructionVersion=1;robotInstructions=JSON.stringify({maxNotional:'100',dailyNotional:'1000',maxLoss:'100',minimumIndex:0,trailingBps:50,notes:'Follow the saved W-effect configuration.'},null,2);res.setHeader('content-type','text/html');return res.end(html);}
   if(req.url==='/fixture.mjs'){res.setHeader('content-type','text/javascript');return res.end(fixtureScript);}
   const json=v=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(v));};
   if(req.url==='/api/crypto/trading/index-policy')return json({policyVersion:1,instructions:'Use official announcements and retain unknown values as null.',taxonomy:[{id:'EQ01',label:'Major contracts'}]});
+  if(req.method==='GET'&&req.url.startsWith('/api/crypto/trading/live/liquidity')){backingReads++;return json({schemaVersion:1,robotId,observedAt:verifiedAt,cards:[{cardId:'registered-card-1',name:'AVISPay PLC',symbol:'aAVISP',network:'ETHEREUM',contractAddress:fixtureBook.securityTokens[0].contractAddress,errorCode:null,chain:{proof:{finalized:true,canonicalRechecked:true,blockNumber:24000000,blockHash:'0x'+'a'.repeat(64),blockTime:verifiedAt},identity:{operator:'0x3333333333333333333333333333333333333333',contractAddress:fixtureBook.securityTokens[0].contractAddress,hubAddress:fixtureBook.securityTokens[0].hubAddress,isin:'CH0000000001'},security:{totalSupply:'1000000.123456789012345678',custodyCap:'2000000',bridgedOutSupply:'0',lockedMarginCollateral:'100',committedSecurityAmount:'90',committedMarginPower:'90',availableTradingPower:'10.123456789012345678',capacityCurrency:'CHF',capacityBasis:'CONFIGURED_COLLATERAL_VALUATION'},settlement:[{asset:'AG',escrow:'1.123456789012345678',accumulatedFees:'0.01',contractBalance:'2',operatorBalance:'3',operatorAllowance:'4',escrowCovered:true},{asset:'AGi',escrow:'5.123456789012345678',accumulatedFees:'0.02',contractBalance:'6',operatorBalance:'7',operatorAllowance:'8',escrowCovered:true}],treasury:{address:'0x3333333333333333333333333333333333333333',isOperator:true}}}]});}
+  if(req.method==='GET'&&req.url.startsWith('/api/crypto/trading/live'))return json(liveSnapshot());
+  if(req.method==='GET'&&req.url.startsWith('/api/crypto/trading/robot-instructions'))return json({robotId,version:instructionVersion,instructions:robotInstructions,updatedAt:verifiedAt});
   if(req.url==='/api/crypto/trading/testing'){
    if(testRuns.some(run=>run.status==='RUNNING')&&++testReads>=2)for(const run of testRuns.filter(run=>run.status==='RUNNING'))Object.assign(run,{status:'PASSED',completedAt:verifiedAt,report:testReport(run.mode),reviewEligible:run.mode==='REPLAY'&&!!run.robotId});
    return json({engine:{name:'NautilusTrader',version:'1.231.0',fingerprint:configurationHash},profiles:[{robotId,name:'Treasury W-effect',venue:'AVIS',symbol:'aAVISP',configurationHash,reviewedRunId,testReviewed:!!reviewedRunId}],runs:testRuns,limits:{maxTicks:10000,maxIndices:10000,maxInputBytes:2097152,maxReportBytes:2097152}});
@@ -63,6 +70,9 @@ before(async()=>{
   if(req.url.startsWith('/api/crypto/securities/000'))return json({...cards.find(c=>req.url.endsWith(c.card_id)),actions:[],sourceSpecification:'v3.0'});
   if(req.method==='POST'){
    let raw='';for await(const c of req)raw+=c;const body=JSON.parse(raw);calls.push({url:req.url,body,key:req.headers['idempotency-key']});
+   if(req.url==='/api/crypto/trading/robot-instructions'){
+    if(body.robotId!==robotId||body.expectedVersion!==instructionVersion){res.statusCode=409;return json({error:'Instruction version changed.'});}robotInstructions=body.instructions;instructionVersion++;reviewedRunId=null;return json({robotId,version:instructionVersion,instructions:robotInstructions,updatedAt:verifiedAt,enabled:false});
+   }
    if(req.url==='/api/crypto/trading/tests'){
     const runId='20000000-0000-4000-8000-'+String(testRuns.length+1).padStart(12,'0');testReads=0;testRuns.unshift({runId,robotId:body.robotId||null,profileName:body.robotId?'Treasury W-effect':null,mode:body.mode,status:'RUNNING',configurationHash,engineFingerprint:configurationHash,datasetHash:configurationHash,createdAt:verifiedAt,startedAt:verifiedAt,completedAt:null,report:null,errorCode:null,reviewEligible:false,reviewedAt:null});return json({runId,status:'QUEUED'});
    }
@@ -84,7 +94,7 @@ before(async()=>{
    }
    return json({id:'result'});
   }
-  if(['/crypto-workspace.mjs','/trading-panel.mjs','/trading-testing.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png'].includes(req.url)){
+  if(['/crypto-workspace.mjs','/trading-panel.mjs','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png'].includes(req.url)){
    res.setHeader('content-type',req.url.endsWith('.png')?'image/png':req.url.endsWith('.css')?'text/css':'text/javascript');
    return res.end(await readFile(new URL('../public'+req.url,import.meta.url)));
   }
@@ -218,6 +228,43 @@ async function verifyTradingTests(page,width){
  await page.screenshot({path:'test-results/crypto-trading-tests-'+width+'.png',fullPage:false});
 }
 
+async function verifyLiveTrading(page,width){
+ const mark=calls.length,live=page.locator('.trading-live'),instructions=page.locator('.trading-instructions-grid');
+ await page.waitForFunction(()=>document.querySelector('[data-live-quote]')?.textContent.includes('100.123456789012345678 CHF'));
+ await page.waitForFunction(()=>document.querySelector('[data-robot-instruction-form] textarea')?.disabled===false);
+ assert.equal(await live.locator('[data-robot-activity]').getAttribute('data-robot-activity'),'','reading existing fills must not animate a new trade');
+ assert.equal(await live.locator('.trading-robot-art').count(),1);assert.equal(await instructions.locator('textarea').count(),2);
+ assert.match(await live.locator('[data-live-audit]').textContent(),/1,234\.123456789012345678 aAVISP/);assert.match(await live.locator('[data-live-audit]').textContent(),/Net realised profit1\.123456789012345678 CHF/);assert.match(await live.locator('[data-live-audit]').textContent(),/Fees by currency0\.123456789012345678 CHF/);assert.doesNotMatch(await live.textContent(),/Virtual funds|Acceptance suite/);
+ if(width===390)await page.emulateMedia({reducedMotion:'reduce'});
+ liveFills.unshift(execution('new-sell-'+width,'SELL'));
+ await live.getByRole('button',{name:'Refresh view',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('[data-robot-activity]')?.dataset.robotActivity==='SELL');
+ if(width===390)assert.equal(await live.locator('[data-robot-arm=SELL]').evaluate(element=>getComputedStyle(element).animationName),'none','reduced motion keeps a static real-event indication');
+ await live.getByRole('button',{name:'Sell executions',exact:true}).click();
+ assert.equal(await live.locator('[data-live-executions] tbody tr').count(),1);assert.match(await live.locator('[data-live-executions] tbody').textContent(),/SELL/);
+ await live.getByRole('button',{name:'Focus latest execution',exact:true}).click();assert.equal(await live.locator('[data-live-executions] tbody tr').count(),2);assert.equal(await live.locator('[data-live-executions] tr.is-focused').getAttribute('data-execution-id'),'new-sell-'+width);
+ assert.equal(backingReads,0,'ordinary live reads must not query finalized security backing');
+ await live.locator('[data-live-liquidity]>summary').click();assert.equal(await live.locator('[data-live-book] [data-live-lots] tbody tr').count(),1);
+ await live.getByRole('button',{name:'Read security backing',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[data-live-backing]')?.textContent.includes('Finalized checkpointYes'));
+ assert.equal(backingReads,1);assert.equal(await live.locator('[data-live-backing] tbody tr').count(),2);assert.match(await live.locator('[data-live-backing]').textContent(),/Configured collateral valuation/);assert.match(await live.locator('[data-live-backing]').textContent(),/1\.123456789012345678/);assert.match(await live.locator('[data-live-backing]').textContent(),/5\.123456789012345678/);
+ const layout=await page.evaluate(()=>{
+  const live=document.querySelector('.trading-live'),robot=live.querySelector('.trading-live-robot').getBoundingClientRect(),screen=live.querySelector('.trading-live-screen').getBoundingClientRect(),fields=[...document.querySelectorAll('.trading-instructions-grid textarea')].map(element=>{const b=element.getBoundingClientRect();return {left:b.left,right:b.right,top:b.top,bottom:b.bottom,width:element.clientWidth,scroll:element.scrollWidth};});
+  return {page:document.documentElement.scrollWidth,viewport:document.documentElement.clientWidth,liveWidth:live.clientWidth,liveScroll:live.scrollWidth,robot:{left:robot.left,right:robot.right,top:robot.top,bottom:robot.bottom},screen:{left:screen.left,right:screen.right,top:screen.top,bottom:screen.bottom},fields};
+ });
+ assert.ok(layout.page<=layout.viewport,'live execution tables and instruction columns must not widen the document');assert.ok(layout.liveScroll<=layout.liveWidth+1,'the live screen must contain its market and audit data');
+ if(width>1000){assert.ok(layout.robot.right<=layout.screen.left,'the interactive robot belongs to the left of the market screen');assert.ok(layout.fields[0].right<=layout.fields[1].left,'INDEX and robot instruction fields must form two columns');}
+ else{assert.ok(layout.robot.bottom<=layout.screen.top,'the live view must stack on smaller screens');assert.ok(layout.fields[0].bottom<=layout.fields[1].top,'instruction fields must stack without overlap');}
+ await live.locator('.trading-live-workspace').screenshot({path:'test-results/crypto-live-trader-'+width+'.png'});
+ await instructions.screenshot({path:'test-results/crypto-trader-instructions-'+width+'.png'});
+ await live.locator('[data-live-liquidity]').screenshot({path:'test-results/crypto-security-backing-'+width+'.png'});assert.equal(backingReads,1,'background market refresh must not repeat the explicit chain audit');
+ const field=instructions.getByRole('textbox',{name:'Execution instructions',exact:true}),updated=JSON.parse(await field.inputValue());updated.maxNotional='75.123456789';updated.notes='Review recorded executions and fees.';await field.fill(JSON.stringify(updated,null,2));
+ await instructions.getByRole('button',{name:'Save robot instructions',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('[data-robot-instruction-version]')?.textContent==='Version 2');
+ assert.equal(await page.getByRole('button',{name:'Start live trading',exact:true}).isDisabled(),true,'saved instruction changes must close the replay gate');
+ const writes=calls.slice(mark);assert.equal(writes.length,1);assert.equal(writes[0].url,'/api/crypto/trading/robot-instructions');assert.equal(writes[0].body.robotId,robotId);assert.equal(writes[0].body.expectedVersion,1);assert.equal(JSON.parse(writes[0].body.instructions).maxNotional,'75.123456789');assert.match(writes[0].key,/^[a-f0-9-]{36}$/i);
+ assert.equal(await page.locator('dialog[open]').count(),0);await page.emulateMedia({reducedMotion:'no-preference'});
+}
+
 for(const width of [2560,1440,834,390])test('real banking shell fits crypto scrollers, asset details and receiving receipt at '+width,async()=>{
  const page=await browser.newPage({viewport:{width,height:1000}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
@@ -230,7 +277,7 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   await page.getByRole('heading',{name:'AVISPay PLC · Asset contents & conversion'}).waitFor();
   await page.getByRole('textbox',{name:'Analysis instructions',exact:true}).waitFor();
   await page.waitForFunction(()=>document.querySelector('[data-run-test]')?.disabled===false);
-  assert.equal(await page.locator('textarea[name=instructions]').count(),1);
+  assert.equal(await page.locator('[data-index-policy] textarea[name=instructions]').count(),1);assert.equal(await page.locator('[data-robot-instruction-form] textarea[name=instructions]').count(),1);
   assert.equal(await page.locator('[data-security]').count(),10);
   assert.equal(await page.locator('[data-markets] .crypto-market').count(),100);
   assert.equal(await page.locator('.crypto-currency-row').count(),200);
@@ -284,6 +331,7 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   await verifyGroupedCurrency(page,width);
   await verifyCurrencyActivation(page,width);
   await verifyTradingTests(page,width);
+  await verifyLiveTrading(page,width);
   await page.locator('[data-security]').first().click();
   await page.getByRole('button',{name:'Convert demo security',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-security-detail] h3')?.textContent.includes('AVISPay'));

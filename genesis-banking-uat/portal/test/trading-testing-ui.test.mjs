@@ -25,6 +25,7 @@ async function upload(host,value=dataset,options={}){const input=formAt(host).el
 function panelApi(state,calls,custom=async()=>undefined){return async(path,input,key)=>{
  calls.push({path,input,key});const response=await custom(path,input,key);if(response!==undefined)return response;
  if(path==='crypto/trading/testing')return copy(state.value);
+ if(path.startsWith('crypto/trading/live'))return {schemaVersion:1,observedAt:NOW,profiles:[],selectedRobotId:null,market:null,audit:null,liquidity:null};
  if(path==='crypto/trading/index-policy')return {policyVersion:1,instructions:'Use exact evidence.',taxonomy:[]};
  if(path==='views/tradingengine')return {rows:[{ready:true,startedAt:NOW}]};
  if(path==='views/tradingrobots')return {rows:[{robot_id:ROBOT,name:'Treasury W-effect',venue:'AVIS',symbol:'aAVISP',enabled:false},{robot_id:PAUSED,name:'Existing active robot',venue:'AVIS',symbol:'AG',enabled:true}]};
