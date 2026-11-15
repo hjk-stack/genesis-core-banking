@@ -7,7 +7,9 @@ import pg from 'pg';
 import {fault,text} from './src/core.mjs';
 import {migrate} from './src/migrate.mjs';
 import {FxBankingServer} from './src/fx.mjs';
-import {SecuritiesPortfolio} from './src/securities-portfolio.mjs';
+import {TradingRobotCore,ROBOT_MESSAGES} from './src/trading-robot.mjs';
+import {TradingRuntime} from './src/trading/runtime.mjs';
+import {CRYPTO_MESSAGES} from './src/crypto-workspace.mjs';
 import {CustomerAccess} from './src/customer-access.mjs';
 import {processAvis8583} from './src/pos-switch.mjs';
 import {authenticateMessage,connectorCredentials,dispatchPayment,recoverPaymentDeliveries} from './src/payment-transport.mjs';
@@ -30,7 +32,7 @@ export async function authenticateFineract(username,password,baseUrl,fetcher=fet
  if(account.authenticated!==true||account.isTwoFactorAuthenticationRequired===true||!/^\d+$/.test(String(account.userId||'')))fault('OPERATOR_ACCESS_REQUIRED','username',403);
  return {id:'fineract:'+account.userId,username:account.username||username,admin:account.permissions?.includes('ALL_FUNCTIONS')===true};
 }
-const messages={
+const messages={...ROBOT_MESSAGES,...CRYPTO_MESSAGES,
  SECURITY_CATALOGUE_READ:'The Green Bond catalogue could not be refreshed. Try Refresh catalogue again.',
  SECURITY_TERMS_CHANGED:'The security denomination or currency changed. Select the security again.',
  SECURITY_NOT_FOUND:'Select a registered security.',POSITION_CHANGED:'This holding changed. Reopen it before saving.',
@@ -87,13 +89,13 @@ const messages={
  CSRF:'Refresh the page and submit again.',TOO_MANY_ATTEMPTS:'Please wait before trying to sign in again.'
 };
 export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={}}) {
- const core=new SecuritiesPortfolio(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map();
+ const core=new TradingRobotCore(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map();
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  return http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
   res.setHeader('X-Request-Id',requestId);res.setHeader('X-Content-Type-Options','nosniff');
   res.setHeader('Cache-Control','no-store');res.setHeader('Referrer-Policy','same-origin');
-  res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://assets.coingecko.com https://coin-images.coingecko.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   try {
    const url=new URL(req.url,'http://localhost'),path=url.pathname;
    if(req.method==='GET'&&path==='/healthz')return send(res,200,{status:'ok',release});
@@ -117,7 +119,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const reply=await buildPacs002({messageId:randomBytes(16).toString('hex'),uetr:original.uetr,senderBic:p.local_bic,receiverBic:p.peer_bic,status:receipt.status,bankReference:receipt.id.replaceAll('-','')});
     res.setHeader('content-type','application/xml');return res.end(reply);
    }
-   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/portfolio.mjs','/exchange-intent.mjs','/styles.css'].includes(path)){
+   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/portfolio.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/trading-panel.mjs','/crypto.css','/styles.css'].includes(path)){
     const file=path==='/'?'index.html':path==='/card-message'?'public/card-message.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     res.setHeader('content-type',(path==='/'||path==='/card-message')?'text/html; charset=utf-8':path.endsWith('css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8');return res.end(body);
@@ -175,6 +177,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(req.method==='GET'&&/^\/api\/backoffice-accounts\/[0-9a-f-]{36}\/statement$/.test(path))return send(res,200,await invoke('accountStatement',{accountId:path.split('/').at(-2),before:url.searchParams.get('before')}));
    if(req.method==='GET'&&/^\/api\/cards\/[0-9a-f-]{36}$/.test(path))return send(res,200,await invoke('managedCardDetails',{cardId:path.split('/').at(-1)}));
    if(req.method==='GET'&&/^\/api\/payment-requests\/[0-9a-f-]{36}$/.test(path))return send(res,200,await (actor.admin?core:customerAccess).paymentRequest(actor,path.split('/').at(-1)));
+   if(req.method==='GET'&&/^\/api\/crypto\/securities\/[0-9a-f-]{36}$/.test(path))return send(res,200,await invoke('cryptoSecurityDetails',{cardId:path.split('/').at(-1)}));
    if(req.method==='GET'&&path.startsWith('/api/views/'))return send(res,200,{rows:await (actor.admin?core:customerAccess).list(actor,path.split('/').at(-1))});
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
@@ -205,6 +208,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     cards:'registerCard',terminals:'registerTerminal','cards/authorize':'authorizeCard','cards/capture':'settleCard','cards/reverse':'settleCard'};
    routes['accounts/open']='openAccount';
    Object.assign(routes,{'portfolio/exchange-security':'resolveExchangeSecurity','portfolio/catalogue/sync':'syncSecurities','portfolio/securities':'addSecurity','portfolio/positions':'recordPosition','portfolio/orders/review':'reviewSecurityOrder','portfolio/orders/submit':'submitSecurityOrder','portfolio/orders/cancel':'cancelSecurityOrder'});
+   Object.assign(routes,{'crypto/trading/configure':'configureRobot','crypto/trading/toggle':'toggleRobot','crypto/approve':'approveCrypto','crypto/activate':'activateCrypto','crypto/wallet':'cryptoWallet','crypto/balance':'cryptoChainBalance','crypto/check-network':'checkCryptoNetwork','crypto/markets/refresh':'refreshCryptoMarkets','crypto/securities/demo-convert':'convertDemoSecurity','crypto/securities/prepare':'prepareRealSecurity','crypto/securities/package':'cryptoContractPackage','crypto/robot/channels':'createRollingChannel','crypto/actions/cancel':'cancelCryptoReview','crypto/actions/review':'prepareCryptoAction','crypto/actions/submit':'submitCryptoAction','crypto/actions/broadcast':'broadcastCryptoAction','crypto/actions/confirm':'confirmCryptoAction'});
    const action=path.slice(5),method=routes[action];if(!method)fault('NOT_FOUND',null,404);
    const result=await invoke(method,body,req.headers['idempotency-key'],action==='cards/reverse');
    if(action==='fx/execute'&&result.status==='EXPIRED')fault('FX_QUOTE_EXPIRED','quoteId',409);
@@ -223,6 +227,8 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  const client=await pool.connect();try{await migrate(client);}finally{client.release();}
  createBankServer({pool,authenticate:(u,p)=>authenticateFineract(u,p,process.env.FINERACT_URL),release:process.env.RELEASE_SHA||'local'})
   .listen(Number(process.env.PORT||8080),'0.0.0.0');
+ const robotCore=new TradingRobotCore(pool);let recoveringChain=false;const recoverChain=async()=>{if(recoveringChain)return;recoveringChain=true;try{const pending=(await pool.query("SELECT action_id,status,tx_hash FROM avis_core_v2.crypto_chain_actions WHERE status IN('SIGNED','SUBMITTED') ORDER BY created_at LIMIT 20")).rows;for(const a of pending){try{if(a.status==='SIGNED')await robotCore.broadcastCryptoAction({id:'system:chain-recovery',admin:true},{actionId:a.action_id});await robotCore.confirmCryptoAction({id:'system:chain-recovery',admin:true},{actionId:a.action_id},'confirm:'+a.tx_hash);}catch(e){console.error(JSON.stringify({operation:'CHAIN_RECOVERY',code:e.code||'CHAIN_RECEIPT'}));}}}finally{recoveringChain=false;}};void recoverChain();setInterval(recoverChain,15000).unref();const trading=new TradingRuntime(robotCore).start();
+ process.once('SIGTERM',()=>{void trading.stop();});
  const housekeeping=new FxBankingServer(pool);let expiring=false;
  let recovering=false;
  const recoverDeliveries=async()=>{if(recovering)return;recovering=true;try {

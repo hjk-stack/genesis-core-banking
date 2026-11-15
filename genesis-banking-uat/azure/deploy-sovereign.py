@@ -160,12 +160,20 @@ def main():
         # Existing administrator sign-in; read records only. Never create or fund test customers here.
         stage = 'administrator authentication'
         login = api(opener, base, '/api/login', {'username': 'mifos', 'password': secret('genesis-mifos-uat', 'admin-password')})
-        for view in ['accounts', 'accountsummaries', 'customers', 'issuer', 'ledger', 'backofficeaccounts', 'portfolio', 'securities', 'securitypositions', 'securityorders', 'exchangebook', 'cardaccounts', 'cryptoholdings', 'cryptooffers', 'transfercards', 'externalcards', 'codedcards', 'transferalerts', 'paymentregister', 'transferrequests', 'bankpayments', 'bankroutes', 'clearing', 'offlinegrants', 'fxrates', 'fxquotes', 'audit']:
+        for view in ['accounts', 'accountsummaries', 'customers', 'issuer', 'ledger', 'backofficeaccounts', 'portfolio', 'cryptocatalogue', 'cryptomarkets', 'cryptosecurities', 'cryptowallets', 'cryptonetworks', 'cryptorobots', 'cryptoactions', 'tradingrobots', 'robotorders', 'tradingengine', 'securities', 'securitypositions', 'securityorders', 'exchangebook', 'cardaccounts', 'cryptoholdings', 'cryptooffers', 'transfercards', 'externalcards', 'codedcards', 'transferalerts', 'paymentregister', 'transferrequests', 'bankpayments', 'bankroutes', 'clearing', 'offlinegrants', 'fxrates', 'fxquotes', 'audit']:
             stage = 'authenticated read ' + view
             result = api(opener, base, '/api/views/' + view)
             if not isinstance(result.get('rows'), list):
                 raise RuntimeError('Authenticated banking read failed')
         stage = 'ABIQ issuer and account verification'
+        catalogue = api(opener, base, '/api/views/cryptocatalogue')['rows']
+        securities = api(opener, base, '/api/views/cryptosecurities')['rows']
+        if len(catalogue) < 200 or len(securities) != 10 or securities[0]['symbol'] != 'aAVISP':
+            raise RuntimeError('Crypto catalogue or security scroller mismatch')
+        engine = api(opener, base, '/api/views/tradingengine')['rows'][0]
+        if not engine.get('ready') or engine.get('version') != '1.231.0':
+            raise RuntimeError('Nautilus trading process did not start')
+        print('Verified crypto catalogue, ten security wallets and running NautilusTrader 1.231.0')
         issuer = api(opener, base, '/api/views/issuer')['rows']
         if not any(row['abiq_code'] == 'AVIPTN64XXX' and row['country_code'] == 'TN' for row in issuer):
             raise RuntimeError('ABIQ issuer mismatch')
