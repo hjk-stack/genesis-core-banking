@@ -84,5 +84,13 @@ export function createPortfolio({api,getRows,data,refresh,notice,isAdmin}){
  async function viewOrder(id){const serial=++epoch,r=await api('portfolio/orders/'+id);if(serial!==epoch)return;mode='ORDER';busy=false;shell('Exchange order',`<form><div class="portfolio-fields"><div data-review></div><p>${esc(r.status==='FILLED'?'Executed':r.status==='OPEN'?'Open':'Cancelled')}${r.execution_reference?' · '+esc(r.execution_reference):''}</p></div><p class="payment-error" role="alert"></p><div class="payment-footer">${r.status==='OPEN'?'<button type="submit">Cancel order</button>':''}</div></form>`);showReview(r.instruction);const cancelKey=crypto.randomUUID();form().onsubmit=async e=>{e.preventDefault();if(busy||r.status!=='OPEN')return;setBusy(true);try{await api('portfolio/orders/cancel',{orderId:id},cancelKey);if(serial!==epoch)return;close();notice('Order cancelled; reservation released.');await refresh();}catch(e){if(serial===epoch)error(e);}finally{if(serial===epoch)setBusy(false);}};}
  function bind(root){root.querySelectorAll('[data-security-buy]').forEach(b=>b.onclick=()=>openTrade('BUY',b.dataset.securityBuy).catch(e=>notice(e.message)));root.querySelectorAll('[data-security-sell]').forEach(b=>b.onclick=()=>openTrade('SELL',b.dataset.securitySell,b.dataset.holder).catch(e=>notice(e.message)));root.querySelectorAll('[data-position]').forEach(b=>b.onclick=()=>openRecord(b.dataset.position).catch(e=>notice(e.message)));root.querySelectorAll('[data-security-order]').forEach(b=>b.onclick=()=>viewOrder(b.dataset.securityOrder).catch(e=>notice(e.message)));root.querySelectorAll('[data-book-security]').forEach(b=>b.onclick=()=>openTrade(b.dataset.side,b.dataset.bookSecurity,null,{quantity:b.dataset.quantity,price:b.dataset.price}).catch(e=>notice(e.message)));}
  async function open(action){if(action==='syncsecurities'){await api('portfolio/catalogue/sync',{});notice('Green Bond catalogue refreshed.');await refresh();return;}if(action==='recordsecurity')return openRecord();return openTrade(action==='sellsecurity'?'SELL':'BUY');}
- return {close,open,bind};
+ async function fromExchange(intent){
+  const serial=++epoch,r=await api('portfolio/exchange-security',{symbol:intent.symbol});if(serial!==epoch)return;
+  await openTrade(intent.side,r.id,null,{...(intent.quantity?{quantity:intent.quantity}:{}),...(intent.price?{price:intent.price}:{}),reference:(intent.side==='BUY'?'Buy ':'Sell ')+intent.symbol});
+ }
+ function pendingIntent(){
+  const s=mode==='TRADE'&&form()?security():null;if(!s?.exchange_symbol)return null;
+  return {side,symbol:s.exchange_symbol,...(els().quantity.value?{quantity:els().quantity.value}:{}),...(els().price.value?{price:els().price.value}:{})};
+ }
+ return {close,open,bind,fromExchange,pendingIntent};
 }

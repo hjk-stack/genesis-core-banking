@@ -108,7 +108,9 @@ test('reserved securities cannot be overwritten and a changed crypto quote canno
  const r=await review('BUY','2',{paymentMethod:'CRYPTO',accountId:own,offerId:offer.offer_id});await pool.query('UPDATE avis_core_v2.crypto_sale_offers SET unit_price=3 WHERE offer_id=$1',[offer.offer_id]);await assert.rejects(submit(r),/CRYPTO_PRICE_CHANGED/);
 });
 test('customer HTTP boundary permits own orders and denies other holdings, catalogue edits and other order details',async()=>{
- await core.bindCustomerLogin(admin,{fineractUserId:'101',userId:'2'},key());server=createBankServer({pool,secureCookies:false,authenticate:async()=>({id:'fineract:101',username:'fixture',admin:false})});await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port;
+ await core.bindCustomerLogin(admin,{fineractUserId:'101',userId:'2'},key());server=createBankServer({pool,secureCookies:false,transferOptions:{readCatalogue:core.readCatalogue},authenticate:async()=>({id:'fineract:101',username:'fixture',admin:false})});await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port;
+ assert.equal((await fetch(base+'/api/portfolio/exchange-security',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({symbol:'REGRESSION'})})).status,401);
+ const publicBook=await fetch(base+'/api/exchange/markets/REGRESSION');assert.equal(publicBook.status,200);assert.equal((await publicBook.json()).symbol,'REGRESSION');
  const response=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:'fixture',password:'fixture'})}),session=await response.json(),headers={cookie:response.headers.get('set-cookie').split(';')[0],origin:base,'content-type':'application/json','x-csrf-token':session.csrf};
  const call=async(path,body)=>{const r=await fetch(base+'/api/'+path,{headers:{...headers,'idempotency-key':key()},method:body===undefined?'GET':'POST',...(body===undefined?{}:{body:JSON.stringify(body)})});return {status:r.status,body:await r.json()};};
  for(const path of ['portfolio/securities','portfolio/positions','portfolio/catalogue/sync'])assert.equal((await call(path,{})).status,403);
@@ -122,4 +124,18 @@ test('PostgreSQL concurrent submissions cannot sell the same units or debit a re
  const results=await Promise.all([core.submitSecurityOrder(admin,payload,key()),core.submitSecurityOrder(admin,payload,key())]);
  assert.ok(results.every(r=>r.status==='FILLED'));assert.equal(Number(await balance(source('2').account_id)),before-980);
  assert.equal((await pool.query('SELECT count(*)::int AS count FROM avis_core_v2.portfolio_movements WHERE order_id=$1',[buyer.id])).rows[0].count,1);
+});
+test('exchange resolves published securities for an authenticated holder without booking supply or funds',async()=>{
+ const before=await core.list(admin,'accountsummaries'),positions=await core.list(admin,'securitypositions');
+ const result=await new CustomerAccess(core).invoke(customer,'resolveExchangeSecurity',{symbol:'REGRESSION'},key());assert.equal(result.id,securityId);
+ assert.deepEqual(await core.list(admin,'accountsummaries'),before);assert.deepEqual(await core.list(admin,'securitypositions'),positions);
+ await assert.rejects(new CustomerAccess(core).invoke(customer,'resolveExchangeSecurity',{symbol:'PRIVATE'},key()),/SECURITY_NOT_FOUND/);
+});
+test('the public exchange reflects the same open orders, fills and cancellation without customer details',async()=>{
+ const r=await review('BUY','2',{quantity:'2',price:'90',total:'1800'});await submit(r);
+ const book=await core.publicExchangeMarket('REGRESSION');assert.ok(book.offers.some(o=>o.side==='BUY'&&Number(o.quantity)===2&&Number(o.price)===90));
+ assert.ok(book.trades.length>0);for(const o of book.offers)assert.deepEqual(Object.keys(o).sort(),['orders','price','quantity','side']);for(const t of book.trades)assert.deepEqual(Object.keys(t).sort(),['executed_at','price','quantity']);
+ await cancel(r.id);assert.ok(!(await core.publicExchangeMarket('REGRESSION')).offers.some(o=>o.side==='BUY'&&Number(o.price)===90));
+ const saved=core.readCatalogue;core.catalogueCache=null;core.readCatalogue=async()=>[];await assert.rejects(core.publicExchangeMarket('REGRESSION'),/SECURITY_NOT_FOUND/);core.readCatalogue=saved;core.catalogueCache=null;
+ const c=await core.addSecurity(admin,{name:'Private fund',shortName:'PRIVATE',currency:'EUR',denomination:'1',quoteBasis:'UNIT',kind:'fund'},key());assert.ok(c.id);await assert.rejects(core.publicExchangeMarket('PRIVATE'),/SECURITY_NOT_FOUND/);
 });

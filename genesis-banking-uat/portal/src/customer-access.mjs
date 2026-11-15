@@ -31,7 +31,7 @@ export class CustomerAccess {
   else if(['addCurrencies','saveCustomerProfile'].includes(method)){if(String(input.userId)!==String(actor.customerUserId))fault('FORBIDDEN','userId',403);}
   else if(method==='redeemCode')await this.ownsBank(actor,input.to,input.currency);
   else if(['accountDetails','movementDetails'].includes(method))await this.owns(actor,'ledger_accounts',input.accountId);
-  else if(!['checkReceiver'].includes(method))fault('FORBIDDEN',null,403);
+  else if(!['checkReceiver','resolveExchangeSecurity'].includes(method))fault('FORBIDDEN',null,403);
   return this.core[method](operator,input,key,...extra);
  }
  async paymentRequest(actor,id){await this.ownsRequest(actor,id);return this.core.paymentRequest(this.operator(actor),id);}

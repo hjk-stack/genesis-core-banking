@@ -47,17 +47,46 @@ const positionSelect=`SELECT p.position_id,p.user_id,u.full_name,s.security_id,s
 
 export class SecuritiesPortfolio extends AccountManagement {
  constructor(pool,options={}){super(pool,options);this.readCatalogue=options.readCatalogue||greenBondCatalogue;}
+ async upsertSecurity(db,s,actorId){
+  await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",['catalogue:'+s.symbol]);
+    const old=(await db.query('SELECT * FROM avis_core_v2.portfolio_securities WHERE exchange_symbol=$1 OR (isin IS NOT NULL AND isin=$2) FOR UPDATE',[s.symbol,s.isin])).rows[0];
+    if(old){
+     if(old.currency_code!==s.currency||money(old.denomination)!==money(s.denomination)||old.quote_basis!==s.quoteBasis||old.quantity_decimals!==s.quantityDecimals||(old.isin&&s.isin&&old.isin!==s.isin))fault('SECURITY_TERMS_CHANGED','securityId',409);
+     await db.query(`UPDATE avis_core_v2.portfolio_securities SET name=$2,short_name=$3,cusip=COALESCE($4,cusip),exchange_symbol=$5,source='GREEN_BOND',reference_price=$6,source_updated_at=now() WHERE security_id=$1`,[old.security_id,s.name,s.shortName,s.cusip,s.symbol,s.referencePrice]);
+    }else await db.query(`INSERT INTO avis_core_v2.portfolio_securities(name,short_name,currency_code,isin,cusip,denomination,quote_basis,kind,source,exchange_symbol,reference_price,source_updated_at,created_by,quantity_decimals) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'GREEN_BOND',$9,$10,now(),$11,$12)`,[s.name,s.shortName,s.currency,s.isin,s.cusip,s.denomination,s.quoteBasis,s.kind,s.symbol,s.referencePrice,actorId,s.quantityDecimals]);
+  return (await db.query(securitySelect+' WHERE exchange_symbol=$1',[s.symbol])).rows[0];
+ }
+ async publishedSecurity(symbol){
+  if(typeof symbol!=='string'||! /^[A-Z0-9._-]{1,80}$/.test(symbol))fault('INVALID_FIELD','symbol');
+  if(!this.catalogueCache||Date.now()-this.catalogueCache.at>5000){
+   if(!this.cataloguePending)this.cataloguePending=this.readCatalogue().then(rows=>{this.catalogueCache={at:Date.now(),rows};return rows;}).finally(()=>{this.cataloguePending=null;});
+   await this.cataloguePending;
+  }
+  const published=this.catalogueCache.rows.find(s=>s.symbol===symbol||s.isin===symbol);
+  if(!published)fault('SECURITY_NOT_FOUND','symbol',404);return published;
+ }
+ async resolveExchangeSecurity(actor,input,key){
+  const symbol=text(input.symbol,'symbol',80).toUpperCase();
+  return this.operation(actor,'RESOLVE_EXCHANGE_SECURITY',{symbol},key,async db=>{
+   const s=await this.publishedSecurity(symbol),registered=await this.upsertSecurity(db,s,actor.id);
+   return {id:registered.security_id,symbol:s.symbol};
+  });
+ }
+ async publicExchangeMarket(symbol){
+  const published=await this.publishedSecurity(symbol);
+  const s=(await this.pool.query(securitySelect+" WHERE exchange_symbol=$1 AND source='GREEN_BOND'",[published.symbol])).rows[0];
+  const offers=s?(await this.pool.query(`SELECT side,price::text,quantity::text,count(*)::int AS orders FROM avis_core_v2.securities_orders WHERE security_id=$1 AND status='OPEN' GROUP BY side,price,quantity ORDER BY side,price,quantity LIMIT 200`,[s.security_id])).rows:[];
+  // One BUY row per settled pair; no customer, order, journal or account identifiers.
+  const trades=s?(await this.pool.query(`SELECT price::text,quantity::text,executed_at FROM avis_core_v2.securities_orders WHERE security_id=$1 AND status='FILLED' AND side='BUY' ORDER BY executed_at DESC LIMIT 100`,[s.security_id])).rows:[];
+  return {symbol:published.symbol,currency:published.currency,quoteBasis:published.quoteBasis,denomination:published.denomination,offers,trades};
+ }
  async syncSecurities(actor,input,key){
   actualAdmin(actor);
   return this.operation(actor,'SYNC_SECURITIES_CATALOGUE',{},key,async db=>{
    const rows=await this.readCatalogue();
    let imported=0;
    for(const s of rows){
-    const old=(await db.query('SELECT * FROM avis_core_v2.portfolio_securities WHERE exchange_symbol=$1 OR (isin IS NOT NULL AND isin=$2) FOR UPDATE',[s.symbol,s.isin])).rows[0];
-    if(old){
-     if(old.currency_code!==s.currency||money(old.denomination)!==money(s.denomination)||old.quote_basis!==s.quoteBasis||old.quantity_decimals!==s.quantityDecimals||(old.isin&&s.isin&&old.isin!==s.isin))fault('SECURITY_TERMS_CHANGED','securityId',409);
-     await db.query(`UPDATE avis_core_v2.portfolio_securities SET name=$2,short_name=$3,cusip=COALESCE($4,cusip),exchange_symbol=$5,source='GREEN_BOND',reference_price=$6,source_updated_at=now() WHERE security_id=$1`,[old.security_id,s.name,s.shortName,s.cusip,s.symbol,s.referencePrice]);
-    }else await db.query(`INSERT INTO avis_core_v2.portfolio_securities(name,short_name,currency_code,isin,cusip,denomination,quote_basis,kind,source,exchange_symbol,reference_price,source_updated_at,created_by,quantity_decimals) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'GREEN_BOND',$9,$10,now(),$11,$12)`,[s.name,s.shortName,s.currency,s.isin,s.cusip,s.denomination,s.quoteBasis,s.kind,s.symbol,s.referencePrice,actor.id,s.quantityDecimals]);
+    await this.upsertSecurity(db,s,actor.id);
     imported++;
    }
    return {imported,source:'https://avis.land/api/xchg/markets'};
