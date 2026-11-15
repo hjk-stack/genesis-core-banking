@@ -54,3 +54,24 @@ class OpeningConsoleTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class ExistingProviderSettingsTests(unittest.TestCase):
+    def test_only_named_existing_crypto_settings_are_copied_and_current_values_win(self):
+        settings=[{'name':'COINAPI_EMS_API_KEY','value':'fixture-ems'},
+                  {'name':'ALCHEMY_API_KEY','value':'fixture-existing'},
+                  {'name':'PGPASSWORD','value':'never-copy'},
+                  {'name':'COINAPI_API_KEY','value':'@Microsoft.KeyVault(SecretUri=fixture)'}]
+        calls=[]
+        def azure(*args):
+            calls.append(args)
+            return settings if args[0]=='webapp' else None
+        with patch.object(deploy,'az',side_effect=azure),contextlib.redirect_stdout(io.StringIO()) as output:
+            result=deploy.existing_crypto_settings([{'name':'ALCHEMY_API_KEY','secretRef':'keep-this'}])
+        self.assertEqual(result,['COINAPI_EMS_API_KEY=secretref:avispay-provider-coinapi-ems-api-key'])
+        self.assertEqual(len(calls),2)
+        self.assertNotIn('fixture-ems',output.getvalue())
+        self.assertNotIn('never-copy',str(calls))
+
+    def test_read_failure_does_not_replace_current_configuration(self):
+        with patch.object(deploy,'az',side_effect=RuntimeError('access')),contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(deploy.existing_crypto_settings([]),[])

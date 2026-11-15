@@ -96,6 +96,39 @@ def apply_authorized_opening(revision, container):
                 process.wait()
         os.close(master)
 
+def existing_crypto_settings(current_env):
+    """Reuse only named crypto connectors from the existing AVIS application.
+
+    Values never leave Azure/GitHub's deployment process or appear in output.
+    Existing UAT configuration always takes precedence.
+    """
+    names = {'COINAPI_EMS_API_KEY', 'COINAPI_NAAS_API_KEY', 'COINAPI_API_KEY',
+             'APIBRICKS_COINAPI_KEY', 'ALCHEMY_API_KEY', 'CRYPTO_RPC_ETHEREUM',
+             'TRONGRID_API_KEY', 'COINGECKO_API_KEY'}
+    missing = names - {item['name'] for item in current_env}
+    if not missing:
+        return []
+    try:
+        settings = az('webapp', 'config', 'appsettings', 'list', '-g',
+                      'genesis-email-automation-rg', '-n', 'genesis-email-bd74cf8')
+    except RuntimeError:
+        print('Existing AVIS provider settings could not be read; preserving UAT connector configuration')
+        return []
+    result = []
+    for item in settings:
+        if item.get('name') not in missing or not item.get('value'):
+            continue
+        # Key Vault references require their own configured identity; never store a reference as an API key.
+        if item['value'].startswith('@Microsoft.KeyVault('):
+            continue
+        name = 'avispay-provider-' + item['name'].lower().replace('_', '-')
+        az('containerapp', 'secret', 'set', '-g', RG, '-n', APP,
+           '--secrets', name + '=' + item['value'])
+        result.append(item['name'] + '=secretref:' + name)
+    print('Reused existing AVIS crypto connector settings: ' + str(len(result)))
+    return result
+
+
 def main():
     sha = os.environ['GITHUB_SHA']
     image = os.environ['AVISPAY_IMAGE']
@@ -129,6 +162,7 @@ def main():
     env = [f'PGHOST={pg_host}', 'PGPORT=5432', f'PGUSER={pg_user}', f'PGDATABASE={database}',
            'PGPASSWORD=secretref:avispay-db-password', 'FINERACT_URL=http://genesis-fineract-uat',
            'AVIS_OFFLINE_SIGNING_KEY=secretref:avispay-offline-key', f'PORT={port}', f'RELEASE_SHA={sha}']
+    env += existing_crypto_settings(containers[0].get('env', []))
     stage = 'application update'
     try:
         az('containerapp', 'update', '-g', RG, '-n', APP, '--image', image,
@@ -160,12 +194,23 @@ def main():
         # Existing administrator sign-in; read records only. Never create or fund test customers here.
         stage = 'administrator authentication'
         login = api(opener, base, '/api/login', {'username': 'mifos', 'password': secret('genesis-mifos-uat', 'admin-password')})
-        for view in ['accounts', 'accountsummaries', 'customers', 'issuer', 'ledger', 'backofficeaccounts', 'portfolio', 'securities', 'securitypositions', 'securityorders', 'exchangebook', 'cardaccounts', 'cryptoholdings', 'cryptooffers', 'transfercards', 'externalcards', 'codedcards', 'transferalerts', 'paymentregister', 'transferrequests', 'bankpayments', 'bankroutes', 'clearing', 'offlinegrants', 'fxrates', 'fxquotes', 'audit']:
+        for view in ['accounts', 'accountsummaries', 'customers', 'issuer', 'ledger', 'backofficeaccounts', 'portfolio', 'cryptocatalogue', 'cryptomarkets', 'cryptosecurities', 'cryptowallets', 'cryptonetworks', 'cryptorobots', 'cryptoactions', 'tradingrobots', 'robotorders', 'tradingengine', 'securities', 'securitypositions', 'securityorders', 'exchangebook', 'cardaccounts', 'cryptoholdings', 'cryptooffers', 'transfercards', 'externalcards', 'codedcards', 'transferalerts', 'paymentregister', 'transferrequests', 'bankpayments', 'bankroutes', 'clearing', 'offlinegrants', 'fxrates', 'fxquotes', 'audit']:
             stage = 'authenticated read ' + view
             result = api(opener, base, '/api/views/' + view)
             if not isinstance(result.get('rows'), list):
                 raise RuntimeError('Authenticated banking read failed')
         stage = 'ABIQ issuer and account verification'
+        catalogue = api(opener, base, '/api/views/cryptocatalogue')['rows']
+        securities = api(opener, base, '/api/views/cryptosecurities')['rows']
+        if len(catalogue) < 200 or len(securities) != 10 or securities[0]['symbol'] != 'aAVISP':
+            raise RuntimeError('Crypto catalogue or security scroller mismatch')
+        engine = api(opener, base, '/api/views/tradingengine')['rows'][0]
+        if not engine.get('ready') or engine.get('version') != '1.231.0':
+            raise RuntimeError('Nautilus trading process did not start')
+        print('Verified crypto catalogue, ten security wallets and running NautilusTrader 1.231.0')
+        providers = api(opener, base, '/api/crypto/trading/validate-providers', {}, login['csrf'])['providers']
+        for provider in providers:
+            print('Provider validation: ' + provider['provider'] + '; configured=' + str(provider['configured']) + '; verified=' + str(provider['verified']))
         issuer = api(opener, base, '/api/views/issuer')['rows']
         if not any(row['abiq_code'] == 'AVIPTN64XXX' and row['country_code'] == 'TN' for row in issuer):
             raise RuntimeError('ABIQ issuer mismatch')

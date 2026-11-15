@@ -123,7 +123,7 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
   }catch(e){error(e);}finally{setBusy(false);}
  }
  function close(){opened=false;lookupSeq++;clearTimeout(lookupTimer);dialog.close();dialog.replaceChildren();}
- function open(){
+ function open(initial={}){
   opened=true;step=0;review=null;reviewKey='';externalKey='';transferKey=crypto.randomUUID();receiverKey='';busy=false;
   dialog.innerHTML=`<div class="payment-heading"><div><h2 id="payment-title">Register a payment</h2></div><button type="button" class="payment-close" aria-label="Close payment">×</button></div>
    <ol class="payment-progress">${names.map((name,i)=>`<li><span>${i+1}</span><small>${name}</small></li>`).join('')}</ol><p class="step-caption" aria-live="polite"></p>
@@ -182,5 +182,6 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
   q('form').onsubmit=e=>e.preventDefault();
  }
  function reviewPrepared(r){open();review=r;transferKey=crypto.randomUUID();reviewDisplay(r);show(4);q('[data-back]').hidden=true;}
- return {open,view,close,reviewPrepared};
+ function fromCrypto(accountId){open();els().method.value='CRYPTO';syncMode();els().cryptoAccount.value=accountId;els().cryptoDestination.value='EXTERNAL';syncMode();}
+ return {open,view,close,reviewPrepared,fromCrypto};
 }
