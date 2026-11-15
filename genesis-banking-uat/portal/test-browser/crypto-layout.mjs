@@ -175,7 +175,7 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   });
   await page.goto(base);
   await page.getByRole('heading',{name:'AVISPay PLC · Asset contents & conversion'}).waitFor();
-  await page.getByRole('heading',{name:'INDEX AI instructions',exact:true}).waitFor();
+  await page.getByRole('textbox',{name:'Analysis instructions',exact:true}).waitFor();
   assert.equal(await page.locator('textarea[name=instructions]').count(),1);
   assert.equal(await page.locator('[data-security]').count(),10);
   assert.equal(await page.locator('[data-markets] .crypto-market').count(),100);
