@@ -37,7 +37,7 @@ export async function greenBondCatalogue(fetcher=fetch){
  // The exchange publication filter is authoritative. Do not read its private databank.
  return feed.markets.filter(s=>['bond','note','cd','share','fund'].includes(s.kind)&&s.status==='listed').map(s=>({
   ...securityMetadata({name:s.name,shortName:s.shortName||s.name,currency:s.currency,denomination:String(s.nominal||'1'),quoteBasis:['bond','note','cd'].includes(s.kind)?'PERCENT':'UNIT',quantityDecimals:s.decimals||0,isin:s.isin,cusip:s.cusip,kind:s.kind}),
-  symbol:text(s.symbol,'symbol',80),referencePrice:decimal(money(String(s.last||s.refPrice)))
+  symbol:text(s.symbol,'symbol',80).toUpperCase(),referencePrice:decimal(money(String(s.last||s.refPrice)))
  }));
 }
 const securitySelect=`SELECT security_id,name,short_name,currency_code,isin,cusip,denomination::text,quote_basis,quantity_decimals,kind,source,exchange_symbol,reference_price::text,source_updated_at FROM avis_core_v2.portfolio_securities`;
@@ -48,8 +48,9 @@ const positionSelect=`SELECT p.position_id,p.user_id,u.full_name,s.security_id,s
 export class SecuritiesPortfolio extends AccountManagement {
  constructor(pool,options={}){super(pool,options);this.readCatalogue=options.readCatalogue||greenBondCatalogue;}
  async upsertSecurity(db,s,actorId){
+  s={...s,symbol:String(s.symbol).toUpperCase()};
   await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",['catalogue:'+s.symbol]);
-    const old=(await db.query('SELECT * FROM avis_core_v2.portfolio_securities WHERE exchange_symbol=$1 OR (isin IS NOT NULL AND isin=$2) FOR UPDATE',[s.symbol,s.isin])).rows[0];
+    const old=(await db.query('SELECT * FROM avis_core_v2.portfolio_securities WHERE upper(exchange_symbol)=$1 OR (isin IS NOT NULL AND isin=$2) FOR UPDATE',[s.symbol,s.isin])).rows[0];
     if(old){
      if(old.currency_code!==s.currency||money(old.denomination)!==money(s.denomination)||old.quote_basis!==s.quoteBasis||old.quantity_decimals!==s.quantityDecimals||(old.isin&&s.isin&&old.isin!==s.isin))fault('SECURITY_TERMS_CHANGED','securityId',409);
      await db.query(`UPDATE avis_core_v2.portfolio_securities SET name=$2,short_name=$3,cusip=COALESCE($4,cusip),exchange_symbol=$5,source='GREEN_BOND',reference_price=$6,source_updated_at=now() WHERE security_id=$1`,[old.security_id,s.name,s.shortName,s.cusip,s.symbol,s.referencePrice]);
@@ -59,7 +60,7 @@ export class SecuritiesPortfolio extends AccountManagement {
  async publishedSecurity(symbol){
   if(typeof symbol!=='string'||! /^[A-Z0-9._-]{1,80}$/.test(symbol))fault('INVALID_FIELD','symbol');
   if(!this.catalogueCache||Date.now()-this.catalogueCache.at>5000){
-   if(!this.cataloguePending)this.cataloguePending=this.readCatalogue().then(rows=>{this.catalogueCache={at:Date.now(),rows};return rows;}).finally(()=>{this.cataloguePending=null;});
+   if(!this.cataloguePending)this.cataloguePending=this.readCatalogue().then(rows=>{rows=rows.map(s=>({...s,symbol:String(s.symbol).toUpperCase()}));this.catalogueCache={at:Date.now(),rows};return rows;}).finally(()=>{this.cataloguePending=null;});
    await this.cataloguePending;
   }
   const published=this.catalogueCache.rows.find(s=>s.symbol===symbol||s.isin===symbol);
@@ -74,7 +75,7 @@ export class SecuritiesPortfolio extends AccountManagement {
  }
  async publicExchangeMarket(symbol){
   const published=await this.publishedSecurity(symbol);
-  const s=(await this.pool.query(securitySelect+" WHERE exchange_symbol=$1 AND source='GREEN_BOND'",[published.symbol])).rows[0];
+  const s=(await this.pool.query(securitySelect+" WHERE upper(exchange_symbol)=$1 AND source='GREEN_BOND'",[published.symbol])).rows[0];
   const offers=s?(await this.pool.query(`SELECT side,price::text,quantity::text,count(*)::int AS orders FROM avis_core_v2.securities_orders WHERE security_id=$1 AND status='OPEN' GROUP BY side,price,quantity ORDER BY side,price,quantity LIMIT 200`,[s.security_id])).rows:[];
   // One BUY row per settled pair; no customer, order, journal or account identifiers.
   const trades=s?(await this.pool.query(`SELECT price::text,quantity::text,executed_at FROM avis_core_v2.securities_orders WHERE security_id=$1 AND status='FILLED' AND side='BUY' ORDER BY executed_at DESC LIMIT 100`,[s.security_id])).rows:[];

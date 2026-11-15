@@ -35,8 +35,8 @@ test('precise valuation, metadata check digits and public Green Bond mapping',as
  assert.equal(securityValue('100000','1000','100','PERCENT','USD'),'100000000.000000000000000000');
  assert.throws(()=>securityMetadata({...meta,isin:'US0378331004'}),/INVALID_FIELD/);
  assert.throws(()=>securityMetadata({...meta,cusip:'037833101'}),/INVALID_FIELD/);
- const fixture={markets:[{symbol:'REG',name:meta.name,shortName:meta.shortName,kind:'bond',currency:'EUR',status:'listed',nominal:'1000',last:'98',isin:meta.isin,cusip:meta.cusip},{symbol:'PRIVATE',kind:'note',status:'draft'}]};
- const feed=await greenBondCatalogue(async(url,options)=>{assert.equal(url,'https://avis.land/api/xchg/markets');assert.equal(options.redirect,'error');return new Response(JSON.stringify(fixture));});assert.equal(feed.length,1);assert.equal(feed[0].quoteBasis,'PERCENT');assert.equal(feed[0].cusip,meta.cusip);
+ const fixture={markets:[{symbol:'rEg',name:meta.name,shortName:meta.shortName,kind:'bond',currency:'EUR',status:'listed',nominal:'1000',last:'98',isin:meta.isin,cusip:meta.cusip},{symbol:'PRIVATE',kind:'note',status:'draft'}]};
+ const feed=await greenBondCatalogue(async(url,options)=>{assert.equal(url,'https://avis.land/api/xchg/markets');assert.equal(options.redirect,'error');return new Response(JSON.stringify(fixture));});assert.equal(feed.length,1);assert.equal(feed[0].symbol,'REG');assert.equal(feed[0].quoteBasis,'PERCENT');assert.equal(feed[0].cusip,meta.cusip);
  await assert.rejects(greenBondCatalogue(async()=>new Response('{}')),/SECURITY_CATALOGUE_READ/);
 });
 test('catalogue import is idempotent and does not rewrite existing account data or book nominal supply',async()=>{
@@ -138,4 +138,13 @@ test('the public exchange reflects the same open orders, fills and cancellation 
  await cancel(r.id);assert.ok(!(await core.publicExchangeMarket('REGRESSION')).offers.some(o=>o.side==='BUY'&&Number(o.price)===90));
  const saved=core.readCatalogue;core.catalogueCache=null;core.readCatalogue=async()=>[];await assert.rejects(core.publicExchangeMarket('REGRESSION'),/SECURITY_NOT_FOUND/);core.readCatalogue=saved;core.catalogueCache=null;
  const c=await core.addSecurity(admin,{name:'Private fund',shortName:'PRIVATE',currency:'EUR',denomination:'1',quoteBasis:'UNIT',kind:'fund'},key());assert.ok(c.id);await assert.rejects(core.publicExchangeMarket('PRIVATE'),/SECURITY_NOT_FOUND/);
+});
+
+test('mixed-case catalogue and stored symbols resolve to the same security and public orders',async()=>{
+ const saved=core.readCatalogue;core.readCatalogue=async()=>[{...securityMetadata(meta),symbol:'Regression',referencePrice:'98'}];core.catalogueCache=null;
+ await pool.query('UPDATE avis_core_v2.portfolio_securities SET exchange_symbol=$1 WHERE security_id=$2',['Regression',securityId]);
+ const before=await core.publicExchangeMarket('REGRESSION');assert.equal(before.symbol,'REGRESSION');assert.ok(before.trades.length>0);
+ const resolved=await new CustomerAccess(core).invoke(customer,'resolveExchangeSecurity',{symbol:'regression'},key());assert.equal(resolved.id,securityId);assert.equal(resolved.symbol,'REGRESSION');
+ assert.equal((await pool.query('SELECT count(*)::int AS count FROM avis_core_v2.portfolio_securities WHERE upper(exchange_symbol)=$1',['REGRESSION'])).rows[0].count,1);
+ core.readCatalogue=saved;core.catalogueCache=null;
 });
