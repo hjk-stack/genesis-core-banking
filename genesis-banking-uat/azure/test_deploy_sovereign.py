@@ -209,5 +209,54 @@ class IndexAccessVerificationTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
 
+class TradingTestVerificationTests(unittest.TestCase):
+    def fixture(self, patch_run=None):
+        calls = []
+        run_id = '11111111-1111-4111-8111-111111111111'
+        fingerprint = 'a' * 64
+        run = {'runId': run_id, 'robotId': None, 'mode': 'ACCEPTANCE', 'status': 'PASSED',
+               'engineFingerprint': fingerprint, 'reviewEligible': False, 'reviewedAt': None,
+               'report': {'engine': 'NautilusTrader', 'engineVersion': '1.231.0',
+                          'status': 'PASSED', 'complete': True,
+                          'checks': [{'id': str(i), 'passed': True} for i in range(6)]}}
+        run.update(patch_run or {})
+
+        def request(client, base, path, body=None, csrf=None, idempotency_key=None):
+            calls.append((path, body, idempotency_key))
+            if path == '/api/crypto/trading/tests':
+                return {'runId': run_id, 'status': 'QUEUED'}
+            return {'engine': {'name': 'NautilusTrader', 'version': '1.231.0',
+                               'fingerprint': fingerprint}, 'profiles': [], 'runs': [run]}
+        return request, calls
+
+    def test_runs_only_isolated_acceptance_without_approving_or_starting_a_profile(self):
+        request, calls = self.fixture()
+        with patch.object(deploy, 'api', side_effect=request), contextlib.redirect_stdout(io.StringIO()) as output:
+            deploy.verify_trading_tests(object(), 'https://bank.example', 'csrf', 'b' * 40)
+        posts = [(path, body, key) for path, body, key in calls if body is not None]
+        self.assertEqual(posts, [('/api/crypto/trading/tests',
+                                 {'mode': 'ACCEPTANCE', 'initialCash': '10000', 'feeBps': 10, 'slippageBps': 5},
+                                 'release-trading-acceptance:' + 'b' * 40)])
+        self.assertIn('6 checks passed; no live trading approval', output.getvalue())
+
+    def test_rejects_any_reference_run_that_could_approve_live_trading(self):
+        for update in ({'reviewEligible': True}, {'robotId': '22222222-2222-4222-8222-222222222222'},
+                       {'reviewedAt': '2026-11-15T20:00:00Z'}):
+            with self.subTest(update=update):
+                request, _ = self.fixture(update)
+                with patch.object(deploy, 'api', side_effect=request):
+                    with self.assertRaisesRegex(RuntimeError, 'did not pass'):
+                        deploy.verify_trading_tests(object(), 'https://bank.example', 'csrf', 'b' * 40)
+
+    def test_rejects_failed_or_different_engine_results(self):
+        for update in ({'status': 'FAILED'}, {'engineFingerprint': 'c' * 64},
+                       {'report': {'status': 'PASSED', 'complete': True, 'checks': []}}):
+            with self.subTest(update=update):
+                request, _ = self.fixture(update)
+                with patch.object(deploy, 'api', side_effect=request):
+                    with self.assertRaisesRegex(RuntimeError, 'did not pass'):
+                        deploy.verify_trading_tests(object(), 'https://bank.example', 'csrf', 'b' * 40)
+
+
 if __name__ == '__main__':
     unittest.main()

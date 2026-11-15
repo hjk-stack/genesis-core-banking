@@ -25,6 +25,10 @@ const daiWallets=[
  holding('wallet-dai-polygon','DAI','asset-dai','Dai','POLYGON','3','0')
 ];
 let wallets=[];
+const robotId='10000000-0000-4000-8000-000000000001',configurationHash='a'.repeat(64);
+const replayDataset={ticks:[{tsMicros:1000000,bid:99,ask:100,bidSize:5,askSize:5,sellVolume:0},{tsMicros:2000000,bid:100,ask:101,bidSize:5,askSize:5,sellVolume:1}],indices:[]};
+let testRuns=[],testReads=0,reviewedRunId=null;
+const testReport=mode=>({schemaVersion:1,engine:'NautilusTrader',engineVersion:'1.231.0',mode,status:'PASSED',complete:true,checks:[{id:'round-trip',label:'Buy, sell and close the position',passed:true,detail:'Virtual orders are bounded by the saved profile and the position ends flat.'}],metrics:{initialCash:'10000',finalCash:'10001.123456789012345678',finalEquity:'10001.123456789012345678',realisedPnl:'1.123456789012345678',unrealisedPnl:'0',costBasis:'0',fees:'0.2',finalPosition:'0',drawdown:'0.1',drawdownFraction:'0.00001',filledOrders:2,buyFills:1,sellFills:1,ticksProcessed:250,indexObservationsUsed:1,ordersGenerated:2,rejectedOrders:0,partialFills:0,openOrders:0,duplicateSignalsIgnored:0},orders:[{id:'virtual-order-'+configurationHash,signalId:'signal-1',tsMicros:1000000,side:'BUY',requestedQuantity:'1',limitPrice:'100',filledQuantity:'1',status:'FILLED',reason:null,type:'LIMIT',timeInForce:'IOC'}],fills:[{orderId:'virtual-order-'+configurationHash,tsMicros:1000000,side:'BUY',quantity:'1',price:'100',notional:'100',fee:'0.1',cashAfter:'9899.9',positionAfter:'1'}],assumptions:{referenceSettings:{initialCash:'10000',feeBps:10,slippageBps:5}}});
 const cards=Array.from({length:10},(_,i)=>({card_id:'00000000-0000-4000-8000-'+String(i+1).padStart(12,'0'),sort_order:i+1,name:i?'Demo security '+(i+1):'AVISPay PLC',symbol:i?'DEMO'+i:'aAVISP',mode:'DEMO',state:'DRAFT',token_quantity:'0',dossier:{assetType:'STOCK',currency:'CHF',assetValue:'100000000',issuedVolume:'100000000',faceValue:'1',marginHaircutBps:1500,tradingFeeBps:10,source:'Example dossier'}}));
 const catalogue=Array.from({length:200},(_,i)=>({asset_id:'asset-'+i,currency_code:i?'COIN'+i:'AG',name:i?'Currency '+i:'AVIS Green',market_rank:i+1,market_data:{usd:'1',eur:'.9',chf:'.85',change24h:i%2?-2:3,observedAt:new Date().toISOString()},networks:[{network:'ETHEREUM',approved:i===0,verifiedAt:i===0?verifiedAt:null}]}));
 Object.assign(catalogue[1],{asset_id:'asset-usdc',currency_code:'USDC',name:'USD Coin',networks:[{network:'ETHEREUM',approved:true,verifiedAt},{network:'SOLANA',approved:true,verifiedAt},{network:'BSC',approved:false,verifiedAt}]});
@@ -42,18 +46,29 @@ before(async()=>{
  const html=(await readFile(new URL('../index.html',import.meta.url),'utf8')).replace('src="/app.mjs"','src="/fixture.mjs"');
  for(const address of Object.values(addresses))address.qr=await QRCode.toDataURL(address.public_address,{margin:2,width:256,errorCorrectionLevel:'M'});
  server=http.createServer(async(req,res)=>{
-  if(req.url==='/'){wallets=initialWallets.map(w=>({...w}));res.setHeader('content-type','text/html');return res.end(html);}
+  if(req.url==='/'){wallets=initialWallets.map(w=>({...w}));testRuns=[];testReads=0;reviewedRunId=null;res.setHeader('content-type','text/html');return res.end(html);}
   if(req.url==='/fixture.mjs'){res.setHeader('content-type','text/javascript');return res.end(fixtureScript);}
   const json=v=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(v));};
   if(req.url==='/api/crypto/trading/index-policy')return json({policyVersion:1,instructions:'Use official announcements and retain unknown values as null.',taxonomy:[{id:'EQ01',label:'Major contracts'}]});
+  if(req.url==='/api/crypto/trading/testing'){
+   if(testRuns.some(run=>run.status==='RUNNING')&&++testReads>=2)for(const run of testRuns.filter(run=>run.status==='RUNNING'))Object.assign(run,{status:'PASSED',completedAt:verifiedAt,report:testReport(run.mode),reviewEligible:run.mode==='REPLAY'&&!!run.robotId});
+   return json({engine:{name:'NautilusTrader',version:'1.231.0',fingerprint:configurationHash},profiles:[{robotId,name:'Treasury W-effect',venue:'AVIS',symbol:'aAVISP',configurationHash,reviewedRunId,testReviewed:!!reviewedRunId}],runs:testRuns,limits:{maxTicks:10000,maxIndices:10000,maxInputBytes:2097152,maxReportBytes:2097152}});
+  }
   if(req.url.startsWith('/api/views/'))return json({rows:({
    cryptocatalogue:catalogue,cryptomarkets:catalogue,cryptosecurities:cards,
    cryptowallets:wallets,
+   tradingrobots:[{robot_id:robotId,name:'Treasury W-effect',venue:'AVIS',symbol:'aAVISP',enabled:false,position_quantity:'0',cost_basis:'0',realized_pnl:'0',quote_asset:'CHF',stop_price:null,max_notional:'100',daily_notional:'1000'}],tradingengine:[{ready:true,startedAt:verifiedAt}],
    cryptonetworks:[{name:'Ethereum',code:'ETHEREUM',kind:'EVM'},{name:'Solana',code:'SOLANA',kind:'SOLANA'},{name:'Polygon',code:'POLYGON',kind:'EVM'},{name:'BNB Smart Chain',code:'BSC',kind:'EVM'}],customers:[{user_id:'1',full_name:'AVISPay PLC',account_role:'INSTITUTION'}]
   })[req.url.split('/').at(-1)]||[]});
   if(req.url.startsWith('/api/crypto/securities/000'))return json({...cards.find(c=>req.url.endsWith(c.card_id)),actions:[],sourceSpecification:'v3.0'});
   if(req.method==='POST'){
    let raw='';for await(const c of req)raw+=c;const body=JSON.parse(raw);calls.push({url:req.url,body,key:req.headers['idempotency-key']});
+   if(req.url==='/api/crypto/trading/tests'){
+    const runId='20000000-0000-4000-8000-'+String(testRuns.length+1).padStart(12,'0');testReads=0;testRuns.unshift({runId,robotId:body.robotId||null,profileName:body.robotId?'Treasury W-effect':null,mode:body.mode,status:'RUNNING',configurationHash,engineFingerprint:configurationHash,datasetHash:configurationHash,createdAt:verifiedAt,startedAt:verifiedAt,completedAt:null,report:null,errorCode:null,reviewEligible:false,reviewedAt:null});return json({runId,status:'QUEUED'});
+   }
+   if(req.url==='/api/crypto/trading/tests/review'){
+    const run=testRuns.find(run=>run.runId===body.runId);if(!run?.reviewEligible){res.statusCode=422;return json({error:'Test review does not qualify.'});}run.reviewedAt=verifiedAt;reviewedRunId=run.runId;return json({runId:run.runId,robotId,testReviewed:true,reviewedAt:verifiedAt});
+   }
    if(req.url==='/api/crypto/wallet')return json({address_id:String(body.addressId),...addresses[String(body.addressId)],destination_tag:null});
    if(req.url==='/api/crypto/balance'){
     const selected=wallets.find(w=>String(w.address_id)===String(body.addressId)&&w.asset_id===body.assetId);
@@ -69,7 +84,7 @@ before(async()=>{
    }
    return json({id:'result'});
   }
-  if(['/crypto-workspace.mjs','/trading-panel.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png'].includes(req.url)){
+  if(['/crypto-workspace.mjs','/trading-panel.mjs','/trading-testing.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png'].includes(req.url)){
    res.setHeader('content-type',req.url.endsWith('.png')?'image/png':req.url.endsWith('.css')?'text/css':'text/javascript');
    return res.end(await readFile(new URL('../public'+req.url,import.meta.url)));
   }
@@ -165,6 +180,44 @@ async function verifyCurrencyActivation(page,width){
  assert.equal(await usdc.locator('dd').first().textContent(),'123.456789','activating another currency must retain existing balances and selected accounts');
 }
 
+async function verifyTradingTests(page,width){
+ const mark=calls.length,lab=page.locator('.trading-testing'),start=page.getByRole('button',{name:'Start live trading',exact:true});
+ await lab.getByRole('heading',{name:'Trading tests',exact:true}).waitFor();
+ assert.equal(await start.isDisabled(),true,'unreviewed robots cannot start live trading');
+ assert.equal(await lab.getByRole('textbox',{name:'Virtual funds',exact:true}).isDisabled(),true,'acceptance uses fixed reference funds');
+ await lab.getByRole('button',{name:'Run acceptance suite',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('[data-test-result]')?.textContent==='Running');
+ await page.waitForFunction(()=>document.querySelector('[data-test-result]')?.textContent==='Passed');
+ assert.equal(await lab.locator('[data-review-test]').count(),0,'acceptance never qualifies a live robot for review');
+ assert.equal(await start.isDisabled(),true);
+ const acceptance=calls.slice(mark).filter(call=>call.url==='/api/crypto/trading/tests');
+ assert.equal(acceptance.length,1);assert.deepEqual(acceptance[0].body,{mode:'ACCEPTANCE',initialCash:'10000',feeBps:10,slippageBps:5});
+ await lab.getByLabel('Test configuration',{exact:true}).selectOption(robotId);
+ await lab.getByLabel('Test mode',{exact:true}).selectOption('REPLAY');
+ assert.equal(await lab.getByRole('textbox',{name:'Virtual funds',exact:true}).isDisabled(),false);
+ await lab.getByLabel('Replay JSON',{exact:true}).setInputFiles({name:'market-replay.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(replayDataset))});
+ await page.waitForFunction(()=>document.querySelector('[data-replay-file]')?.textContent.includes('2 ticks'));
+ await lab.getByRole('button',{name:'Run market replay',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('[data-test-result]')?.textContent==='Running');
+ await page.waitForFunction(()=>document.querySelector('[data-test-result]')?.textContent==='Passed');
+ const replays=calls.slice(mark).filter(call=>call.url==='/api/crypto/trading/tests'&&call.body.mode==='REPLAY');
+ assert.equal(replays.length,1);assert.deepEqual(replays[0].body,{robotId,mode:'REPLAY',initialCash:'10000',feeBps:10,slippageBps:5,dataset:replayDataset});assert.match(replays[0].key,/^[a-f0-9-]{36}$/i);
+ assert.equal(await start.isDisabled(),true,'passing without review still cannot enable live start');
+ assert.match(await lab.locator('[data-test-report]').textContent(),/10,001\.123456789012345678/);
+ await lab.getByRole('button',{name:'Mark replay reviewed',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('[data-toggle]')?.disabled===false);
+ assert.equal(calls.slice(mark).filter(call=>call.url==='/api/crypto/trading/tests/review').length,1);
+ assert.equal(calls.slice(mark).some(call=>/crypto\/trading\/(toggle|order|validate-providers)/.test(call.url)),false,'test and review must not call live trading APIs');
+ assert.equal(await lab.locator('[data-test-history-count]').textContent(),'2');assert.equal(await page.locator('dialog[open]').count(),0,'the test lab must stay in the page');
+ await lab.locator('.trading-test-records details').nth(0).locator('summary').click();
+ await lab.locator('.trading-test-records details').nth(1).locator('summary').click();
+ assert.equal(await lab.locator('.trading-test-table tbody tr').count(),2);
+ const bounds=await lab.evaluate(element=>({page:document.documentElement.scrollWidth,viewport:document.documentElement.clientWidth,width:element.clientWidth,scroll:element.scrollWidth,fields:[...element.querySelectorAll('input,select')].filter(field=>field.getClientRects().length).map(field=>{const fieldBox=field.getBoundingClientRect(),box=element.getBoundingClientRect();return {left:fieldBox.left,right:fieldBox.right,parentLeft:box.left,parentRight:box.right};})}));
+ assert.ok(bounds.page<=bounds.viewport,'test reports must not widen the banking page');assert.ok(bounds.scroll<=bounds.width+1,'report and form contents must fit the test lab');assert.ok(bounds.fields.every(field=>field.left>=field.parentLeft&&field.right<=field.parentRight),'test controls must fit the lab');
+ await lab.locator('[data-test-report]').getByRole('heading',{name:'Virtual funds & results',exact:true}).scrollIntoViewIfNeeded();
+ await page.screenshot({path:'test-results/crypto-trading-tests-'+width+'.png',fullPage:false});
+}
+
 for(const width of [2560,1440,834,390])test('real banking shell fits crypto scrollers, asset details and receiving receipt at '+width,async()=>{
  const page=await browser.newPage({viewport:{width,height:1000}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
@@ -176,6 +229,7 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   await page.goto(base);
   await page.getByRole('heading',{name:'AVISPay PLC · Asset contents & conversion'}).waitFor();
   await page.getByRole('textbox',{name:'Analysis instructions',exact:true}).waitFor();
+  await page.waitForFunction(()=>document.querySelector('[data-run-test]')?.disabled===false);
   assert.equal(await page.locator('textarea[name=instructions]').count(),1);
   assert.equal(await page.locator('[data-security]').count(),10);
   assert.equal(await page.locator('[data-markets] .crypto-market').count(),100);
@@ -229,6 +283,7 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   assert.equal(await page.locator('dialog[open]').count(),0);
   await verifyGroupedCurrency(page,width);
   await verifyCurrencyActivation(page,width);
+  await verifyTradingTests(page,width);
   await page.locator('[data-security]').first().click();
   await page.getByRole('button',{name:'Convert demo security',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-security-detail] h3')?.textContent.includes('AVISPay'));

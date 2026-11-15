@@ -72,12 +72,14 @@ def secret(name, key):
         raise RuntimeError('Required existing application secret has no value')
     return value
 
-def api(opener, base, path, body=None, csrf=None):
+def api(opener, base, path, body=None, csrf=None, idempotency_key=None):
     headers = {'Origin': base}
     if body is not None:
         headers['Content-Type'] = 'application/json'
     if csrf:
         headers['X-CSRF-Token'] = csrf
+    if idempotency_key:
+        headers['Idempotency-Key'] = idempotency_key
     request = urllib.request.Request(base + path, data=None if body is None else json.dumps(body).encode(), headers=headers)
     with opener.open(request, timeout=30) as response:
         return json.load(response)
@@ -126,6 +128,42 @@ def verify_index_access(opener, base, csrf):
     # Never log the instruction, candidate text, portfolio or service credentials.
     print('Verified private INDEX policy: 38 categories; version ' + str(policy['policyVersion'])
           + '; customer and anonymous access denied; accepted delivery=' + str(accepted is not None))
+
+def verify_trading_tests(opener, base, csrf, release):
+    """Run the isolated reference suite; never review a robot or enable real trading."""
+    state = api(opener, base, '/api/crypto/trading/testing')
+    engine = state.get('engine', {})
+    if (engine.get('name') != 'NautilusTrader' or engine.get('version') != '1.231.0'
+            or not re.fullmatch(r'[a-f0-9]{64}', engine.get('fingerprint', ''))
+            or not isinstance(state.get('profiles'), list)
+            or not isinstance(state.get('runs'), list)):
+        raise RuntimeError('Trading test installation metadata mismatch')
+    submitted = api(opener, base, '/api/crypto/trading/tests',
+                    {'mode': 'ACCEPTANCE', 'initialCash': '10000', 'feeBps': 10, 'slippageBps': 5},
+                    csrf, 'release-trading-acceptance:' + release)
+    run_id = submitted.get('runId')
+    if not isinstance(run_id, str) or not re.fullmatch(r'[0-9a-f-]{36}', run_id):
+        raise RuntimeError('Trading acceptance run was not recorded')
+    for attempt in range(40):
+        state = api(opener, base, '/api/crypto/trading/testing')
+        run = next((item for item in state.get('runs', []) if item.get('runId') == run_id), None)
+        if run and run.get('status') in ('PASSED', 'FAILED'):
+            break
+        time.sleep(2)
+    else:
+        raise RuntimeError('Trading acceptance run did not finish')
+    report = run.get('report') or {}
+    checks = report.get('checks') or []
+    if (run.get('status') != 'PASSED' or run.get('mode') != 'ACCEPTANCE'
+            or run.get('robotId') is not None or run.get('reviewEligible') is not False
+            or run.get('reviewedAt') is not None
+            or run.get('engineFingerprint') != engine['fingerprint']
+            or report.get('engine') != 'NautilusTrader' or report.get('engineVersion') != '1.231.0'
+            or report.get('complete') is not True or report.get('status') != 'PASSED'
+            or len(checks) < 5 or any(item.get('passed') is not True for item in checks)):
+        raise RuntimeError('Isolated trading acceptance checks did not pass')
+    print('Verified isolated trading acceptance: NautilusTrader 1.231.0; '
+          + str(len(checks)) + ' checks passed; no live trading approval')
 
 def apply_authorized_opening(revision, container):
     """Run the fixed, idempotent UAT request inside the existing application."""
@@ -314,6 +352,8 @@ def main():
         if not engine.get('ready') or engine.get('version') != '1.231.0':
             raise RuntimeError('Nautilus trading process did not start')
         print('Verified crypto catalogue, ten security wallets and running NautilusTrader 1.231.0')
+        stage = 'isolated trading test installation verification'
+        verify_trading_tests(opener, base, login['csrf'], sha)
         stage = 'private INDEX instruction and access verification'
         verify_index_access(opener, base, login['csrf'])
         providers = api(opener, base, '/api/crypto/trading/validate-providers', {}, login['csrf'])['providers']
