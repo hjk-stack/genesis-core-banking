@@ -38,6 +38,7 @@ const safeText = (value, max) => typeof value === 'string' && value.length <= ma
 
 const implementationFiles = [
   './trading-instructions.mjs', './trading-live.mjs', './trading/live-market.mjs',
+  './trading/live-liquidity.mjs', './trading/live-audit.mjs',
   '../trading/w_effect.py', '../trading/worker.py', '../trading/test_runner.py', '../trading/requirements.txt',
   './trading/test-runner.mjs', './trading-testing.mjs', './trading-robot.mjs',
   './trading/runtime.mjs', './trading/binance.mjs', './index-event-advice.mjs',
