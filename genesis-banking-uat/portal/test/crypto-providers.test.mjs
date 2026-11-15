@@ -14,3 +14,18 @@ test('provider validation performs only balances and chain reads and does not ex
  const result=await core.validateRobotProviders(actor);assert.equal(result.providers.length,3);assert.ok(result.providers.every(p=>p.verified));assert.deepEqual(result.providers[0].accounts,['KRAKEN/TREASURY']);assert.ok(calls.every(c=>c.url.includes('/v1/balances')||['eth_chainId','eth_blockNumber'].includes(JSON.parse(c.o.body).method)));assert.ok(!JSON.stringify(result).includes('fixture-'));await assert.rejects(core.validateRobotProviders({...actor,customerUserId:'2'}),/FORBIDDEN/);
  const missing=await new TradingRobotCore(null,{secretEnv:{}}).validateRobotProviders(actor);assert.ok(missing.providers.every(p=>!p.configured&&!p.verified));
 });
+for(const setting of ['AVIS_RPC_ETHEREUM','CRYPTO_RPC_ETHEREUM'])test('provider validation uses the configured Alchemy URL from '+setting,async()=>{
+ const endpoint='https://eth-mainnet.g.alchemy.com/v2/fixture-url-credential',calls=[];
+ const core=new TradingRobotCore(null,{secretEnv:{[setting]:endpoint},cryptoFetch:async(url,o)=>{calls.push({url,o});return new Response(JSON.stringify({result:JSON.parse(o.body).method==='eth_chainId'?'0x1':'0x1234'}));}});
+ const result=await core.validateRobotProviders(actor),alchemy=result.providers.find(p=>p.provider==='Alchemy');
+ assert.equal(alchemy.configured,true);assert.equal(alchemy.verified,true);assert.equal(alchemy.blockNumber,4660);
+ assert.equal(calls.length,2);assert.ok(calls.every(c=>c.url===endpoint&&!c.o.headers['X-CoinAPI-Key']));
+ assert.ok(!JSON.stringify(result).includes('fixture-url-credential'));
+});
+test('provider validation respects operational endpoint precedence and rejects a wrong chain without exposing the URL',async()=>{
+ const endpoint='https://eth-mainnet.g.alchemy.com/v2/fixture-current',calls=[];
+ const core=new TradingRobotCore(null,{secretEnv:{AVIS_RPC_ETHEREUM:endpoint,CRYPTO_RPC_ETHEREUM:'https://eth-mainnet.g.alchemy.com/v2/fixture-old',ALCHEMY_API_KEY:'fixture-fallback'},cryptoFetch:async(url,o)=>{calls.push(url);return new Response(JSON.stringify({result:JSON.parse(o.body).method==='eth_chainId'?'0x38':'0x1234'}));}});
+ const result=await core.validateRobotProviders(actor),alchemy=result.providers.find(p=>p.provider==='Alchemy');
+ assert.equal(alchemy.configured,true);assert.equal(alchemy.verified,false);assert.equal(alchemy.code,'RPC_VALIDATION');
+ assert.ok(calls.length>0&&calls.every(url=>url===endpoint));assert.ok(!JSON.stringify(result).includes('fixture-'));
+});

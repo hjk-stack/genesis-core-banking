@@ -48,6 +48,16 @@ const messages={...ROBOT_MESSAGES,...CRYPTO_MESSAGES,
  SELECT_EXTERNAL_CARD:'Select a registered external card.',OFFLINE_INTERNAL_CARD:'Select an AVIS card for offline debit.',
  CRYPTO_HOLDING_REQUIRED:'Select this account holder’s crypto holding.',AG_PURCHASE_REQUIRED:'Purchase AG before transferring it.',
  INVALID_CRYPTO_ADDRESS:'Check the receiving blockchain address.',CARD_DELIVERY_KEY:'Card delivery could not be encrypted. Check the card service in Administration.',
+ CRYPTO_SEND_SCOPE:'Select a funding wallet or a registered Ethereum security wallet.',
+ CRYPTO_AMOUNT_PRECISION:'Use the selected currency’s supported decimal places.',
+ CRYPTO_CHAIN_BALANCE:'The signing wallet has insufficient confirmed funds for this transfer.',
+ CRYPTO_GAS_BALANCE:'The signing wallet needs enough ETH to cover the maximum network fee.',
+ CRYPTO_CUSTODY_BALANCE:'The selected wallet has insufficient unreserved blockchain backing.',
+ CRYPTO_DEPOSIT_HASH:'Enter the Ethereum transaction hash, starting with 0x followed by 64 hexadecimal characters.',
+ CRYPTO_DEPOSIT_ACCOUNT:'Select the matching Ethereum wallet for this incoming transfer.',
+ CRYPTO_DEPOSIT_EVENT:'This transaction does not contain a confirmed incoming transfer of the selected currency to this wallet.',
+ CRYPTO_DEPOSIT_MANAGED_SOURCE:'This transfer originates from another AVISPay wallet. Check its payment receipt.',
+ CRYPTO_DEPOSIT_REORG:'The transaction’s block changed. Check its latest blockchain receipt before retrying.',
  INVALID_CARD_CODE:'Check the six-digit code.',CARD_CODE_CLOSED:'This code has expired, been used or been locked. Check its card request.',
  TRANSFER_ALREADY_CLAIMED:'Another administrator has picked up this request.',TRANSFER_PICKUP_REQUIRED:'Pick up this request before processing it.',
  SETTLEMENT_ACCOUNT_REQUIRED:'Select the funded settlement account used for this payment.',
@@ -120,10 +130,10 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const reply=await buildPacs002({messageId:randomBytes(16).toString('hex'),uetr:original.uetr,senderBic:p.local_bic,receiverBic:p.peer_bic,status:receipt.status,bankReference:receipt.id.replaceAll('-','')});
     res.setHeader('content-type','application/xml');return res.end(reply);
    }
-   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/portfolio.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/trading-panel.mjs','/crypto.css','/styles.css'].includes(path)){
+   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/portfolio.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/trading-panel.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png'].includes(path)){
     const file=path==='/'?'index.html':path==='/card-message'?'public/card-message.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
-    res.setHeader('content-type',(path==='/'||path==='/card-message')?'text/html; charset=utf-8':path.endsWith('css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8');return res.end(body);
+    res.setHeader('content-type',(path==='/'||path==='/card-message')?'text/html; charset=utf-8':path.endsWith('.png')?'image/png':path.endsWith('css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8');return res.end(body);
    }
    if(req.method==='GET'&&/^\/api\/exchange\/markets\/[A-Z0-9._-]{1,80}$/.test(path))return send(res,200,await core.publicExchangeMarket(path.split('/').at(-1)));
    if(!path.startsWith('/api/'))return send(res,404,{code:'NOT_FOUND'});
@@ -210,6 +220,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    routes['accounts/open']='openAccount';
    Object.assign(routes,{'portfolio/exchange-security':'resolveExchangeSecurity','portfolio/catalogue/sync':'syncSecurities','portfolio/securities':'addSecurity','portfolio/positions':'recordPosition','portfolio/orders/review':'reviewSecurityOrder','portfolio/orders/submit':'submitSecurityOrder','portfolio/orders/cancel':'cancelSecurityOrder'});
    Object.assign(routes,{'crypto/trading/validate-providers':'validateRobotProviders','crypto/trading/configure':'configureRobot','crypto/trading/toggle':'toggleRobot','crypto/approve':'approveCrypto','crypto/activate':'activateCrypto','crypto/wallet':'cryptoWallet','crypto/balance':'cryptoChainBalance','crypto/check-network':'checkCryptoNetwork','crypto/markets/refresh':'refreshCryptoMarkets','crypto/securities/demo-convert':'convertDemoSecurity','crypto/securities/prepare':'prepareRealSecurity','crypto/securities/package':'cryptoContractPackage','crypto/robot/channels':'createRollingChannel','crypto/actions/cancel':'cancelCryptoReview','crypto/actions/review':'prepareCryptoAction','crypto/actions/submit':'submitCryptoAction','crypto/actions/broadcast':'broadcastCryptoAction','crypto/actions/confirm':'confirmCryptoAction'});
+   routes['crypto/deposits/reconcile']='reconcileCryptoDeposit';
    const action=path.slice(5),method=routes[action];if(!method)fault('NOT_FOUND',null,404);
    const result=await invoke(method,body,req.headers['idempotency-key'],action==='cards/reverse');
    if(action==='fx/execute'&&result.status==='EXPIRED')fault('FX_QUOTE_EXPIRED','quoteId',409);

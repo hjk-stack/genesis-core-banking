@@ -53,6 +53,37 @@ test('crypto selector filters holdings by sender and preserves exact crypto quan
  const reviewed=state.calls.find(c=>c.path==='payments/review');assert.equal(reviewed.body.method,'CRYPTO');assert.equal(reviewed.body.cryptoAccount,'own-eth');assert.equal(reviewed.body.amount,'0.123456789012345678');assert.equal(reviewed.body.receiverUserId,'2');
  assert.equal(state.calls.some(c=>c.path==='payments/check-receiver'),false);
 });
+test('custody Send selects the owned security wallet and reviews gas before one blockchain submission',async()=>{
+ const views={cryptoholdings:[{account_id:'funding',user_id:'1',currency_code:'ETH',network:'ETHEREUM',available_balance:'2'}],cryptowallets:[
+  {account_id:'custody',user_id:'1',wallet_scope:'CUSTODY',currency_code:'aAVISP',network:'ETHEREUM',available_balance:'100.123456789012345678'},
+  {account_id:'other-custody',user_id:'2',wallet_scope:'CUSTODY',currency_code:'aAVISP',network:'ETHEREUM',available_balance:'999'},
+  {account_id:'margin',user_id:'1',wallet_scope:'MARGIN',currency_code:'aAVISP',network:'ETHEREUM',available_balance:'999'}]};
+ const hash='0x'+'a'.repeat(64);let instruction,confirmed=false;
+ const state=setup(async(path,body)=>{
+  if(path==='payments/review'){instruction={...body,from:'AVISPay security wallet',fromAddress:'0x'+'1'.repeat(40),destinationLabel:body.cryptoAddress,network:'ETHEREUM',networkFeeMaximum:'0.000042',networkFeeCurrency:'ETH'};return {id:'chain-request',mode:'BLOCKCHAIN',format:'AVIS_TRANSFER_V1',message:JSON.stringify(instruction),messageHash:'chain-review-hash',instruction};}
+  if(path==='payments/transfer')return {request_id:'chain-request',current_status:'PROCESSING',delivery_mode:'BLOCKCHAIN',chain_status:'SUBMITTED'};
+  if(path==='payment-requests/chain-request')return {request_id:'chain-request',status:confirmed?'COMPLETED':'OUTGOING',current_status:confirmed?'COMPLETED':'PROCESSING',delivery_mode:'BLOCKCHAIN',message_format:'AVIS_TRANSFER_V1',message_content:JSON.stringify(instruction),instruction,tx_hash:hash,chain_status:confirmed?'CONFIRMED':'SUBMITTED',confirmations:confirmed?64:null,gas_fee:confirmed?'0.000021':null};
+ },views,{isAdmin:()=>false,userId:()=> '1'});
+ wizard.fromCrypto('custody');assert.equal(fields().cryptoAccount.value,'custody');assert.equal(fields().cryptoDestination.value,'EXTERNAL');
+ assert.equal(fields().cryptoAccount.querySelector('[value=other-custody]'),null);assert.equal(fields().cryptoAccount.querySelector('[value=margin]'),null);
+ assert.match(q('[data-balance]').textContent,/100.123456789012345678 aAVISP/);
+ fill('amount','0.123456789012345678');await next();fill('cryptoAddress','0x'+'2'.repeat(40));await next();fill('receiverName','Recipient');await next();fill('reference','Security transfer');await next();
+ assert.match(q('[data-summary]').textContent,/Blockchain transfer/);assert.match(q('[data-summary]').textContent,/Maximum network fee0.000042 ETH/);
+ assert.equal(state.calls.filter(c=>c.path==='payments/transfer').length,0);await next();
+ assert.equal(q('dialog').open,true);assert.match(q('.step-caption').textContent,/Blockchain transaction submitted/);assert.match(q('[data-summary]').textContent,new RegExp(hash));
+ assert.equal(q('[data-next]').hidden,true);assert.equal(q('dialog').textContent.includes('Pick up request'),false);await next();
+ assert.equal(state.calls.filter(c=>c.path==='payments/transfer').length,1);assert.equal(state.refreshes(),1);
+ assert.equal(q('[data-summary]').textContent.includes('Confirmations'),false);
+ confirmed=true;await [...document.querySelectorAll('.payment-footer button')].find(b=>b.textContent==='Refresh status').onclick();
+ assert.equal(q('.step-caption').textContent,'Transfer completed');assert.match(q('[data-summary]').textContent,/Confirmations64/);
+ assert.equal(state.calls.filter(c=>c.path==='payments/transfer').length,1);assert.equal(state.calls.filter(c=>c.path==='payment-requests/chain-request').length,2);assert.equal(state.refreshes(),2);
+});
+test('administrator blockchain receipt shows actual gas and has no manual pickup or completion controls',async()=>{
+ const instruction={from:'Wallet',amount:'1',currency:'ETH',receiverName:'Receiver',destinationLabel:'0x'+'2'.repeat(40),network:'ETHEREUM',reference:'Receipt',networkFeeMaximum:'0.000042',networkFeeCurrency:'ETH'};
+ setup(async()=>({request_id:'confirmed',status:'OUTGOING',current_status:'COMPLETED',delivery_mode:'BLOCKCHAIN',message_format:'AVIS_TRANSFER_V1',message_content:'{}',instruction,tx_hash:'0x'+'b'.repeat(64),chain_status:'CONFIRMED',confirmations:12,gas_fee:'0.000021'}));
+ await wizard.view('confirmed');assert.equal(q('.step-caption').textContent,'Transfer completed');assert.match(q('[data-summary]').textContent,/Network fee0.000021 ETH/);assert.match(q('[data-summary]').textContent,/Confirmations12/);
+ assert.equal(q('dialog').textContent.includes('Pick up request'),false);assert.equal(q('dialog').textContent.includes('Record completed transfer'),false);
+});
 const cards={transfercards:[{card_id:'own-card',user_id:'1',full_name:'Sender',card_number:'AVIS-1234',currency_code:'EUR',available_balance:'75',card_rail_mode:'AVIS_PROPRIETARY_ONLY'}]};
 test('code-secured force payment uses the card balance, accepts a validity window and shows its six-digit receipt',async()=>{
  const state=setup(async(path,body)=>{

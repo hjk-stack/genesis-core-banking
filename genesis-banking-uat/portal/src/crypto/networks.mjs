@@ -2,7 +2,7 @@ import {Wallet,getAddress,SigningKey,JsonRpcProvider,FetchRequest,Contract,forma
 import {Wallet as XrpWallet,isValidClassicAddress} from 'xrpl';
 import {Keypair,PublicKey} from '@solana/web3.js';
 import {TronWeb} from 'tronweb';
-import {payments} from 'bitcoinjs-lib';
+import {payments,address as bitcoinAddress} from 'bitcoinjs-lib';
 import {createCipheriv,createDecipheriv,hkdfSync,randomBytes} from 'node:crypto';
 import {fault} from '../core.mjs';
 export const NETWORKS={
@@ -22,7 +22,7 @@ export const PLATFORM_NETWORKS={ethereum:'ETHEREUM','binance-smart-chain':'BSC',
 export const NATIVE_ASSETS={ethereum:'ETHEREUM',bitcoin:'BITCOIN',ripple:'XRPL',tron:'TRON',solana:'SOLANA',binancecoin:'BSC','polygon-ecosystem-token':'POLYGON','avalanche-2':'AVALANCHE'};
 export const AG='0x713d3a1785219aeb37e52260ff8f96660851842b',AGI='0x0482213c1e5a9fefdee36d9b01c044938403a9af';
 export function networkInfo(network){const n=NETWORKS[network];if(!n)fault('CRYPTO_NETWORK','network');return n;}
-export function validAddress(network,address){try{const n=networkInfo(network);if(n.kind==='EVM')return getAddress(address)!=='0x0000000000000000000000000000000000000000';if(n.kind==='TRON')return TronWeb.isAddress(address);if(n.kind==='XRPL')return isValidClassicAddress(address);if(n.kind==='SOLANA')return new PublicKey(address).toBase58()===address;if(n.kind==='BITCOIN'){payments.p2wpkh({address});return true;}}catch{}return false;}
+export function validAddress(network,address){try{const n=networkInfo(network);if(n.kind==='EVM')return getAddress(address)!=='0x0000000000000000000000000000000000000000';if(n.kind==='TRON')return TronWeb.isAddress(address);if(n.kind==='XRPL')return isValidClassicAddress(address);if(n.kind==='SOLANA')return new PublicKey(address).toBase58()===address;if(n.kind==='BITCOIN'){try{const decoded=bitcoinAddress.fromBech32(address);if(decoded.prefix==='bc'&&decoded.version===1&&decoded.data.length===32)return true;}catch{}bitcoinAddress.toOutputScript(address);return true;}}catch{}return false;}
 export function newWallet(network){const n=networkInfo(network);if(n.kind==='XRPL'){const w=XrpWallet.generate();return {address:w.classicAddress,key:{seed:w.seed}};}if(n.kind==='SOLANA'){const w=Keypair.generate();return {address:w.publicKey.toBase58(),key:{secretKey:Buffer.from(w.secretKey).toString('base64')}};}const w=Wallet.createRandom();if(n.kind==='TRON')return {address:TronWeb.address.fromPrivateKey(w.privateKey.slice(2)),key:{privateKey:w.privateKey}};if(n.kind==='BITCOIN')return {address:payments.p2wpkh({pubkey:Buffer.from(SigningKey.computePublicKey(w.privateKey,true).slice(2),'hex')}).address,key:{privateKey:w.privateKey}};return {address:w.address,key:{privateKey:w.privateKey}};}
 function encryptionKey(env){const source=env.AVIS_WALLET_ENCRYPTION_KEY||env.AVIS_TRANSFER_ENCRYPTION_KEY||env.AVIS_OFFLINE_SIGNING_KEY;if(typeof source!=='string'||Buffer.byteLength(source)<32)fault('CRYPTO_KEY_CONFIGURATION','network');return Buffer.from(hkdfSync('sha256',source,'AVISPay independent wallet keys','wallet-at-rest:v1',32));}
 export function encryptKey(secret,binding,env=process.env){const iv=randomBytes(12),c=createCipheriv('aes-256-gcm',encryptionKey(env),iv);c.setAAD(Buffer.from(binding));return {version:1,iv:iv.toString('base64'),ciphertext:Buffer.concat([c.update(JSON.stringify(secret),'utf8'),c.final()]).toString('base64'),tag:c.getAuthTag().toString('base64')};}

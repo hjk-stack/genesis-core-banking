@@ -1,18 +1,26 @@
 import {engineStatus} from './trading/runtime.mjs';
 import {randomUUID} from 'node:crypto';
-import {CryptoChainActions} from './crypto-chain-actions.mjs';
+import {EvmWalletDeposits} from './crypto-wallet-deposits.mjs';
 import {fault,text,money,decimal} from './core.mjs';
 import {securityValue} from './securities-portfolio.mjs';
 import {ChainAPI} from './crypto/networks.mjs';
 import {BinanceSpot} from './trading/binance.mjs';
 const S=10n**18n,U=x=>/^0(?:\.0+)?$/.test(String(x))?0n:money(String(x)),admin=a=>{if(!a?.admin||a.customerUserId)fault('FORBIDDEN',null,403);};
 export const ROBOT_MESSAGES={ROBOT_SYMBOL:'Select the exact market symbol on this venue.',ROBOT_API_KEY:'Enter the configured trading API secret reference.',ROBOT_ACCOUNT:'Select an institution trading account.',ROBOT_INDEX:'The selected security needs a fresh Press INDEX with supporting sources.',ROBOT_LIMIT:'Enter valid order, daily trading and loss limits.',ROBOT_VENUE_RESPONSE:'The venue request could not complete. Check this order in Trading diagnostics.',ROBOT_BUSY:'The previous order is being reconciled.',ROBOT_POSITION:'Close the robot’s position before changing its market settings.'};
-export class TradingRobotCore extends CryptoChainActions {
+export class TradingRobotCore extends EvmWalletDeposits {
  constructor(pool,options={}){super(pool,options);this.venue=options.tradingVenue||new BinanceSpot({env:this.secretEnv});}
  async validateRobotProviders(actor){admin(actor);const env=this.secretEnv;
   const ems=async()=>{const key=env.COINAPI_EMS_API_KEY;if(!key)return {provider:'CoinAPI EMS',configured:false,verified:false,setting:'COINAPI_EMS_API_KEY'};try{const response=await this.cryptoFetch('https://global.ems.coinapi.net/v1/balances',{headers:{'X-CoinAPI-Key':key,accept:'application/json'},signal:AbortSignal.timeout(10000),redirect:'error'});if(!response.ok)throw Error('EMS_HTTP_'+response.status);const rows=await response.json();if(!Array.isArray(rows))throw Error('EMS_SCHEMA');return {provider:'CoinAPI EMS',configured:true,verified:true,accounts:rows.map(r=>r.exchange_id).filter(Boolean),capability:'Execution API account connection',checkedAt:new Date().toISOString()};}catch(e){return {provider:'CoinAPI EMS',configured:true,verified:false,code:/^EMS_/.test(e.message)?e.message:'EMS_TRANSPORT'};}};
-  const node=async provider=>{const configured=provider==='Alchemy'?!!env.ALCHEMY_API_KEY:!!(env.COINAPI_NAAS_API_KEY||env.COINAPI_API_KEY||env.APIBRICKS_COINAPI_KEY);if(!configured)return {provider,configured:false,verified:false,setting:provider==='Alchemy'?'ALCHEMY_API_KEY':'COINAPI_NAAS_API_KEY'};
-   const explicit={...env,AVIS_RPC_ETHEREUM:provider==='Alchemy'?'https://eth-mainnet.g.alchemy.com/v2/'+env.ALCHEMY_API_KEY:'https://ethereum-mainnet.node.coinapi.io'};
+  const node=async provider=>{
+   // A configured RPC URL can already contain the provider credential. Probe
+   // that same endpoint instead of reporting it missing or replacing it.
+   const endpoint=env.AVIS_RPC_ETHEREUM||env.CRYPTO_RPC_ETHEREUM;
+   let endpointProvider=null;
+   try{const host=new URL(endpoint).hostname;endpointProvider=host.endsWith('.alchemy.com')?'Alchemy':host==='ethereum-mainnet.node.coinapi.io'?'CoinAPI NaaS':null;}catch{}
+   const matchingEndpoint=endpointProvider===provider?endpoint:null;
+   const key=provider==='Alchemy'?env.ALCHEMY_API_KEY:env.COINAPI_NAAS_API_KEY||env.COINAPI_API_KEY||env.APIBRICKS_COINAPI_KEY;
+   if(!matchingEndpoint&&!key)return {provider,configured:false,verified:false,setting:provider==='Alchemy'?'ALCHEMY_API_KEY':'COINAPI_NAAS_API_KEY'};
+   const explicit={...env,AVIS_RPC_ETHEREUM:matchingEndpoint||(provider==='Alchemy'?'https://eth-mainnet.g.alchemy.com/v2/'+key:'https://ethereum-mainnet.node.coinapi.io')};
    try{const chain=new ChainAPI({env:explicit,fetcher:this.cryptoFetch});const [,block]=await Promise.all([chain.check('ETHEREUM'),chain.request('ETHEREUM','eth_blockNumber')]);return {provider,configured:true,verified:true,chainId:1,blockNumber:Number(BigInt(block)),capability:'Ethereum RPC and signed-transaction transport',checkedAt:new Date().toISOString()};}catch{return {provider,configured:true,verified:false,code:'RPC_VALIDATION'};}
   };return {providers:await Promise.all([ems(),node('Alchemy'),node('CoinAPI NaaS')])};
  }
