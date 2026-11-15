@@ -17,12 +17,48 @@ import urllib.request
 RG = 'genesis-banking-rg'
 APP = 'genesis-banking-uat'
 IDENTITY_APP = 'genesis-fineract-uat'
+CRYPTO_SOURCE_RG = 'genesis-email-automation-rg'
+CRYPTO_SOURCE_APP = 'genesis-email-bd74cf8'
+CRYPTO_NETWORKS = ('ETHEREUM', 'BSC', 'POLYGON', 'ARBITRUM', 'BASE', 'AVALANCHE',
+                   'GNOSIS', 'TRON', 'XRPL', 'SOLANA', 'BITCOIN')
+CRYPTO_PROVIDER_SETTINGS = {
+    'COINAPI_EMS_API_KEY', 'COINAPI_NAAS_API_KEY', 'COINAPI_API_KEY',
+    'APIBRICKS_COINAPI_KEY', 'ALCHEMY_API_KEY', 'TRONGRID_API_KEY', 'COINGECKO_API_KEY',
+} | {prefix + network for prefix in ('AVIS_RPC_', 'CRYPTO_RPC_') for network in CRYPTO_NETWORKS}
+AZURE_ERROR_CODES = frozenset({
+    'AuthorizationFailed', 'AuthorizationPermissionMismatch', 'Forbidden', 'Unauthorized',
+    'AuthenticationFailed', 'InvalidAuthenticationToken', 'ExpiredAuthenticationToken',
+    'InvalidAuthenticationTokenTenant', 'ResourceNotFound', 'ResourceGroupNotFound',
+    'ParentResourceNotFound', 'SubscriptionNotFound', 'SubscriptionDisabled',
+    'InvalidSubscriptionId', 'MissingSubscriptionRegistration', 'NoRegisteredProviderFound',
+    'RequestDisallowedByPolicy', 'OperationNotAllowed', 'TooManyRequests',
+    'ServiceUnavailable', 'InternalServerError', 'GatewayTimeout',
+})
+
+
+class AzureOperationError(RuntimeError):
+    """Expose a known Azure error code without retaining credentials or raw stderr."""
+
+    def __init__(self, args, stderr):
+        candidates = re.findall(
+            r'\(([A-Za-z][A-Za-z0-9]+)\)|"code"\s*:\s*"([A-Za-z][A-Za-z0-9]+)"'
+            r'|^\s*Code:\s*([A-Za-z][A-Za-z0-9]+)\s*$', stderr or '', re.MULTILINE)
+        self.azure_code = next((code for match in candidates for code in match
+                                if code in AZURE_ERROR_CODES), 'AZURE_CLI_ERROR')
+        operation = []
+        for arg in args:
+            if not re.fullmatch(r'[a-z][a-z0-9-]*', arg) or len(operation) == 4:
+                break
+            operation.append(arg)
+        super().__init__('Azure operation failed: ' + ' '.join(operation or ['command'])
+                         + '; code=' + self.azure_code)
+
 
 def az(*args):
     result = subprocess.run(['az', *args, '--only-show-errors', '-o', 'json'], capture_output=True, text=True)
     if result.returncode:
         # Azure errors can echo secret command arguments. Do not print raw stderr or command lines.
-        raise RuntimeError('Azure operation failed: ' + ' '.join(args[:3]))
+        raise AzureOperationError(args, result.stderr)
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 def app(name):
@@ -96,36 +132,59 @@ def apply_authorized_opening(revision, container):
                 process.wait()
         os.close(master)
 
-def existing_crypto_settings(current_env):
+def existing_crypto_settings(current_env, known_secrets=()):
     """Reuse only named crypto connectors from the existing AVIS application.
 
     Values never leave Azure/GitHub's deployment process or appear in output.
     Existing UAT configuration always takes precedence.
     """
-    names = {'COINAPI_EMS_API_KEY', 'COINAPI_NAAS_API_KEY', 'COINAPI_API_KEY',
-             'APIBRICKS_COINAPI_KEY', 'ALCHEMY_API_KEY', 'CRYPTO_RPC_ETHEREUM',
-             'TRONGRID_API_KEY', 'COINGECKO_API_KEY'}
-    missing = names - {item['name'] for item in current_env}
+    missing = CRYPTO_PROVIDER_SETTINGS - {item['name'] for item in current_env}
     if not missing:
         return []
+    result = []
+    secret_names = {item['name'] for item in known_secrets}
+    # A previous import may have created a secret before its env binding was
+    # saved. Reuse that target secret; never overwrite it with a source value.
+    for setting in sorted(missing):
+        name = 'avispay-provider-' + setting.lower().replace('_', '-')
+        if name in secret_names:
+            result.append(setting + '=secretref:' + name)
+    missing -= {binding.split('=', 1)[0] for binding in result}
+    if result:
+        print('Reused existing UAT crypto secret bindings: ' + str(len(result)))
+    if not missing:
+        return result
     try:
         settings = az('webapp', 'config', 'appsettings', 'list', '-g',
-                      'genesis-email-automation-rg', '-n', 'genesis-email-bd74cf8')
-    except RuntimeError:
-        print('Existing AVIS provider settings could not be read; preserving UAT connector configuration')
-        return []
-    result = []
+                      CRYPTO_SOURCE_RG, '-n', CRYPTO_SOURCE_APP)
+    except RuntimeError as error:
+        print('Crypto provider source read failed: ' + getattr(error, 'azure_code', 'AZURE_CLI_ERROR')
+              + '; source=' + CRYPTO_SOURCE_RG + '/' + CRYPTO_SOURCE_APP
+              + '; existing UAT configuration preserved')
+        return result
+    if not isinstance(settings, list):
+        print('Crypto provider source response: INVALID_SETTINGS_LIST; existing UAT configuration preserved')
+        return result
+    additions = {}
     for item in settings:
-        if item.get('name') not in missing or not item.get('value'):
+        if not isinstance(item, dict) or item.get('name') not in missing:
+            continue
+        value = item.get('value')
+        if not isinstance(value, str) or not value:
             continue
         # Key Vault references require their own configured identity; never store a reference as an API key.
-        if item['value'].startswith('@Microsoft.KeyVault('):
+        if value.startswith('@Microsoft.KeyVault('):
+            print('Crypto provider source uses Key Vault reference: ' + item['name'])
             continue
-        name = 'avispay-provider-' + item['name'].lower().replace('_', '-')
+        additions[item['name']] = value
+    if additions:
+        values = ['avispay-provider-' + setting.lower().replace('_', '-') + '=' + value
+                  for setting, value in sorted(additions.items())]
         az('containerapp', 'secret', 'set', '-g', RG, '-n', APP,
-           '--secrets', name + '=' + item['value'])
-        result.append(item['name'] + '=secretref:' + name)
-    print('Reused existing AVIS crypto connector settings: ' + str(len(result)))
+           '--secrets', *values)
+        result.extend(setting + '=secretref:avispay-provider-' + setting.lower().replace('_', '-')
+                      for setting in sorted(additions))
+    print('Reused existing AVIS crypto connector settings: ' + str(len(additions)))
     return result
 
 
@@ -162,7 +221,7 @@ def main():
     env = [f'PGHOST={pg_host}', 'PGPORT=5432', f'PGUSER={pg_user}', f'PGDATABASE={database}',
            'PGPASSWORD=secretref:avispay-db-password', 'FINERACT_URL=http://genesis-fineract-uat',
            'AVIS_OFFLINE_SIGNING_KEY=secretref:avispay-offline-key', f'PORT={port}', f'RELEASE_SHA={sha}']
-    env += existing_crypto_settings(containers[0].get('env', []))
+    env += existing_crypto_settings(containers[0].get('env', []), known_secrets)
     stage = 'application update'
     try:
         az('containerapp', 'update', '-g', RG, '-n', APP, '--image', image,
