@@ -89,7 +89,7 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
   if(view==='treasurypositions'){
    if(actor.customerUserId)fault('FORBIDDEN',null,403);
    return (await this.pool.query(`SELECT booking_id,source_system,source_reference,owner_user_id,asset_class,
-    asset_code,asset_name,isin,quantity::text,destination,booking_reference,booked_by,booked_at
+    asset_code,asset_name,isin,quantity::text,destination,ledger_account_id,journal_id,booking_reference,booked_by,booked_at
     FROM avis_core_v2.treasury_opening_positions ORDER BY asset_class,asset_code`)).rows;
   }
   if(view==='cryptomarkets')return (await this.pool.query('SELECT * FROM avis_core_v2.crypto_assets WHERE market_rank IS NOT NULL ORDER BY market_rank LIMIT 200')).rows;
