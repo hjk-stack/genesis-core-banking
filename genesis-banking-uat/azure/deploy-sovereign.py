@@ -285,6 +285,58 @@ def apply_authorized_opening(revision, container):
                 process.wait()
         os.close(master)
 
+def apply_treasury_opening(revision, container):
+    """Post the four owner-authorised opening positions in the existing UAT container."""
+    replicas = az('containerapp', 'replica', 'list', '-g', RG, '-n', APP, '--revision', revision)
+    if not replicas:
+        raise RuntimeError('No running UAT replica for Treasury opening')
+    args = ['az', 'containerapp', 'exec', '-g', RG, '-n', APP, '--revision', revision,
+            '--replica', replicas[0]['name'], '--container', container,
+            '--command', 'node /app/src/treasury-opening.mjs', '--only-show-errors']
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 120, 0, 0))
+    process = subprocess.Popen(args, stdin=slave, stdout=slave, stderr=slave,
+                               env={**os.environ, 'TERM': 'xterm'}, start_new_session=True)
+    os.close(slave)
+    output = ''
+    receipt = None
+    try:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            ready = select.select([master], [], [], 1)[0]
+            if ready:
+                try:
+                    chunk = os.read(master, 8192)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                output = (output + chunk.decode('utf-8', errors='replace'))[-65536:]
+                match = re.search(r'AVISPAY_TREASURY_BOOKING_OK (\\{[^\\r\\n]+\\})', output)
+                if match:
+                    receipt = json.loads(match.group(1))
+                    break
+            if not ready and process.poll() is not None:
+                break
+        if not receipt or receipt.get('requestId') != 'avispay-treasury-registered-inventory-2026-11-16':
+            code = re.search(r'AVISPAY_TREASURY_BOOKING_FAILED ([A-Z0-9_]+)', output)
+            raise RuntimeError('Treasury opening posting failed' + (': ' + code.group(1) if code else ''))
+        positions = receipt.get('positions', [])
+        expected = {'USU3712QAA05': 500000, 'AVISPAY-PLC-SHARES': 100000000, 'AG': 10000000000, 'AGi': 10000000000}
+        if len(positions) != 4 or {row.get('asset'): int(row.get('quantity', 0)) for row in positions} != expected:
+            raise RuntimeError('Treasury opening quantities mismatch')
+        print('Authorized Treasury opening recorded: four booking references')
+        return receipt
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        os.close(master)
+
 def existing_crypto_settings(current_env, known_secrets=()):
     """Reuse only named crypto connectors from the existing AVIS application.
 
@@ -499,6 +551,17 @@ def main():
                 if debit != expected_opening or credit != expected_opening:
                     raise RuntimeError('Opening journal currency totals mismatch')
         print('Verified the authorized UAT opening request; existing balances are never reset on replay')
+        stage = 'authorized Treasury opening positions'
+        treasury = apply_treasury_opening(APP + '--bank-' + sha[:12], containers[0]['name'])
+        booked = api(opener, base, '/api/views/treasurypositions')['rows']
+        for position in treasury['positions']:
+            matching = [row for row in booked if row['booking_id'] == position['bookingId']
+                        and row['asset_code'] == position['asset']
+                        and Decimal(row['quantity']) == Decimal(position['quantity'])]
+            if len(matching) != 1:
+                raise RuntimeError('Treasury opening position readback mismatch')
+        print('Verified four authorised AVISPay Treasury opening-position records')
+
         api(opener, base, '/api/logout', {}, login['csrf'])
         print('Verified application release ' + sha)
         print('Authenticated account, ledger, payment, routing, clearing, offline, FX and audit reads passed')
