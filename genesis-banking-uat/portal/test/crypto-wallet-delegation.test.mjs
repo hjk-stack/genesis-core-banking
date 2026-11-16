@@ -46,3 +46,15 @@ test('another user cannot allocate an institution wallet and second freeze canno
  await assert.rejects(core.delegateWalletTrading(customer,{accountId:account,amount:'4',consent:true},'locked-wallet'),/INSUFFICIENT_FUNDS/);
  const b=await balances();assert.equal(b.locked_balance,'1.250000000000000001');
 });
+
+test('owner can release a settled allocation exactly once and the reserved balance returns to available',async()=>{
+ const rows=await core.list(customer,'walletdelegations');
+ const allocation=rows.find(row=>row.state==='ACTIVE');
+ assert.ok(allocation);
+ const receipt=await core.revokeWalletTrading(customer,{delegationId:allocation.delegation_id},'release-once');
+ assert.equal(receipt.state,'REVOKED');
+ assert.equal(receipt.available,'5.000000000000000000');
+ assert.deepEqual(await core.revokeWalletTrading(customer,{delegationId:allocation.delegation_id},'release-once'),receipt);
+ const b=await balances();assert.equal(b.locked_balance,'0.000000000000000000');
+ assert.equal((await core.list(customer,'walletdelegations')).find(row=>row.delegation_id===allocation.delegation_id).state,'REVOKED');
+});
