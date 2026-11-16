@@ -36,8 +36,8 @@ test('precise valuation, metadata check digits and public Green Bond mapping',as
  assert.throws(()=>securityMetadata({...meta,isin:'US0378331004'}),/INVALID_FIELD/);
  assert.throws(()=>securityMetadata({...meta,cusip:'037833101'}),/INVALID_FIELD/);
  const fixture={markets:[{symbol:'rEg',name:meta.name,shortName:meta.shortName,kind:'bond',currency:'EUR',status:'listed',nominal:'1000',last:'98',isin:meta.isin,cusip:meta.cusip},{symbol:'PRIVATE',kind:'note',status:'draft'}]};
- const feed=await greenBondCatalogue(async(url,options)=>{assert.equal(url,'https://avis.land/api/xchg/markets');assert.equal(options.redirect,'error');return new Response(JSON.stringify(fixture));});assert.equal(feed.length,1);assert.equal(feed[0].symbol,'REG');assert.equal(feed[0].quoteBasis,'PERCENT');assert.equal(feed[0].cusip,meta.cusip);
- await assert.rejects(greenBondCatalogue(async()=>new Response('{}')),/SECURITY_CATALOGUE_READ/);
+ const feed=await greenBondCatalogue(async(url,options)=>{assert.equal(url,'https://avis.land/api/xchg/markets');assert.equal(options.redirect,'error');return new Response(JSON.stringify(fixture));});assert.equal(feed.length,3);assert.equal(feed[0].symbol,'REG');assert.equal(feed[0].quoteBasis,'PERCENT');assert.equal(feed[0].cusip,meta.cusip);assert.deepEqual(feed.slice(1).map(row=>[row.symbol,row.shortName,row.kind,row.quantityDecimals]),[['AG','AG','token',18],['AGI','AGi','token',18]]);
+ await assert.rejects(greenBondCatalogue(async()=>new Response('{}')),/SECURITY_CATALOGUE_READ/);\n assert.equal(securityMetadata({...meta,kind:'token'}).kind,'token');
 });
 test('catalogue import is idempotent and does not rewrite existing account data or book nominal supply',async()=>{
  const before=await core.list(admin,'accountsummaries'),journal=(await core.list(admin,'transactions')).length,k=key();
