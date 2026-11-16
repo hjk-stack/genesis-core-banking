@@ -23,6 +23,19 @@ test('same owner gets exactly the four instructed opening positions once',async(
  }
  assert.deepEqual(await bookTreasuryOpening(pool,env),receipt);
  assert.equal((await readTreasuryOpening(pool)).length,4);
+ for(const code of ['AG','AGi']){
+  const position=receipt.positions.find(p=>p.asset===code);
+  assert.ok(position.accountId);
+  assert.ok(position.journalId);
+  const account=(await pool.query('SELECT owner_type,currency_code,available_balance::text,account_category FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[position.accountId])).rows[0];
+  assert.equal(account.owner_type,'TREASURY');
+  assert.equal(account.currency_code,code);
+  assert.equal(account.account_category,'ASSET');
+  assert.equal(Number(account.available_balance),10000000000);
+  const entries=(await pool.query('SELECT count(*)::int n FROM avis_core_v2.ledger_entries WHERE journal_id=$1',[position.journalId])).rows[0];
+  assert.equal(entries.n,2);
+ }
+
 });
 test('records preserve existing asset quantities and no new issuance is invented',()=>{
  assert.deepEqual(TREASURY_POSITIONS.map(x=>x.quantity),['500000','100000000','10000000000','10000000000']);
