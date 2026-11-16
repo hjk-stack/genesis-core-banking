@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {PGlite} from '@electric-sql/pglite';
 import {migrate} from '../src/migrate.mjs';
 import {bookTreasuryOpening,readTreasuryOpening,TREASURY_POSITIONS} from '../src/treasury-opening.mjs';
+import {CryptoWorkspace} from '../src/crypto-workspace.mjs';
 
 let db,pool;
 const env={CONTAINER_APP_NAME:'genesis-banking-uat',CONTAINER_APP_ENV_DNS_SUFFIX:'orangemushroom-9faae382.italynorth.azurecontainerapps.io',PGDATABASE:'fineract_default'};
@@ -40,4 +41,17 @@ test('same owner gets exactly the four instructed opening positions once',async(
 test('records preserve existing asset quantities and no new issuance is invented',()=>{
  assert.deepEqual(TREASURY_POSITIONS.map(x=>x.quantity),['500000','100000000','10000000000','10000000000']);
  assert.ok(!TREASURY_POSITIONS.some(x=>x.quantity==='4500000'));
+});
+
+test('Treasury admin readback exposes saved AG/AGi ledger journal and account identifiers',async()=>{
+ const service=new CryptoWorkspace(pool);
+ const positions=await service.list({id:'admin',admin:true},'treasurypositions');
+ assert.equal(positions.length,4);
+ for(const code of ['AG','AGi']){
+  const asset=positions.find(x=>x.asset_code===code);
+  assert.ok(asset?.journal_id);
+  assert.ok(asset?.ledger_account_id);
+  const account=(await pool.query('SELECT available_balance::text FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[asset.ledger_account_id])).rows[0];
+  assert.equal(Number(account.available_balance),10000000000);
+ }
 });
