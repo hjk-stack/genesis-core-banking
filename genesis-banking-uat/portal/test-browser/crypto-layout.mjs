@@ -291,6 +291,22 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   assert.ok(layout.marketScroll>layout.marketWidth,'the top 100 must scroll within their own row');
   assert.equal(await page.locator('[data-wallet] dd').first().textContent(),'100.123456789012345678');
   await page.waitForFunction(()=>document.querySelector('[data-wallet] img')?.naturalWidth>0);
+  await page.locator('[data-wallet]').first().click({button:'right',position:{x:12,y:12}});
+  const delegation=page.locator('.wallet-trading-popup');
+  await delegation.waitFor();
+  assert.match(await delegation.textContent(),/automated algorithmic trading using the designated portion/);
+  const allocation=delegation.getByRole('textbox',{name:'Designated trading quantity'});
+  const agreement=delegation.locator('[data-consent]');
+  const freeze=delegation.getByRole('button',{name:'Freeze & Authorize Robot'});
+  assert.equal(await freeze.isDisabled(),true);
+  await allocation.fill('1.25');
+  assert.equal(await agreement.isEnabled(),true);
+  await agreement.check();
+  assert.equal(await allocation.getAttribute('readonly'),'');
+  assert.equal(await freeze.isEnabled(),true);
+  await delegation.getByRole('button',{name:'Cancel'}).click();
+  assert.equal(await page.locator('.wallet-trading-popup').count(),0);
+
 
   await page.getByRole('button',{name:'Receive AG',exact:true}).click();
   await page.locator('.crypto-qr').waitFor();
