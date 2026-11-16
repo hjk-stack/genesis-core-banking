@@ -11,6 +11,8 @@ CREATE TABLE avis_core_v2.treasury_opening_positions (
  isin varchar(12),
  quantity numeric(36,18) NOT NULL CHECK(quantity>0 AND quantity<>'NaN'::numeric),
  destination varchar(40) NOT NULL CHECK(destination IN ('TREASURY_PORTFOLIO','TREASURY_WALLET')),
+ ledger_account_id uuid REFERENCES avis_core_v2.ledger_accounts,
+ journal_id uuid REFERENCES avis_core_v2.ledger_journals,
  booking_reference varchar(128) NOT NULL UNIQUE,
  booked_by varchar(180) NOT NULL,
  booked_at timestamptz NOT NULL DEFAULT now(),
