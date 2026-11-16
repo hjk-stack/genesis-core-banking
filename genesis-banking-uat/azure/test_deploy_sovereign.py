@@ -136,6 +136,38 @@ class ExistingProviderSettingsTests(unittest.TestCase):
         self.assertEqual(result, ['COINAPI_EMS_API_KEY=secretref:avispay-provider-coinapi-ems-api-key'])
         azure.assert_not_called()
 
+    def test_protected_release_provider_secret_survives_source_resource_group_denial(self):
+        denial = deploy.AzureOperationError(('webapp', 'config', 'appsettings', 'list'),
+                                           'ERROR: (AuthorizationFailed) fixture')
+        calls = []
+        def azure(*args):
+            calls.append(args)
+            if args[0] == 'webapp':
+                raise denial
+            return None
+        with patch.dict(os.environ, {
+                'AVISPAY_PROVIDER_COINAPI_EMS_API_KEY': 'ems-fixture-secret',
+                'AVISPAY_PROVIDER_COINAPI_NAAS_API_KEY': 'naas-fixture-secret',
+                'AVISPAY_PROVIDER_ALCHEMY_API_KEY': 'alchemy-fixture-secret',
+                'AVISPAY_PROVIDER_AVIS_WALLET_ENCRYPTION_KEY': 'never-transfer-wallet-secret',
+            }), patch.object(deploy, 'az', side_effect=azure), contextlib.redirect_stdout(io.StringIO()) as output:
+            result = deploy.existing_crypto_settings([])
+        for key in ('COINAPI_EMS_API_KEY', 'COINAPI_NAAS_API_KEY', 'ALCHEMY_API_KEY'):
+            self.assertIn(key + '=secretref:avispay-provider-' + key.lower().replace('_','-'), result)
+        self.assertEqual(len(calls), 2)
+        self.assertIn('AuthorizationFailed', output.getvalue())
+        self.assertNotIn('fixture-secret', output.getvalue())
+        self.assertNotIn('AVIS_WALLET_ENCRYPTION_KEY', str(calls))
+        self.assertNotIn('never-transfer-wallet-secret', str(calls))
+
+    def test_existing_provider_binding_not_overwritten_by_release_secrets(self):
+        current = [{'name': 'ALCHEMY_API_KEY', 'secretRef': 'existing-alchemy'}]
+        with patch.dict(os.environ, {'AVISPAY_PROVIDER_ALCHEMY_API_KEY': 'new-secret'}, clear=False), patch.object(deploy, 'az', return_value=[]) as azure:
+            result=deploy.existing_crypto_settings(current)
+        self.assertEqual(result, [])
+        self.assertEqual(azure.call_count, 1)
+        self.assertNotIn('new-secret', str(azure.call_args_list))
+
     def test_source_denial_preserves_existing_secret_binding_and_reports_only_safe_error_code(self):
         error = deploy.AzureOperationError(('webapp', 'config', 'appsettings', 'list'),
                                            'ERROR: (AuthorizationFailed) private-source-fixture')
