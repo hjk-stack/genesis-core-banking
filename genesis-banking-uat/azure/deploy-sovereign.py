@@ -357,6 +357,23 @@ def existing_crypto_settings(current_env, known_secrets=()):
         print('Reused existing UAT crypto secret bindings: ' + str(len(result)))
     if not missing:
         return result
+    # Deployment-scoped GitHub secrets provide an independent, least-privilege
+    # route when the Azure OIDC identity cannot read the other resource group.
+    # Existing UAT bindings always win; no values are committed to the repo.
+    direct = {setting: os.environ['AVISPAY_PROVIDER_' + setting]
+              for setting in sorted(missing)
+              if os.environ.get('AVISPAY_PROVIDER_' + setting)
+              and not os.environ['AVISPAY_PROVIDER_' + setting].startswith('@Microsoft.KeyVault(')}
+    if direct:
+        values = ['avispay-provider-' + setting.lower().replace('_', '-') + '=' + value
+                  for setting, value in sorted(direct.items())]
+        az('containerapp', 'secret', 'set', '-g', RG, '-n', APP, '--secrets', *values)
+        result.extend(setting + '=secretref:avispay-provider-' + setting.lower().replace('_', '-')
+                      for setting in sorted(direct))
+        missing -= set(direct)
+        print('Installed UAT provider connections from protected release secrets: ' + str(len(direct)))
+    if not missing:
+        return result
     try:
         settings = az('webapp', 'config', 'appsettings', 'list', '-g',
                       CRYPTO_SOURCE_RG, '-n', CRYPTO_SOURCE_APP)

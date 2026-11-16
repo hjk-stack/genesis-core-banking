@@ -114,4 +114,13 @@ jobs:
           docker push "$SERVER/avispay-sovereign:$GITHUB_SHA"
           echo "AVISPAY_IMAGE=$SERVER/avispay-sovereign:$GITHUB_SHA" >> "$GITHUB_ENV"
       - name: Update existing application and verify authenticated banking reads
+        env:
+          AVISPAY_PROVIDER_COINAPI_EMS_API_KEY: ${{ secrets.AVISPAY_PROVIDER_COINAPI_EMS_API_KEY }}
+          AVISPAY_PROVIDER_COINAPI_NAAS_API_KEY: ${{ secrets.AVISPAY_PROVIDER_COINAPI_NAAS_API_KEY }}
+          AVISPAY_PROVIDER_COINAPI_API_KEY: ${{ secrets.AVISPAY_PROVIDER_COINAPI_API_KEY }}
+          AVISPAY_PROVIDER_COINAPI_MARKET_DATA_API_KEY: ${{ secrets.AVISPAY_PROVIDER_COINAPI_MARKET_DATA_API_KEY }}
+          AVISPAY_PROVIDER_APIBRICKS_COINAPI_KEY: ${{ secrets.AVISPAY_PROVIDER_APIBRICKS_COINAPI_KEY }}
+          AVISPAY_PROVIDER_ALCHEMY_API_KEY: ${{ secrets.AVISPAY_PROVIDER_ALCHEMY_API_KEY }}
+          AVISPAY_PROVIDER_TRONGRID_API_KEY: ${{ secrets.AVISPAY_PROVIDER_TRONGRID_API_KEY }}
+          AVISPAY_PROVIDER_COINGECKO_API_KEY: ${{ secrets.AVISPAY_PROVIDER_COINGECKO_API_KEY }}
         run: python3 genesis-banking-uat/azure/deploy-sovereign.py
