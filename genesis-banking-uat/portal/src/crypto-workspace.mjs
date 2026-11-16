@@ -22,7 +22,8 @@ export const CRYPTO_MESSAGES={
  CRYPTO_RECEIPT:'The transaction receipt does not match the selected wallet and asset.',CRYPTO_CONFIRMATIONS:'The transaction is waiting for blockchain confirmations.',
  CRYPTO_ACTION_ACTIVE:'Complete the existing contract action before starting another.',CRYPTO_SETTLEMENT_ASSET:'Verify and enable AG and AGi contracts on the selected blockchain.',
  CRYPTO_CHANNEL:'Select a rolling channel with valid security quantity and settlement amount.',
- CRYPTO_TRADING_CONSENT:'Confirm the amount and trading authorization before allocating funds.'
+ CRYPTO_TRADING_CONSENT:'Confirm the amount and trading authorization before allocating funds.',
+ CRYPTO_TRADING_POSITION:'Close the active robot position and pending orders before releasing these funds.'
 };
 export class CryptoWorkspace extends SecuritiesPortfolio {
  constructor(pool,options={}){super(pool,options);this.chain=options.chain||new ChainAPI({env:this.secretEnv,fetcher:options.cryptoFetch||fetch});this.cryptoFetch=options.cryptoFetch||fetch;}
@@ -79,12 +80,29 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
     frozen:updated.rows[0].locked_balance,consentAt:row.consent_at,state:'ACTIVE'};
   });
  }
- async walletTradingAllocations(actor,input={}){
-  const owner=actor.customerUserId||null;
-  const rows=(await this.pool.query(`SELECT d.delegation_id,d.account_id,d.user_id,d.currency_code,d.network,d.quantity::text,d.consent_at,d.state
-   FROM avis_core_v2.wallet_trading_delegations d
-   WHERE ($1::bigint IS NULL OR d.user_id=$1) ORDER BY d.consent_at DESC LIMIT 300`,[owner])).rows;
-  return {rows};
+ async revokeWalletTrading(actor,input,key){
+  if(!uuid(input.delegationId))fault('CRYPTO_WALLET_REQUIRED','delegationId');
+  return this.operation(actor,'CRYPTO_ROBOT_REVOKE',{delegationId:input.delegationId},key,async db=>{
+   const d=(await db.query(`SELECT delegation_id,account_id,user_id,currency_code,network,quantity::text,state
+     FROM avis_core_v2.wallet_trading_delegations WHERE delegation_id=$1 FOR UPDATE`,[input.delegationId])).rows[0];
+   if(!d||d.state!=='ACTIVE')fault('CRYPTO_WALLET_REQUIRED','delegationId');
+   access(actor,d.user_id);
+   const active=(await db.query(`SELECT 1 FROM avis_core_v2.trading_robots r
+     WHERE r.user_id=$1 AND (r.base_asset=$2 OR r.quote_asset=$2)
+     AND (r.enabled OR r.position_quantity>0 OR EXISTS
+       (SELECT 1 FROM avis_core_v2.trading_robot_orders o WHERE o.robot_id=r.robot_id
+        AND o.status IN ('CREATED','DISPATCHING','ACKNOWLEDGED'))) LIMIT 1`,
+    [d.user_id,d.currency_code])).rows;
+   if(active.length)fault('CRYPTO_TRADING_POSITION','delegationId');
+   const wallet=await db.query(`UPDATE avis_core_v2.ledger_accounts SET locked_balance=locked_balance-$2::numeric,updated_at=now()
+     WHERE account_id=$1 AND locked_balance>=$2::numeric RETURNING available_balance::text,locked_balance::text`,[d.account_id,d.quantity]);
+   if(wallet.rowCount!==1)fault('CRYPTO_WALLET_REQUIRED','accountId');
+   await db.query(`UPDATE avis_core_v2.wallet_trading_delegations SET state='REVOKED',released_at=now()
+    WHERE delegation_id=$1`,[d.delegation_id]);
+   return {delegationId:d.delegation_id,accountId:d.account_id,state:'REVOKED',
+    available:decimal(units(wallet.rows[0].available_balance)-units(wallet.rows[0].locked_balance)),
+    frozen:wallet.rows[0].locked_balance};
+  });
  }
  async cryptoWallet(actor,input){const r=(await this.pool.query('SELECT address_id,user_id,network,public_address,destination_tag FROM avis_core_v2.user_deposit_addresses WHERE address_id=$1',[input.addressId])).rows[0];if(!r)fault('CRYPTO_WALLET_REQUIRED','addressId');access(actor,r.user_id);return {...r,qr:await QRCode.toDataURL(r.public_address,{margin:2,width:256,errorCorrectionLevel:'M'})};}
  async cryptoChainBalance(actor,input){const wallet=await this.cryptoWallet(actor,input),asset=(await this.pool.query('SELECT * FROM avis_core_v2.crypto_asset_networks WHERE asset_id=$1 AND network=$2',[input.assetId,wallet.network])).rows[0];if(!asset)fault('CRYPTO_APPROVAL_REQUIRED','assetId');return {...await this.chain.balance(wallet.network,wallet.public_address,asset.contract_address,asset.decimals),observedAt:new Date().toISOString()};}
