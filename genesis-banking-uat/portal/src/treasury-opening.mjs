@@ -22,27 +22,42 @@ export async function bookTreasuryOpening(pool,env=process.env){
   if(!owner||owner.full_name!=='AVISPay PLC'||owner.account_role!=='INSTITUTION')fault('TREASURY_OWNER_MISMATCH');
   const result=[];
   for(const p of TREASURY_POSITIONS){
+   // Each crypto currency is entered into the AVISPay PLC internal Treasury ledger.
+   // Its offset is a dedicated initial-position register, not a bank or chain.
+   let accountId=null,journalId=null;
+   if(p.assetClass==='CRYPTO'){
+    accountId=await core.system(db,'TREASURY',p.assetCode,'REGISTERED_OPENING','ASSET');
+    const openingOffset=await core.system(db,'MIGRATION_OFFSET',p.assetCode,'TREASURY_INITIAL_POSITION','EQUITY');
+    journalId=await core.post(db,OPERATOR,TREASURY_REQUEST+':'+p.assetCode,'TREASURY_INITIAL_ASSET',p.sourceReference,[
+     {accountId,direction:'DEBIT',amount:p.quantity},
+     {accountId:openingOffset,direction:'CREDIT',amount:p.quantity}
+    ]);
+   }
    const ref=TREASURY_REQUEST+':'+p.assetCode;
    const inserted=(await db.query(`INSERT INTO avis_core_v2.treasury_opening_positions
-    (source_system,source_reference,owner_user_id,asset_class,asset_code,asset_name,isin,quantity,destination,booking_reference,booked_by)
-    VALUES('ARGENTARIUS_AVIS_GREENS',$1,1,$2,$3,$4,$5,$6,$7,$8,$9)
+    (source_system,source_reference,owner_user_id,asset_class,asset_code,asset_name,isin,quantity,destination,ledger_account_id,journal_id,booking_reference,booked_by)
+    VALUES('ARGENTARIUS_AVIS_GREENS',$1,1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
     ON CONFLICT (source_system,source_reference,asset_class,asset_code) DO NOTHING RETURNING booking_id`,
-    [p.sourceReference,p.assetClass,p.assetCode,p.assetName,p.isin,p.quantity,p.destination,ref,OPERATOR.id])).rows[0];
+    [p.sourceReference,p.assetClass,p.assetCode,p.assetName,p.isin,p.quantity,p.destination,accountId,journalId,ref,OPERATOR.id])).rows[0];
    if(!inserted)fault('TREASURY_SOURCE_ALREADY_BOOKED');
-   result.push({bookingId:inserted.booking_id,asset:p.assetCode,quantity:p.quantity,destination:p.destination});
+   result.push({bookingId:inserted.booking_id,asset:p.assetCode,quantity:p.quantity,destination:p.destination,accountId,journalId});
   }
   return {requestId:TREASURY_REQUEST,owner:'AVISPay PLC',positions:result};
  });
 }
 export async function readTreasuryOpening(pool){
  return (await pool.query(`SELECT booking_id,source_reference,asset_class,asset_code,asset_name,isin,
- quantity::text,destination,booking_reference,booked_at FROM avis_core_v2.treasury_opening_positions
+ quantity::text,destination,ledger_account_id,journal_id,booking_reference,booked_at FROM avis_core_v2.treasury_opening_positions
  WHERE owner_user_id=1 ORDER BY asset_class,asset_code`)).rows;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  const pool=new pg.Pool({host:process.env.PGHOST,port:Number(process.env.PGPORT||5432),database:process.env.PGDATABASE,user:process.env.PGUSER,password:process.env.PGPASSWORD,ssl:{rejectUnauthorized:true},max:1});
  try{const result=await bookTreasuryOpening(pool);const rows=await readTreasuryOpening(pool);
   if(!result.positions.every(p=>rows.some(r=>r.booking_id===p.bookingId&&Number(r.quantity)===Number(p.quantity))))throw Error('TREASURY_READBACK_MISMATCH');
+  for(const p of result.positions.filter(p=>p.accountId)){
+   const ledger=(await pool.query('SELECT available_balance::text FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[p.accountId])).rows[0];
+   if(!ledger||Number(ledger.available_balance)!==Number(p.quantity))throw Error('TREASURY_LEDGER_READBACK_MISMATCH');
+  }
   console.log('AVISPAY_TREASURY_BOOKING_OK '+JSON.stringify(result));
  }catch(e){console.error('AVISPAY_TREASURY_BOOKING_FAILED '+(e.code||e.message));process.exitCode=1;}finally{await pool.end();}
 }
