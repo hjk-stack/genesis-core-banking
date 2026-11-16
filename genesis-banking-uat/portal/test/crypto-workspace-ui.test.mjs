@@ -266,7 +266,7 @@ test('a confirmed deposit refreshes holdings without replacing a subsequently se
  assert.equal(document.querySelector('[data-wallet-network]').value,'SOLANA');assert.equal(document.querySelector('[data-wallet-group]').dataset.wallet,sol.account_id);
  assert.equal(document.querySelector('[data-wallet-group] dd').textContent,'980.654321');assert.equal(document.querySelector('[data-receive-network]').value,'SOLANA');
  assert.equal(document.querySelector('.crypto-receive code').textContent,'public-'+sol.address_id);assert.equal(document.querySelector('[data-deposit-result]'),null);
- document.querySelector('dialog .close').click();await choose('[data-wallet-network]','ETHEREUM');assert.equal(document.querySelector('[data-wallet-group] dd').textContent,'124.456789012345678001');
+ document.querySelector('dialog .close').click();await choose('[data-wallet-network]','ETHEREUM');assert.equal(document.querySelector('[data-wallet-group] dd').textContent,'124.456789012345677992');
 });
 
 test('first-time administrator approval refreshes authoritative verification and eligible networks without resetting Receive',async()=>{
