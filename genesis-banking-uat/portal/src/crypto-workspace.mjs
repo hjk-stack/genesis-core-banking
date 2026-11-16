@@ -72,7 +72,7 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
    access(actor,wallet.user_id);
    if(units(wallet.available_balance)-units(wallet.locked_balance)<units(amount))fault('INSUFFICIENT_FUNDS','amount');
    const updated=await db.query('UPDATE avis_core_v2.ledger_accounts SET locked_balance=locked_balance+$2::numeric,updated_at=now() WHERE account_id=$1 AND available_balance-locked_balance>=$2::numeric RETURNING available_balance::text,locked_balance::text',[wallet.account_id,amount]);
-   if(updated.rowCount!==1)fault('INSUFFICIENT_FUNDS','amount');
+   if(updated.rows.length!==1)fault('INSUFFICIENT_FUNDS','amount');
    const row=(await db.query(`INSERT INTO avis_core_v2.wallet_trading_delegations(account_id,user_id,currency_code,network,quantity,consent_text_hash)
     VALUES($1,$2,$3,$4,$5,$6) RETURNING delegation_id,consent_at`,[wallet.account_id,wallet.user_id,wallet.currency_code,wallet.network,amount,consentHash])).rows[0];
    return {delegationId:row.delegation_id,accountId:wallet.account_id,currency:wallet.currency_code,network:wallet.network,
@@ -96,7 +96,7 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
    if(active.length)fault('CRYPTO_TRADING_POSITION','delegationId');
    const wallet=await db.query(`UPDATE avis_core_v2.ledger_accounts SET locked_balance=locked_balance-$2::numeric,updated_at=now()
      WHERE account_id=$1 AND locked_balance>=$2::numeric RETURNING available_balance::text,locked_balance::text`,[d.account_id,d.quantity]);
-   if(wallet.rowCount!==1)fault('CRYPTO_WALLET_REQUIRED','accountId');
+   if(wallet.rows.length!==1)fault('CRYPTO_WALLET_REQUIRED','accountId');
    await db.query(`UPDATE avis_core_v2.wallet_trading_delegations SET state='REVOKED',released_at=now()
     WHERE delegation_id=$1`,[d.delegation_id]);
    return {delegationId:d.delegation_id,accountId:d.account_id,state:'REVOKED',
