@@ -286,15 +286,13 @@ def apply_authorized_opening(revision, container):
         os.close(master)
 
 def apply_treasury_opening(revision, container):
-    """Run the owner-directed, idempotent Treasury asset-position opening inside the existing application."""
+    """Post the four owner-authorised opening positions in the existing UAT container."""
     replicas = az('containerapp', 'replica', 'list', '-g', RG, '-n', APP, '--revision', revision)
     if not replicas:
-        raise RuntimeError('No running UAT replica for opening entries')
+        raise RuntimeError('No running UAT replica for Treasury opening')
     args = ['az', 'containerapp', 'exec', '-g', RG, '-n', APP, '--revision', revision,
             '--replica', replicas[0]['name'], '--container', container,
             '--command', 'node /app/src/treasury-opening.mjs', '--only-show-errors']
-    # Azure CLI's console requires a terminal. No credential is placed in the
-    # command or copied out of the container; output is limited to its receipt.
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 120, 0, 0))
     process = subprocess.Popen(args, stdin=slave, stdout=slave, stderr=slave,
@@ -314,19 +312,21 @@ def apply_treasury_opening(revision, container):
                 if not chunk:
                     break
                 output = (output + chunk.decode('utf-8', errors='replace'))[-65536:]
-                match = re.search(r'AVISPAY_TREASURY_BOOKING_OK (\{[^\r\n]+\})', output)
+                match = re.search(r'AVISPAY_TREASURY_BOOKING_OK (\\{[^\\r\\n]+\\})', output)
                 if match:
                     receipt = json.loads(match.group(1))
                     break
             if not ready and process.poll() is not None:
-                      if not receipt or receipt.get('requestId') != 'avispay-treasury-registered-inventory-2026-11-16':
-            raise RuntimeError('Treasury opening booking receipt missing')
+                break
+        if not receipt or receipt.get('requestId') != 'avispay-treasury-registered-inventory-2026-11-16':
+            code = re.search(r'AVISPAY_TREASURY_BOOKING_FAILED ([A-Z0-9_]+)', output)
+            raise RuntimeError('Treasury opening posting failed' + (': ' + code.group(1) if code else ''))
         positions = receipt.get('positions', [])
         expected = {'USU3712QAA05': 500000, 'AVISPAY-PLC-SHARES': 100000000, 'AG': 10000000000, 'AGi': 10000000000}
         if len(positions) != 4 or {row.get('asset'): int(row.get('quantity', 0)) for row in positions} != expected:
-            raise RuntimeError('Treasury opening quantities did not match')
-        print('Authorized Treasury opening recorded: four position booking references')
-        return receipt receipt
+            raise RuntimeError('Treasury opening quantities mismatch')
+        print('Authorized Treasury opening recorded: four booking references')
+        return receipt
     finally:
         if process.poll() is None:
             process.terminate()
