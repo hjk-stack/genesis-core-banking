@@ -24,22 +24,51 @@ export function securityMetadata(input){
  const isin=identifier(input.isin,'isin',/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/),cusip=identifier(input.cusip,'cusip',/^[A-Z0-9*@#]{8}[0-9]$/);
  if(isin){const digits=[...isin].map(c=>/[A-Z]/.test(c)?String(c.charCodeAt(0)-55):c).join('');let sum=0;[...digits].reverse().forEach((v,i)=>{let n=Number(v)*(i%2?2:1);sum+=n>9?n-9:n;});if(sum%10)fault('INVALID_FIELD','isin');}
  if(cusip){let sum=0;[...cusip.slice(0,8)].forEach((c,i)=>{let n=(/[A-Z]/.test(c)?c.charCodeAt(0)-55:/[0-9]/.test(c)?Number(c):{'*':36,'@':37,'#':38}[c])*(i%2?2:1);sum+=Math.floor(n/10)+n%10;});if((10-sum%10)%10!==Number(cusip[8]))fault('INVALID_FIELD','cusip');}
- const kind=['bond','note','cd','share','fund','other'].includes(input.kind)?input.kind:'other';
+ const kind=['bond','note','cd','share','fund','token','other'].includes(input.kind)?input.kind:'other';
  const quantityDecimals=Number(input.quantityDecimals??0);if(!Number.isInteger(quantityDecimals)||quantityDecimals<0||quantityDecimals>18)fault('INVALID_FIELD','quantityDecimals');
  return {name,shortName,currency,denomination,quoteBasis:input.quoteBasis,quantityDecimals,isin,cusip,kind};
 }
-export async function greenBondCatalogue(fetcher=fetch){
- const response=await fetcher('https://avis.land/api/xchg/markets',{redirect:'error',signal:AbortSignal.timeout(20000),headers:{accept:'application/json'}});
- if(!response.ok)fault('SECURITY_CATALOGUE_READ',null,503);
- const raw=await response.text();if(Buffer.byteLength(raw)>2_000_000)fault('SECURITY_CATALOGUE_READ',null,503);
- let feed;try{feed=JSON.parse(raw);}catch{fault('SECURITY_CATALOGUE_READ',null,503);}
- if(!Array.isArray(feed.markets))fault('SECURITY_CATALOGUE_READ',null,503);
- // The exchange publication filter is authoritative. Do not read its private databank.
- return feed.markets.filter(s=>['bond','note','cd','share','fund'].includes(s.kind)&&s.status==='listed').map(s=>({
-  ...securityMetadata({name:s.name,shortName:s.shortName||s.name,currency:s.currency,denomination:String(s.nominal||'1'),quoteBasis:['bond','note','cd'].includes(s.kind)?'PERCENT':'UNIT',quantityDecimals:s.decimals||0,isin:s.isin,cusip:s.cusip,kind:s.kind}),
-  symbol:text(s.symbol,'symbol',80).toUpperCase(),referencePrice:decimal(money(String(s.last||s.refPrice)))
- }));
+// The registered AVIS Greens assets are also portfolio-selectable, not duplicate treasury stock.
+// Contract IDs identify the canonical Ethereum instruments; do not book the 10bn supply to clients.
+export const AVIS_GREEN_PORTFOLIO_TOKENS=Object.freeze([
+ {symbol:'AG',name:'AVIS Greens Stablecoin',contract:'0x713d3a1785219aeb37e52260ff8f96660851842b'},
+ {symbol:'AGi',name:'AVIS Greens Invest Coin',contract:'0x0482213c1e5a9fefdee36d9b01c044938403a9af'}
+]);
+const registeredGreenToken=token=>({
+ ...securityMetadata({name:token.name,shortName:token.symbol,currency:'USD',denomination:'1',quoteBasis:'UNIT',
+  quantityDecimals:18,kind:'token'}),symbol:token.symbol.toUpperCase(),referencePrice:'0.000000000000000000'
+});
+function catalogueRow(s){
+ const kind=String(s.kind||'').toLowerCase(),symbol=String(s.symbol||s.shortName||'').toUpperCase();
+ if(!['bond','note','cd','share','fund','token','crypto','asset','commodity','future','other'].includes(kind)||!symbol)return null;
+ // Preserve every registered identifier and distinguish token units from percentage-quoted notes.
+ const crypto=['token','crypto','asset'].includes(kind);
+ return {...securityMetadata({name:s.name||s.title||symbol,shortName:s.shortName||s.symbol||symbol,
+  currency:s.currency||s.currency_code||'USD',denomination:String(s.nominal||s.denomination||'1'),
+  quoteBasis:['bond','note','cd'].includes(kind)?'PERCENT':'UNIT',
+  quantityDecimals:s.decimals??s.quantityDecimals??(crypto?18:0),
+  isin:s.isin||null,cusip:s.cusip||null,kind:crypto?'token':kind==='future'?'other':kind}),
+  symbol,referencePrice:decimal(money(String(s.last||s.refPrice||s.referencePrice||'0'))) };
 }
+export async function greenBondCatalogue(fetcher=fetch){
+ const privateUrl=process.env.GREEN_BOND_DATABANK_CATALOGUE_URL?.trim();
+ const token=process.env.GREEN_BOND_DATABANK_CATALOGUE_TOKEN?.trim();
+ // A separate authenticated administrative feed returns ALL Green Bond Databank securities,
+ // including drafts and privately registered instruments. The public feed cannot do that.
+ const url=privateUrl&&token?privateUrl:'https://avis.land/api/xchg/markets';
+ const headers={accept:'application/json',...(privateUrl&&token?{'x-avis-portfolio-token':token}:{})};
+ const response=await fetcher(url,{redirect:'error',signal:AbortSignal.timeout(20000),headers});
+ if(!response.ok)fault('SECURITY_CATALOGUE_READ',null,503);
+ const raw=await response.text();if(Buffer.byteLength(raw)>8_000_000)fault('SECURITY_CATALOGUE_READ',null,503);
+ let feed;try{feed=JSON.parse(raw);}catch{fault('SECURITY_CATALOGUE_READ',null,503);}
+ const rows=Array.isArray(feed.securities)?feed.securities:Array.isArray(feed.markets)?feed.markets:null;
+ if(!rows)fault('SECURITY_CATALOGUE_READ',null,503);
+ const registry=(Array.isArray(feed.securities)?rows:rows.filter(s=>s.status==='listed')).map(catalogueRow).filter(Boolean);
+ const bySymbol=new Map(registry.map(s=>[s.symbol,s]));
+ for(const token of AVIS_GREEN_PORTFOLIO_TOKENS)if(!bySymbol.has(token.symbol.toUpperCase()))bySymbol.set(token.symbol.toUpperCase(),registeredGreenToken(token));
+ return [...bySymbol.values()];
+}
+
 const securitySelect=`SELECT security_id,name,short_name,currency_code,isin,cusip,denomination::text,quote_basis,quantity_decimals,kind,source,exchange_symbol,reference_price::text,source_updated_at FROM avis_core_v2.portfolio_securities`;
 const positionSelect=`SELECT p.position_id,p.user_id,u.full_name,s.security_id,s.name,s.short_name,s.currency_code,s.isin,s.cusip,s.denomination::text,s.quote_basis,s.source,s.exchange_symbol,
  p.quantity::text,p.reserved_quantity::text,(p.quantity-p.reserved_quantity)::text AS available_quantity,p.issuing_price::text,p.market_price::text,p.version,p.updated_at
