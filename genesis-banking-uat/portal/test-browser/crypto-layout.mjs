@@ -191,6 +191,7 @@ async function verifyCurrencyActivation(page,width){
 }
 
 async function verifyTradingTests(page,width){
+ await page.locator('.trading-advanced').evaluate(panel=>{panel.open=true;});
  const mark=calls.length,lab=page.locator('.trading-testing'),start=page.getByRole('button',{name:'Start live trading',exact:true});
  await lab.getByRole('heading',{name:'Trading tests',exact:true}).waitFor();
  assert.equal(await start.isDisabled(),true,'unreviewed robots cannot start live trading');
