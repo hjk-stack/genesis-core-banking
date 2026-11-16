@@ -274,11 +274,11 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
    errors.push('Unexpected external request: '+new URL(url).origin);return route.abort();
   });
   await page.goto(base);
-  await page.getByRole('heading',{name:'AVISPay PLC · Asset contents & conversion'}).waitFor();
+  await page.locator('.trading-advanced').evaluate(el=>{el.open=true;});
   await page.getByRole('textbox',{name:'Analysis instructions',exact:true}).waitFor();
   await page.waitForFunction(()=>document.querySelector('[data-run-test]')?.disabled===false);
   assert.equal(await page.locator('[data-index-policy] textarea[name=instructions]').count(),1);assert.equal(await page.locator('[data-robot-instruction-form] textarea[name=instructions]').count(),1);
-  assert.equal(await page.locator('[data-security]').count(),10);
+  assert.equal(await page.locator('[data-security]').count(),0,'no demo security cards in operational crypto workspace');
   assert.equal(await page.locator('[data-markets] .crypto-market').count(),100);
   assert.equal(await page.locator('.crypto-currency-row').count(),200);
   const layout=await page.evaluate(()=>{
@@ -291,9 +291,7 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   assert.ok(layout.marketScroll>layout.marketWidth,'the top 100 must scroll within their own row');
   assert.equal(await page.locator('[data-wallet] dd').first().textContent(),'100.123456789012345678');
   await page.waitForFunction(()=>document.querySelector('[data-wallet] img')?.naturalWidth>0);
-  await page.locator('[data-security]').nth(3).click();
-  await page.getByRole('heading',{name:'Demo security 4 · Asset contents & conversion'}).waitFor();
-  assert.equal(await page.locator('[data-security][aria-pressed=true]').count(),1);
+
   await page.getByRole('button',{name:'Receive AG',exact:true}).click();
   await page.locator('.crypto-qr').waitFor();
   const d=page.locator('dialog[open]');
@@ -332,10 +330,7 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   await verifyCurrencyActivation(page,width);
   await verifyTradingTests(page,width);
   await verifyLiveTrading(page,width);
-  await page.locator('[data-security]').first().click();
-  await page.getByRole('button',{name:'Convert demo security',exact:true}).click();
-  await page.waitForFunction(()=>document.querySelector('[data-security-detail] h3')?.textContent.includes('AVISPay'));
-  assert.ok(calls.some(c=>c.url==='/api/crypto/securities/demo-convert'));
+  assert.equal(await page.locator('[data-security]').count(),0,'live securities gallery does not mount sample conversion cards');
   await mkdir('test-results',{recursive:true});
   await page.screenshot({path:'test-results/crypto-'+width+'.png',fullPage:false});
   if(width===2560){
