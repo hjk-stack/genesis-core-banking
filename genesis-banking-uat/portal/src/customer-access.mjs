@@ -18,6 +18,7 @@ export class CustomerAccess {
  async invoke(actor,method,input,key,...extra){
   const operator=this.operator(actor);
   if(method==='delegateWalletTrading')await this.owns(actor,'ledger_accounts',input.accountId);
+  else if(method==='revokeWalletTrading')await this.owns(actor,'wallet_trading_delegations',input.delegationId,'user_id','delegation_id');
   else if(method==='activateCrypto'){if(String(input.userId)!==String(actor.customerUserId))fault('FORBIDDEN','userId',403);}
   else if(['cryptoWallet','cryptoChainBalance','cryptoSecurityDetails'].includes(method)){}
   else if(method==='reconcileCryptoDeposit')await this.owns(actor,'ledger_accounts',input.accountId);
