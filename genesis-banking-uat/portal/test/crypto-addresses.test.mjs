@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {address as bitcoinAddress} from 'bitcoinjs-lib';
-import {newWallet,validAddress} from '../src/crypto/networks.mjs';
+import {ChainAPI,newWallet,validAddress} from '../src/crypto/networks.mjs';
 
 test('Bitcoin address validation accepts legacy, script, SegWit and Taproot receiving formats',()=>{
  for(const address of [
@@ -21,4 +21,32 @@ test('Bitcoin address validation rejects checksum failures, other networks and n
   '0x1234567890123456789012345678901234567890',
   '',
  ])assert.equal(validAddress('BITCOIN',address),false,address);
+});
+
+test('CoinAPI market data credentials never override the public Ethereum RPC',()=>{
+ const api=new ChainAPI({env:{COINAPI_API_KEY:'market-key',APIBRICKS_COINAPI_KEY:'other-market-key'}});
+ const config=api.connection('ETHEREUM');
+ assert.equal(config.provider,'Public RPC');
+ assert.equal(config.url,'https://ethereum-rpc.publicnode.com');
+ assert.equal(config.headers['X-CoinAPI-Key'],undefined);
+});
+test('a dedicated CoinAPI node key selects Node-as-a-Service and sends only its node credential',()=>{
+ const api=new ChainAPI({env:{COINAPI_API_KEY:'market-key',COINAPI_NAAS_API_KEY:'node-key'}});
+ const config=api.connection('ETHEREUM');
+ assert.equal(config.provider,'CoinAPI NaaS');
+ assert.equal(config.headers['X-CoinAPI-Key'],'node-key');
+});
+test('explicit chain RPC overrides provider discovery without leaking unrelated credentials',()=>{
+ const api=new ChainAPI({env:{COINAPI_NAAS_API_KEY:'node-key',ALCHEMY_API_KEY:'alchemy-key',AVIS_RPC_ETHEREUM:'https://custom.node.example/rpc'}});
+ const config=api.connection('ETHEREUM');
+ assert.equal(config.provider,'Configured RPC');
+ assert.equal(config.url,'https://custom.node.example/rpc');
+ assert.deepEqual(config.headers,{'content-type':'application/json'});
+ assert.equal(api.connection('TRON').provider,'Public RPC');
+});
+test('Alchemy is selected only for Ethereum and not for unrelated blockchains',()=>{
+ const api=new ChainAPI({env:{ALCHEMY_API_KEY:'alchemy-token'}});
+ assert.equal(api.connection('ETHEREUM').provider,'Alchemy');
+ assert.equal(api.connection('TRON').provider,'Public RPC');
+ assert.equal(api.connection('XRPL').provider,'Public RPC');
 });
