@@ -113,10 +113,10 @@ async function verifyGroupedCurrency(page,width){
  assert.deepEqual(await network.locator('option').evaluateAll(options=>options.map(o=>o.value).filter(Boolean)),['ETHEREUM','SOLANA']);
  assert.equal(await network.inputValue(),'ETHEREUM');
  assert.equal(await usdc.getAttribute('data-wallet'),'wallet-usdc-ethereum');
- assert.equal(await usdc.locator('dd').nth(0).textContent(),'123.456789');
+ assert.equal(await usdc.locator('dd').nth(0).textContent(),'121.456789');
  assert.equal(await usdc.locator('dd').nth(1).textContent(),'2');
  await network.selectOption('SOLANA');
- await page.waitForFunction(()=>document.querySelector('[data-wallet="wallet-usdc-solana"] dd')?.textContent==='987.654321');
+ await page.waitForFunction(()=>document.querySelector('[data-wallet="wallet-usdc-solana"] dd')?.textContent==='980.654321');
  assert.equal(await usdc.count(),1);assert.equal(await usdc.locator('dd').nth(1).textContent(),'7');
  const sendSelected=async(accountId,network)=>{
   const mark=calls.length;
@@ -152,7 +152,7 @@ async function verifyGroupedCurrency(page,width){
  await mkdir('test-results',{recursive:true});
  await page.screenshot({path:'test-results/crypto-networks-'+width+'.png',fullPage:false});
  await dialog.getByRole('button',{name:'Close',exact:true}).click();
- await page.waitForFunction(()=>document.querySelector('[data-wallet="wallet-usdc-ethereum"] dd')?.textContent==='123.456789');
+ await page.waitForFunction(()=>document.querySelector('[data-wallet="wallet-usdc-ethereum"] dd')?.textContent==='121.456789');
  assert.equal(await network.inputValue(),'ETHEREUM','QR selection must update the same currency tile selection');
  await sendSelected('wallet-usdc-ethereum','ETHEREUM');
  const tile=await usdc.evaluate(element=>{const card=element.getBoundingClientRect(),select=element.querySelector('[data-wallet-network]').getBoundingClientRect();return {width:element.clientWidth,scroll:element.scrollWidth,left:card.left,right:card.right,selectLeft:select.left,selectRight:select.right};});
@@ -187,7 +187,7 @@ async function verifyCurrencyActivation(page,width){
  assert.equal(await page.locator('dialog[open]').count(),0);
  const usdc=page.locator('article[data-wallet-group]').filter({hasText:'USD Coin'});
  assert.equal(await usdc.count(),1);assert.equal(await usdc.getAttribute('data-wallet'),'wallet-usdc-ethereum');
- assert.equal(await usdc.locator('dd').first().textContent(),'123.456789','activating another currency must retain existing balances and selected accounts');
+ assert.equal(await usdc.locator('dd').first().textContent(),'121.456789','activating another currency must retain existing balances and selected accounts');
 }
 
 async function verifyTradingTests(page,width){
@@ -274,11 +274,11 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
    errors.push('Unexpected external request: '+new URL(url).origin);return route.abort();
   });
   await page.goto(base);
-  await page.getByRole('heading',{name:'AVISPay PLC · Asset contents & conversion'}).waitFor();
+  await page.locator('.trading-advanced').evaluate(el=>{el.open=true;});
   await page.getByRole('textbox',{name:'Analysis instructions',exact:true}).waitFor();
   await page.waitForFunction(()=>document.querySelector('[data-run-test]')?.disabled===false);
   assert.equal(await page.locator('[data-index-policy] textarea[name=instructions]').count(),1);assert.equal(await page.locator('[data-robot-instruction-form] textarea[name=instructions]').count(),1);
-  assert.equal(await page.locator('[data-security]').count(),10);
+  assert.equal(await page.locator('[data-security]').count(),0,'no demo security cards in operational crypto workspace');
   assert.equal(await page.locator('[data-markets] .crypto-market').count(),100);
   assert.equal(await page.locator('.crypto-currency-row').count(),200);
   const layout=await page.evaluate(()=>{
@@ -291,9 +291,23 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   assert.ok(layout.marketScroll>layout.marketWidth,'the top 100 must scroll within their own row');
   assert.equal(await page.locator('[data-wallet] dd').first().textContent(),'100.123456789012345678');
   await page.waitForFunction(()=>document.querySelector('[data-wallet] img')?.naturalWidth>0);
-  await page.locator('[data-security]').nth(3).click();
-  await page.getByRole('heading',{name:'Demo security 4 · Asset contents & conversion'}).waitFor();
-  assert.equal(await page.locator('[data-security][aria-pressed=true]').count(),1);
+  await page.locator('[data-wallet]').first().click({button:'right',position:{x:12,y:12}});
+  const delegation=page.locator('.wallet-trading-popup');
+  await delegation.waitFor();
+  assert.match(await delegation.textContent(),/automated algorithmic trading using the designated portion/);
+  const allocation=delegation.getByRole('textbox',{name:'Designated trading quantity'});
+  const agreement=delegation.locator('[data-consent]');
+  const freeze=delegation.getByRole('button',{name:'Freeze & Authorize Robot'});
+  assert.equal(await freeze.isDisabled(),true);
+  await allocation.fill('1.25');
+  assert.equal(await agreement.isEnabled(),true);
+  await agreement.check();
+  assert.equal(await allocation.getAttribute('readonly'),'');
+  assert.equal(await freeze.isEnabled(),true);
+  await delegation.getByRole('button',{name:'Cancel'}).click();
+  assert.equal(await page.locator('.wallet-trading-popup').count(),0);
+
+
   await page.getByRole('button',{name:'Receive AG',exact:true}).click();
   await page.locator('.crypto-qr').waitFor();
   const d=page.locator('dialog[open]');
@@ -332,10 +346,7 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   await verifyCurrencyActivation(page,width);
   await verifyTradingTests(page,width);
   await verifyLiveTrading(page,width);
-  await page.locator('[data-security]').first().click();
-  await page.getByRole('button',{name:'Convert demo security',exact:true}).click();
-  await page.waitForFunction(()=>document.querySelector('[data-security-detail] h3')?.textContent.includes('AVISPay'));
-  assert.ok(calls.some(c=>c.url==='/api/crypto/securities/demo-convert'));
+  assert.equal(await page.locator('[data-security]').count(),0,'live securities gallery does not mount sample conversion cards');
   await mkdir('test-results',{recursive:true});
   await page.screenshot({path:'test-results/crypto-'+width+'.png',fullPage:false});
   if(width===2560){

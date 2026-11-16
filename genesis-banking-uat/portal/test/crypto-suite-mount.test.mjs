@@ -12,7 +12,7 @@ test('crypto navigation mounts wallets first and the INDEX trading robot before 
  const positions=['crypto-wallet-desk','crypto-trading-desk','crypto-security-desk','crypto-market-desk']
   .map(id=>workspace.indexOf('id="'+id+'"'));
  assert.deepEqual([...positions].sort((a,b)=>a-b),positions);
- assert.match(workspace,/data-crypto-jump="crypto-trading-desk"/);
+ assert.doesNotMatch(workspace,/crypto-suite-navigation|data-crypto-jump/, 'the five redundant header rows are removed');
  assert.match(workspace,/data-trading-panel/);
  assert.match(workspace,/mountTradingPanel\(\{api,host:q\('\[data-trading-panel\]'\)/);
 });

@@ -98,6 +98,13 @@ export class CardManagement extends TransferMethods {
    if(!offer)fault('CRYPTO_OFFER_REQUIRED','offerId');if(money(input.unitPrice)!==money(offer.unit_price))fault('CRYPTO_PRICE_CHANGED','offerId');
    const to=await this.route(db,input.to,offer.fiat,'to'),holding=(await db.query("SELECT * FROM avis_core_v2.ledger_accounts WHERE account_id=$1 AND owner_type='USER' AND wallet_scope='FUNDING' AND account_category='LIABILITY' AND user_id=$2 AND currency_code=$3 AND network=$4",[input.cryptoAccount,to.user_id,offer.asset,offer.network])).rows[0];
    if(!holding)fault('CRYPTO_HOLDING_REQUIRED','cryptoAccount');if(String(to.user_id)===String(offer.seller_id))fault('SAME_ACCOUNT','to');
+   // User-authorised robot allocations and all other reservations must remain
+   // unavailable to ordinary conversion/sale flows until released.
+   const spendable=(await db.query(`SELECT account_id FROM avis_core_v2.ledger_accounts
+    WHERE account_id=$1 AND available_balance-locked_balance>=$2::numeric FOR UPDATE`,
+    [holding.account_id,decimal(quantity)])).rows;
+   if(!spendable.length)fault('INSUFFICIENT_FUNDS','quantity');
+
    const quantum=offer.fiat==='JPY'?10n**18n:10n**16n,total=(quantity*money(offer.unit_price)/(10n**18n*quantum))*quantum;
    if(total<=0n||money(input.total)!==total)fault('CRYPTO_PRICE_CHANGED','total');
    const journalId=await this.post(db,actor,k,'CRYPTO_SALE',input.reference,[entry(holding.account_id,'DEBIT',decimal(quantity)),entry(offer.stock_account_id,'CREDIT',decimal(quantity)),entry(offer.proceeds_account_id,'DEBIT',decimal(total)),entry(to.ledger_account_id,'CREDIT',decimal(total))]);
