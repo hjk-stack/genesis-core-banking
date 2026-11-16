@@ -81,6 +81,15 @@ test('AG purchases and conversion back to fiat exchange existing value once',asy
  assert.equal(await balance(alice.accountId),before);assert.equal(await balance(aliceAg),'1.000000000000000000');
  await assert.rejects(core.sellCrypto(admin,{...body,total:'5'},key()),/CRYPTO_PRICE_CHANGED/);
 });
+test('crypto-to-fiat conversion respects frozen wallet assets reserved for the trading robot',async()=>{
+ const balanceBefore=await balance(aliceAg);
+ await pool.query('UPDATE avis_core_v2.ledger_accounts SET locked_balance=$2 WHERE account_id=$1',[aliceAg,'0.800000000000000000']);
+ try{
+  await assert.rejects(core.sellCrypto(admin,{offerId:offer.id,cryptoAccount:aliceAg,to:alice.abiqIban,
+   quantity:'0.5',unitPrice:'2',total:'1',reference:'Robot-allocated assets'},key()),/INSUFFICIENT_FUNDS/);
+  assert.equal(await balance(aliceAg),balanceBefore,'a rejected conversion must not debit the delegated asset');
+ }finally{await pool.query('UPDATE avis_core_v2.ledger_accounts SET locked_balance=0 WHERE account_id=$1',[aliceAg]);}
+});
 test('customer boundary rejects other holders, administrative operations and request guessing',async()=>{
  const actor={id:'fineract:101',customerUserId:alice.userId,admin:false};
  const accounts=await access.list(actor,'accounts');assert.equal(accounts.length,2);assert.ok(accounts.every(a=>String(a.user_id)===alice.userId));
