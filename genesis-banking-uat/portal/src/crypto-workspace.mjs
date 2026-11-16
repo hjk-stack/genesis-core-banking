@@ -21,7 +21,8 @@ export const CRYPTO_MESSAGES={
  CRYPTO_SIGNING_KEY:'This address has no signing key in the wallet engine. Select a managed wallet.',CRYPTO_TX_FAILED:'The blockchain rejected this transaction. Its wallet booking was not posted.',
  CRYPTO_RECEIPT:'The transaction receipt does not match the selected wallet and asset.',CRYPTO_CONFIRMATIONS:'The transaction is waiting for blockchain confirmations.',
  CRYPTO_ACTION_ACTIVE:'Complete the existing contract action before starting another.',CRYPTO_SETTLEMENT_ASSET:'Verify and enable AG and AGi contracts on the selected blockchain.',
- CRYPTO_CHANNEL:'Select a rolling channel with valid security quantity and settlement amount.'
+ CRYPTO_CHANNEL:'Select a rolling channel with valid security quantity and settlement amount.',
+ CRYPTO_TRADING_CONSENT:'Confirm the amount and trading authorization before allocating funds.'
 };
 export class CryptoWorkspace extends SecuritiesPortfolio {
  constructor(pool,options={}){super(pool,options);this.chain=options.chain||new ChainAPI({env:this.secretEnv,fetcher:options.cryptoFetch||fetch});this.cryptoFetch=options.cryptoFetch||fetch;}
@@ -55,6 +56,35 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
    }
    return allNetworks?{userId,assetId:input.assetId,currency:assets[0].currency_code,wallets}:wallets[0];
   });
+ }
+ async delegateWalletTrading(actor,input,key){
+  const amount=decimal(money(input.amount));
+  if(input.consent!==true)fault('CRYPTO_TRADING_CONSENT','consent');
+  if(!uuid(input.accountId))fault('CRYPTO_WALLET_REQUIRED','accountId');
+  const disclosure='By confirming below, I expressly instruct and authorize automated algorithmic trading using the designated portion of assets from this wallet. I acknowledge that cryptocurrency markets are volatile and that algorithmic trading carries a substantial risk of loss, up to and including the total loss of the allocated funds.';
+  const consentHash=createHash('sha256').update(disclosure).digest('hex');
+  return this.operation(actor,'CRYPTO_ROBOT_DELEGATE',{accountId:input.accountId,amount,consent:true},key,async db=>{
+   const wallet=(await db.query(`SELECT account_id,user_id,currency_code,network,wallet_scope,account_category,owner_type,available_balance::text,locked_balance::text
+    FROM avis_core_v2.ledger_accounts WHERE account_id=$1 FOR UPDATE`,[input.accountId])).rows[0];
+   if(!wallet||wallet.owner_type!=='USER'||wallet.wallet_scope!=='FUNDING'||wallet.account_category!=='LIABILITY'||!wallet.network)
+    fault('CRYPTO_WALLET_REQUIRED','accountId');
+   access(actor,wallet.user_id);
+   if(units(wallet.available_balance)-units(wallet.locked_balance)<units(amount))fault('INSUFFICIENT_FUNDS','amount');
+   const updated=await db.query('UPDATE avis_core_v2.ledger_accounts SET locked_balance=locked_balance+$2::numeric,updated_at=now() WHERE account_id=$1 AND available_balance-locked_balance>=$2::numeric RETURNING available_balance::text,locked_balance::text',[wallet.account_id,amount]);
+   if(updated.rowCount!==1)fault('INSUFFICIENT_FUNDS','amount');
+   const row=(await db.query(`INSERT INTO avis_core_v2.wallet_trading_delegations(account_id,user_id,currency_code,network,quantity,consent_text_hash)
+    VALUES($1,$2,$3,$4,$5,$6) RETURNING delegation_id,consent_at`,[wallet.account_id,wallet.user_id,wallet.currency_code,wallet.network,amount,consentHash])).rows[0];
+   return {delegationId:row.delegation_id,accountId:wallet.account_id,currency:wallet.currency_code,network:wallet.network,
+    delegated:amount,available:decimal(units(updated.rows[0].available_balance)-units(updated.rows[0].locked_balance)),
+    frozen:updated.rows[0].locked_balance,consentAt:row.consent_at,state:'ACTIVE'};
+  });
+ }
+ async walletTradingAllocations(actor,input={}){
+  const owner=actor.customerUserId||null;
+  const rows=(await this.pool.query(`SELECT d.delegation_id,d.account_id,d.user_id,d.currency_code,d.network,d.quantity::text,d.consent_at,d.state
+   FROM avis_core_v2.wallet_trading_delegations d
+   WHERE ($1::bigint IS NULL OR d.user_id=$1) ORDER BY d.consent_at DESC LIMIT 300`,[owner])).rows;
+  return {rows};
  }
  async cryptoWallet(actor,input){const r=(await this.pool.query('SELECT address_id,user_id,network,public_address,destination_tag FROM avis_core_v2.user_deposit_addresses WHERE address_id=$1',[input.addressId])).rows[0];if(!r)fault('CRYPTO_WALLET_REQUIRED','addressId');access(actor,r.user_id);return {...r,qr:await QRCode.toDataURL(r.public_address,{margin:2,width:256,errorCorrectionLevel:'M'})};}
  async cryptoChainBalance(actor,input){const wallet=await this.cryptoWallet(actor,input),asset=(await this.pool.query('SELECT * FROM avis_core_v2.crypto_asset_networks WHERE asset_id=$1 AND network=$2',[input.assetId,wallet.network])).rows[0];if(!asset)fault('CRYPTO_APPROVAL_REQUIRED','assetId');return {...await this.chain.balance(wallet.network,wallet.public_address,asset.contract_address,asset.decimals),observedAt:new Date().toISOString()};}
