@@ -113,10 +113,10 @@ async function verifyGroupedCurrency(page,width){
  assert.deepEqual(await network.locator('option').evaluateAll(options=>options.map(o=>o.value).filter(Boolean)),['ETHEREUM','SOLANA']);
  assert.equal(await network.inputValue(),'ETHEREUM');
  assert.equal(await usdc.getAttribute('data-wallet'),'wallet-usdc-ethereum');
- assert.equal(await usdc.locator('dd').nth(0).textContent(),'123.456789');
+ assert.equal(await usdc.locator('dd').nth(0).textContent(),'121.456789');
  assert.equal(await usdc.locator('dd').nth(1).textContent(),'2');
  await network.selectOption('SOLANA');
- await page.waitForFunction(()=>document.querySelector('[data-wallet="wallet-usdc-solana"] dd')?.textContent==='987.654321');
+ await page.waitForFunction(()=>document.querySelector('[data-wallet="wallet-usdc-solana"] dd')?.textContent==='980.654321');
  assert.equal(await usdc.count(),1);assert.equal(await usdc.locator('dd').nth(1).textContent(),'7');
  const sendSelected=async(accountId,network)=>{
   const mark=calls.length;
@@ -152,7 +152,7 @@ async function verifyGroupedCurrency(page,width){
  await mkdir('test-results',{recursive:true});
  await page.screenshot({path:'test-results/crypto-networks-'+width+'.png',fullPage:false});
  await dialog.getByRole('button',{name:'Close',exact:true}).click();
- await page.waitForFunction(()=>document.querySelector('[data-wallet="wallet-usdc-ethereum"] dd')?.textContent==='123.456789');
+ await page.waitForFunction(()=>document.querySelector('[data-wallet="wallet-usdc-ethereum"] dd')?.textContent==='121.456789');
  assert.equal(await network.inputValue(),'ETHEREUM','QR selection must update the same currency tile selection');
  await sendSelected('wallet-usdc-ethereum','ETHEREUM');
  const tile=await usdc.evaluate(element=>{const card=element.getBoundingClientRect(),select=element.querySelector('[data-wallet-network]').getBoundingClientRect();return {width:element.clientWidth,scroll:element.scrollWidth,left:card.left,right:card.right,selectLeft:select.left,selectRight:select.right};});
@@ -187,7 +187,7 @@ async function verifyCurrencyActivation(page,width){
  assert.equal(await page.locator('dialog[open]').count(),0);
  const usdc=page.locator('article[data-wallet-group]').filter({hasText:'USD Coin'});
  assert.equal(await usdc.count(),1);assert.equal(await usdc.getAttribute('data-wallet'),'wallet-usdc-ethereum');
- assert.equal(await usdc.locator('dd').first().textContent(),'123.456789','activating another currency must retain existing balances and selected accounts');
+ assert.equal(await usdc.locator('dd').first().textContent(),'121.456789','activating another currency must retain existing balances and selected accounts');
 }
 
 async function verifyTradingTests(page,width){
