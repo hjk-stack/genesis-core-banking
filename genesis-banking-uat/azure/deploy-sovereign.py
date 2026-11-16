@@ -312,7 +312,7 @@ def apply_treasury_opening(revision, container):
                 if not chunk:
                     break
                 output = (output + chunk.decode('utf-8', errors='replace'))[-65536:]
-                match = re.search(r'AVISPAY_TREASURY_BOOKING_OK (\\{[^\\r\\n]+\\})', output)
+                match = re.search(r'AVISPAY_TREASURY_BOOKING_OK (\{[^\r\n]+\})', output)
                 if match:
                     receipt = json.loads(match.group(1))
                     break
@@ -321,10 +321,8 @@ def apply_treasury_opening(revision, container):
         if not receipt or receipt.get('requestId') != 'avispay-treasury-registered-inventory-2026-11-16':
             code = re.search(r'AVISPAY_TREASURY_BOOKING_FAILED ([A-Z0-9_]+)', output)
             raise RuntimeError('Treasury opening posting failed' + (': ' + code.group(1) if code else ''))
-        positions = receipt.get('positions', [])
-        expected = {'USU3712QAA05': 500000, 'AVISPAY-PLC-SHARES': 100000000, 'AG': 10000000000, 'AGi': 10000000000}
-        if len(positions) != 4 or {row.get('asset'): int(row.get('quantity', 0)) for row in positions} != expected:
-            raise RuntimeError('Treasury opening quantities mismatch')
+        if receipt.get('booked') != 4:
+            raise RuntimeError('Treasury opening count mismatch')
         print('Authorized Treasury opening recorded: four booking references')
         return receipt
     finally:
@@ -554,12 +552,18 @@ def main():
         stage = 'authorized Treasury opening positions'
         treasury = apply_treasury_opening(APP + '--bank-' + sha[:12], containers[0]['name'])
         booked = api(opener, base, '/api/views/treasurypositions')['rows']
-        for position in treasury['positions']:
-            matching = [row for row in booked if row['booking_id'] == position['bookingId']
-                        and row['asset_code'] == position['asset']
-                        and Decimal(row['quantity']) == Decimal(position['quantity'])]
+        expected = {'USU3712QAA05': Decimal('500000'),
+                    'AVISPAY-PLC-SHARES': Decimal('100000000'),
+                    'AG': Decimal('10000000000'),
+                    'AGi': Decimal('10000000000')}
+        for asset, quantity in expected.items():
+            matching = [row for row in booked if row['asset_code'] == asset
+                        and Decimal(row['quantity']) == quantity
+                        and str(row.get('owner_user_id')) == '1']
             if len(matching) != 1:
-                raise RuntimeError('Treasury opening position readback mismatch')
+                raise RuntimeError('Treasury opening position readback mismatch: ' + asset)
+            if asset in ('AG', 'AGi') and not matching[0].get('journal_id'):
+                raise RuntimeError('Treasury crypto journal readback mismatch: ' + asset)
         print('Verified four authorised AVISPay Treasury opening-position records')
 
         api(opener, base, '/api/logout', {}, login['csrf'])

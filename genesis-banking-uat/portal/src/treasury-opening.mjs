@@ -58,6 +58,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
    const ledger=(await pool.query('SELECT available_balance::text FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[p.accountId])).rows[0];
    if(!ledger||Number(ledger.available_balance)!==Number(p.quantity))throw Error('TREASURY_LEDGER_READBACK_MISMATCH');
   }
-  console.log('AVISPAY_TREASURY_BOOKING_OK '+JSON.stringify(result));
+  // Keep the Azure console receipt on one short line; full booking IDs are read via the authenticated API.
+  console.log('AVISPAY_TREASURY_BOOKING_OK '+JSON.stringify({requestId:result.requestId,booked:result.positions.length}));
  }catch(e){console.error('AVISPAY_TREASURY_BOOKING_FAILED '+(e.code||e.message));process.exitCode=1;}finally{await pool.end();}
 }
