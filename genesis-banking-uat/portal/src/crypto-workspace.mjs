@@ -77,7 +77,7 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
     VALUES($1,$2,$3,$4,$5,$6) RETURNING delegation_id,consent_at`,[wallet.account_id,wallet.user_id,wallet.currency_code,wallet.network,amount,consentHash])).rows[0];
    return {delegationId:row.delegation_id,accountId:wallet.account_id,currency:wallet.currency_code,network:wallet.network,
     delegated:amount,available:decimal(units(updated.rows[0].available_balance)-units(updated.rows[0].locked_balance)),
-    frozen:updated.rows[0].locked_balance,consentAt:row.consent_at,state:'ACTIVE'};
+    frozen:updated.rows[0].locked_balance,consentAt:new Date(row.consent_at).toISOString(),state:'ACTIVE'};
   });
  }
  async revokeWalletTrading(actor,input,key){
