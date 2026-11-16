@@ -56,12 +56,12 @@ export class LiveMarketFeed {
   key() { return this.env.COINAPI_MARKET_DATA_API_KEY || this.env.COINAPI_API_KEY || this.env.APIBRICKS_COINAPI_KEY || null; }
 
   channel(robot) {
-    const identity = liveMarketIdentity(robot), id = identity.symbolId;
+    const identity = liveMarketIdentity(robot), id = identity.symbolId + (robot.publicReference === true ? ':REFERENCE' : '');
     this.sweep();
     let channel = this.markets.get(id);
     if (!channel) {
       if (this.markets.size >= MAX_MARKETS) fault('TRADING_LIVE_LIMIT', 'robotId', 429);
-      channel = {...identity, provider: this.key() ? 'CoinAPI' : 'Binance', quote: null, trades: [], seen: new Set(),
+      channel = {...identity, provider: robot.publicReference === true ? 'Binance' : this.key() ? 'CoinAPI' : 'Binance', quote: null, trades: [], seen: new Set(),
         sequences: new Map(), listeners: new Map(), state: 'CLOSED', errorCode: null, lastMessageAt: null,
         touched: this.now(), retryAt: 0, socket: null, pendingSells: []};
       this.markets.set(id, channel);

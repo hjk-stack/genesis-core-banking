@@ -165,3 +165,18 @@ test('decimal input and exact market identity are bounded before opening a trans
   for (const value of [Infinity, '-1', '1e-999999999', '0.0000000000000000001', '<script>']) assert.equal(marketDecimal(value), null);
   assert.throws(() => liveMarketIdentity({...robot, symbol: 'ETHUSDT'}), e => e.code === 'TRADING_LIVE_MARKET');
 });
+
+test('unselected public reference market stays independent of CoinAPI trading robot stream',t=>{
+ const {feed,sockets}=fixture(t,{COINAPI_API_KEY:'existing-test-key'});
+ const reference={...robot,publicReference:true};
+ const r=feed.snapshot(reference);
+ assert.equal(r.provider,'Binance');
+ assert.match(sockets[0].url,/^wss:\/\/stream\.binance\.com/);
+ const selected=feed.snapshot(robot);
+ assert.equal(selected.provider,'CoinAPI');
+ assert.equal(sockets[1].url,'wss://ws.coinapi.io/v1/');
+ assert.equal(sockets.length,2);
+ sockets[1].emit('open');
+ assert.equal(sockets[1].sent[0].apikey,'existing-test-key');
+ assert.equal(sockets[0].sent.length,0);
+});

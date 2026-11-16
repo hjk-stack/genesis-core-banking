@@ -57,7 +57,7 @@ export class TradingLiveCore extends TradingTestingCore {
     if (input.robotId && !robot) fault('TRADING_LIVE_PROFILE', 'robotId', 404);
     const observedAt = new Date(this.liveNow()).toISOString();
     if (!robot) {
-      const reference = {venue: 'BINANCE', symbol: 'BTCUSDT', base_asset: 'BTC', quote_asset: 'USDT'};
+      const reference = {venue: 'BINANCE', symbol: 'BTCUSDT', base_asset: 'BTC', quote_asset: 'USDT', publicReference: true};
       return {schemaVersion: 1, observedAt, profiles, selectedRobotId: null,
         market: {...this.liveMarkets.snapshot(reference), reference: true, symbol: reference.symbol, usedByStrategy: false},
         audit: null, liquidity: null};
