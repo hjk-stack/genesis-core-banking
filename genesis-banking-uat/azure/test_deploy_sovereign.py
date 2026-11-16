@@ -318,5 +318,30 @@ class LiveTraderVerificationTests(unittest.TestCase):
                 deploy.verify_live_trading(object(), 'https://bank.example')
 
 
+
+class TreasuryOpeningConsoleTests(unittest.TestCase):
+    def run_console(self, output):
+        def process(args, **kwargs):
+            return real_popen([sys.executable, '-c',
+                               'import sys; sys.stdout.write(' + repr(output) + '); sys.stdout.flush()'],
+                              **kwargs)
+        with patch.object(deploy, 'az', return_value=[{'name': 'replica-one'}]), \
+             patch.object(deploy.subprocess, 'Popen', side_effect=process):
+            captured = io.StringIO()
+            with contextlib.redirect_stdout(captured):
+                result = deploy.apply_treasury_opening('genesis-banking-uat--bank-fixture', 'banking')
+        return result, captured.getvalue()
+
+    def test_accepts_short_azure_treasury_receipt(self):
+        receipt = {'requestId': 'avispay-treasury-registered-inventory-2026-11-16', 'booked': 4}
+        result, output = self.run_console('AVISPAY_TREASURY_BOOKING_OK ' + json.dumps(receipt) + '\\n')
+        self.assertEqual(result, receipt)
+        self.assertIn('four booking references', output)
+
+    def test_rejects_failed_treasury_operation(self):
+        with self.assertRaisesRegex(RuntimeError, 'Treasury opening posting failed'):
+            self.run_console('AVISPAY_TREASURY_BOOKING_FAILED TREASURY_OWNER_MISMATCH\\n')
+
+
 if __name__ == '__main__':
     unittest.main()
