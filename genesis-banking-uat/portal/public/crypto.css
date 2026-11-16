@@ -31,3 +31,69 @@
 .crypto-trading-console .trading-live-workspace{max-width:100%}
 #crypto-wallet-desk,#crypto-security-desk,#crypto-market-desk{scroll-margin-top:18px}
 @media(max-width:660px){.crypto-suite-navigation{gap:7px}.crypto-suite-navigation button{font-size:12px;padding:10px 12px}.crypto-trading-desk{padding:12px;border-radius:11px}.crypto-trading-desk .crypto-section-heading{flex-wrap:wrap;gap:8px}}
+
+/* AVISPay 2026 multi-asset high-speed trading: actual data, glass/chrome surfaces. */
+.crypto-suite-navigation{display:none}
+.crypto-trading-desk{background:linear-gradient(136deg,#f0f7f1 0%,#fbfffc 31%,#eaf1ed 100%);border:1px solid #d9e7dc;padding:clamp(10px,1.8vw,23px);border-radius:18px;box-shadow:inset 0 2px #fff,0 15px 34px #1c63301a;scroll-margin-top:18px}
+.crypto-trading-desk>.crypto-section-heading{margin-bottom:14px}
+.crypto-trading-desk .crypto-section-number{background:#d8e9d9;color:#375940}
+.crypto-trading-desk .crypto-section-heading h2{font-size:clamp(16px,2vw,22px);letter-spacing:-.03em}
+.crypto-trading-console{width:100%;min-width:0;overflow-wrap:anywhere}
+.trading-live{background:transparent;box-shadow:none;border:0;padding:0}
+.trading-live-heading{background:linear-gradient(90deg,#f9fff9,#e6f2e9);padding:12px 15px;border:1px solid #dce9dd;border-radius:13px}
+.trading-live-heading .eyebrow{color:#347a46}
+.trading-live-heading h3{color:#234a30;font-weight:800}
+.trading-live-select{display:flex;align-items:center;gap:13px;flex-wrap:wrap;margin:15px 0 12px;color:#315040;font-weight:650}
+.trading-live-select select{flex:1;min-width:180px;max-width:560px;border:1px solid #b8d6be;background:linear-gradient(#fff,#f4f8f5);border-radius:10px}
+.trading-live-workspace{grid-template-columns:minmax(180px,240px) minmax(150px,1fr) minmax(150px,1fr) minmax(300px,2.3fr);gap:10px;align-items:stretch}
+.trading-live-robot{background:radial-gradient(ellipse at 70% 0%,#315a47 0%,#102d25 38%,#0b1f23 100%);border:1px solid #547f68;border-radius:17px;color:#f0fff7;box-shadow:inset 0 1px #ffffff6c,0 10px 20px #135a3333;min-height:390px;padding:15px 9px}
+.trading-robot-focus{max-width:220px;filter:drop-shadow(0 8px 12px #021d1ba8)}
+.trading-robot-art .trading-robot-eyes,.trading-robot-art .trading-robot-w{filter:drop-shadow(0 0 8px #a5ffc2)}
+.terminal-live-trades,.terminal-live-book,.terminal-price-screen{min-width:0;background:linear-gradient(145deg,#fffefddd,#f4fbf7eb);border:1px solid #dce8dd;border-radius:16px;padding:13px 9px;box-shadow:inset 0 2px #fff,0 9px 18px #19442618}
+.terminal-live-trades h4,.terminal-live-book h4{font-size:13px;margin:0 0 10px;color:#203b2c;white-space:nowrap}
+.terminal-live-trades h4 span{font-size:10px;color:#2b9854}
+.terminal-scroll-tape{overflow:auto;max-height:430px;min-height:275px}
+.terminal-scroll-tape table{width:100%;border-collapse:collapse;font-size:11px;font-variant-numeric:tabular-nums}
+.terminal-scroll-tape th{text-align:right;color:#667b6d;font-size:10px;font-weight:550;border-bottom:1px solid #dce6dd;padding:8px 4px}
+.terminal-scroll-tape td{text-align:right;padding:7px 4px;white-space:nowrap;border-bottom:1px solid #e7efe8}
+.terminal-scroll-tape th:first-child,.terminal-scroll-tape td:first-child{text-align:left}
+.terminal-scroll-tape p{font-size:12px;color:#697b71;text-align:center;margin:35px 5px}
+.terminal-up td:nth-child(2){color:#17833b;font-weight:800}
+.terminal-down td:nth-child(2){color:#cf3c3c;font-weight:800}
+.terminal-price-screen .trading-live-chart{min-height:178px;background:linear-gradient(#fff,#f7fbf8);border:1px solid #e2eee5;border-radius:11px;padding:8px}
+.terminal-price-screen .trading-live-chart svg{min-height:178px}
+.terminal-price-screen .trading-live-audit{font-variant-numeric:tabular-nums}
+.terminal-trading-actions{display:flex;align-items:center;justify-content:flex-end;gap:11px;flex-wrap:wrap;padding:12px 4px 5px}
+.terminal-trading-actions>button{border:1px solid #ffffff88;border-radius:12px;color:white;min-height:50px;padding:12px 20px;font-weight:800;min-width:150px;text-shadow:0 1px #0002;box-shadow:inset 0 2px #ffffff88,0 5px 12px #10321b32}
+.terminal-trading-actions>.terminal-buy{background:linear-gradient(160deg,#67ca59,#1e932e 48%,#146d26)}
+.terminal-trading-actions>.terminal-sell{background:linear-gradient(160deg,#f77572,#d32d2d 48%,#9b1725)}
+.terminal-auto{display:flex;gap:9px;align-items:center;font-size:12px;font-weight:750;color:#25432d;cursor:pointer;white-space:nowrap;padding:0 10px}
+.terminal-auto input{width:18px;height:18px;accent-color:#258838}
+.terminal-switch{display:none}
+.terminal-action-feedback{font-size:12px;text-align:right;padding:0 4px;color:#3b6d4c;min-height:15px}
+.terminal-live-metrics{background:linear-gradient(140deg,#e8f2e7,#fff,#ecf5e9);padding:10px;border:1px solid #cfe3d0;border-radius:16px;margin-top:8px}
+.terminal-live-metrics .trading-live-details{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0}
+.terminal-live-metrics .trading-live-details>div{padding:15px 12px;background:#ffffffd6;border:1px solid #dae5da;border-radius:12px;text-align:center;box-shadow:inset 0 1px #fff,0 2px 7px #2c6b3310}
+.terminal-live-metrics .trading-live-details dt{font-weight:700;color:#526e55}
+.terminal-live-metrics .trading-live-details dd{font-size:clamp(12px,1.8vw,19px);font-weight:800;color:#1d6431}
+.crypto-trading-console .trading-instructions-grid{margin-top:18px}
+.crypto-trading-console .trading-advanced{margin-top:18px;border:1px solid #d4e6d9;border-radius:15px;padding:14px;background:#ffffffb8}
+.crypto-trading-console .trading-advanced>summary{cursor:pointer;color:#255035;font-weight:750}
+.crypto-trading-console .trading-advanced>div{margin-top:15px}
+.wallet-trading-popup{position:fixed;z-index:4000;max-height:min(86dvh,650px);overflow-y:auto;background:linear-gradient(155deg,#fdfefd,#e9f6ee 85%,#fff);border:1px solid #94bca0;border-radius:13px;padding:16px;box-shadow:0 14px 40px #071b2566,inset 0 2px #fff;color:#172b21;overscroll-behavior:contain}
+.wallet-trading-popup header,.wallet-trading-popup footer{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.wallet-trading-popup header strong{font-size:16px}
+.wallet-trading-popup header button{padding:2px 9px;background:transparent;border:0;font-size:24px}
+.wallet-trading-disclosure{font-size:12px;line-height:1.55;max-height:155px;overflow:auto;background:#fffdf4;color:#344336;border-left:3px solid #b89b42;border-radius:5px;padding:11px;margin:14px 0}
+.wallet-trading-amount{font-size:12px;display:grid;gap:6px;font-weight:750}
+.wallet-trading-amount input{display:block;width:100%;border:1px solid #a0bea5;border-radius:8px;padding:11px;font-size:15px;font-variant-numeric:tabular-nums}
+.wallet-trading-line{display:flex;justify-content:space-between;align-items:center;margin:6px 0 14px}
+.wallet-trading-line button{padding:5px 11px}
+.wallet-trading-approval{display:flex;align-items:flex-start;gap:8px;font-size:12px;line-height:1.45;font-weight:600}
+.wallet-trading-approval input{flex:0 0 18px;width:18px;height:18px;accent-color:#328d4d}
+.wallet-trading-popup footer{justify-content:flex-end;margin-top:13px}
+.wallet-trading-popup footer button{font-size:12px;padding:9px}
+.crypto-wallet [data-delegate]{color:#aeefb5;border-color:#457358}
+@media(max-width:1400px){.trading-live-workspace{grid-template-columns:minmax(175px,210px) minmax(140px,1fr) minmax(140px,1fr);gap:8px}.terminal-price-screen{grid-column:2/4}.trading-live-robot{grid-row:span 2}}
+@media(max-width:880px){.trading-live-workspace{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.trading-live-robot{grid-row:auto;grid-column:1}.terminal-price-screen{grid-column:1/3}.terminal-trading-actions{justify-content:stretch}.terminal-trading-actions>button{flex:1;min-width:0}.terminal-live-metrics .trading-live-details{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:540px){.trading-live-workspace{grid-template-columns:1fr}.trading-live-robot{grid-column:1;min-height:260px}.terminal-live-trades,.terminal-live-book,.terminal-price-screen{grid-column:1}.terminal-scroll-tape{min-height:180px;max-height:260px}.trading-robot-focus{max-width:145px}.terminal-trading-actions>button{min-width:125px;font-size:12px}.terminal-trading-actions{gap:7px}.terminal-live-metrics .trading-live-details>div{padding:10px 8px}}
