@@ -63,10 +63,15 @@ export async function greenBondCatalogue(fetcher=fetch){
  let feed;try{feed=JSON.parse(raw);}catch{fault('SECURITY_CATALOGUE_READ',null,503);}
  const rows=Array.isArray(feed.securities)?feed.securities:Array.isArray(feed.markets)?feed.markets:null;
  if(!rows)fault('SECURITY_CATALOGUE_READ',null,503);
- const registry=(Array.isArray(feed.securities)?rows:rows.filter(s=>s.status==='listed')).map(catalogueRow).filter(Boolean);
+ const unresolved=[...(Array.isArray(feed.unresolved)?feed.unresolved:[])];
+ const registry=[];
+ for(const row of (Array.isArray(feed.securities)?rows:rows.filter(s=>s.status==='listed'))){
+  try{const s=catalogueRow(row);if(s)registry.push(s);}
+  catch(error){unresolved.push({id:String(row.registryId||row.symbol||row.name||'unknown'),reason:error.field||error.code||'INVALID_SECURITY_METADATA'});}
+ }
  const bySymbol=new Map(registry.map(s=>[s.symbol,s]));
  for(const token of AVIS_GREEN_PORTFOLIO_TOKENS)if(!bySymbol.has(token.symbol.toUpperCase()))bySymbol.set(token.symbol.toUpperCase(),registeredGreenToken(token));
- return [...bySymbol.values()];
+ const answer=[...bySymbol.values()];answer.unresolved=unresolved;return answer;
 }
 
 const securitySelect=`SELECT security_id,name,short_name,currency_code,isin,cusip,denomination::text,quote_basis,quantity_decimals,kind,source,exchange_symbol,reference_price::text,source_updated_at FROM avis_core_v2.portfolio_securities`;
@@ -120,7 +125,7 @@ export class SecuritiesPortfolio extends AccountManagement {
     await this.upsertSecurity(db,s,actor.id);
     imported++;
    }
-   return {imported,source:'https://avis.land/api/xchg/markets'};
+   return {imported,unresolved:rows.unresolved?.length||0,source:process.env.GREEN_BOND_DATABANK_CATALOGUE_URL&&process.env.GREEN_BOND_DATABANK_CATALOGUE_TOKEN?'GREEN_BOND_DATABANK':'PUBLIC_EXCHANGE'};
   });
  }
  async addSecurity(actor,input,key){
