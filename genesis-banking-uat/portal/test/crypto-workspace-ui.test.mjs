@@ -44,9 +44,9 @@ test('wallet balances, security units and prices preserve every fractional digit
  const views={cryptowallets:[wallet,holding('AGi',{available_balance:'1000.100000000000000000',locked_balance:'0.000000000000000000'})],cryptosecurities:[security],cryptomarkets:[market('AG',1,1,{usd:'0.123456789012345678',eur:'1234567890123456.123456789012345678',chf:null})]};
  const original=structuredClone(views);
  await mount(views);
- assert.deepEqual([...document.querySelector('[data-wallet="AG"]').querySelectorAll('dd')].map(e=>e.textContent),['1,234,567,890,123,456,789,012,345,678.123456789012345678','0.000000000000000001']);
+ assert.deepEqual([...document.querySelector('[data-wallet="AG"]').querySelectorAll('dd')].map(e=>e.textContent),['1,234,567,890,123,456,789,012,345,678.123456789012345677','0.000000000000000001']);
  assert.deepEqual([...document.querySelector('[data-wallet="AGi"]').querySelectorAll('dd')].map(e=>e.textContent),['1,000.1','0']);
- assert.equal(document.querySelector('.security-volume').textContent,'1,000.123456789012345678 units');
+ assert.equal(document.querySelector('.security-volume'),null,'demo securities are omitted from the live workspace');
  assert.deepEqual([...marketCards()[0].querySelectorAll('dd')].map(e=>e.textContent),['0.123456789012345678','1,234,567,890,123,456.123456789012345678','—']);
  assert.deepEqual(views,original,'rendering must leave account and price data unchanged');
 });
@@ -140,10 +140,10 @@ test('one currency tile selects exact per-chain balances and Send accounts witho
  assert.equal(document.querySelectorAll('[data-wallet-group]').length,1);
  assert.deepEqual(options(document.querySelector('[data-wallet-network]')),['ETHEREUM','SOLANA']);
  const oldSend=document.querySelector('[data-send]');oldSend.click();
- assert.deepEqual([...document.querySelectorAll('[data-wallet-group] dd')].map(el=>el.textContent),['123.456789012345678001','0.000000000000000009']);
+ assert.deepEqual([...document.querySelectorAll('[data-wallet-group] dd')].map(el=>el.textContent),['123.456789012345677992','0.000000000000000009']);
  await choose('[data-wallet-network]','SOLANA');
  assert.equal(document.querySelector('[data-wallet-group]').dataset.wallet,wallets[1].account_id);
- assert.deepEqual([...document.querySelectorAll('[data-wallet-group] dd')].map(el=>el.textContent),['987.654321','7']);
+ assert.deepEqual([...document.querySelectorAll('[data-wallet-group] dd')].map(el=>el.textContent),['980.654321','7']);
  assert.equal(document.querySelector('[data-receive]').dataset.receive,wallets[1].account_id);
  oldSend.onclick();assert.deepEqual(sent,[wallets[0]],'a detached Send handler must not send from the previously selected chain');
  document.querySelector('[data-send]').click();assert.deepEqual(sent,wallets);
@@ -170,7 +170,7 @@ test('Activate currency submits all eligible blockchains together once without a
 });
 
 test('legacy currency exposes missing approved chains and shares one activation across rapid selections and Receive',async()=>{
- const eth=usdcHolding('ETHEREUM'),sol=usdcHolding('SOLANA'),polygon=usdcHolding('POLYGON',{available_balance:'3.000000000000000001'}),views={cryptowallets:[eth],cryptonetworks:networkRows,cryptocatalogue:[usdcAsset([approved('ETHEREUM'),approved('SOLANA'),approved('POLYGON')])]},calls=[],activation=deferred();
+ const eth=usdcHolding('ETHEREUM'),sol=usdcHolding('SOLANA'),polygon=usdcHolding('POLYGON',{available_balance:'3.000000000000000001',locked_balance:'0'}),views={cryptowallets:[eth],cryptonetworks:networkRows,cryptocatalogue:[usdcAsset([approved('ETHEREUM'),approved('SOLANA'),approved('POLYGON')])]},calls=[],activation=deferred();
  await mount(views,()=>{},async(path,input,key)=>{
   calls.push({path,input,key});if(path==='crypto/activate'){await activation.promise;views.cryptowallets=[eth,sol,polygon];return {wallets:[]};}
   assert.equal(path,'crypto/wallet');return walletResponse(views.cryptowallets.find(w=>w.address_id===input.addressId));
@@ -206,7 +206,7 @@ test('rapid QR changes clear previous details immediately and reject out-of-orde
  const solSelection=choose('[data-receive-network]','SOLANA');
  assert.equal(document.querySelector('.crypto-qr'),null);assert.equal(document.querySelector('.crypto-receive code'),null);
  assert.equal(document.querySelector('[data-copy]'),null);assert.equal(document.querySelector('[data-share]'),null);assert.equal(document.querySelector('[data-deposit-form]'),null);
- assert.equal(document.querySelector('[data-wallet-network]').value,'SOLANA');assert.equal(document.querySelector('[data-wallet-group] dd').textContent,'987.654321');
+ assert.equal(document.querySelector('[data-wallet-network]').value,'SOLANA');assert.equal(document.querySelector('[data-wallet-group] dd').textContent,'980.654321');
  assert.equal(document.querySelector('[data-send]').dataset.send,wallets[1].account_id);assert.equal(document.querySelector('[data-send]').disabled,true);
  oldSend();await oldCopy();await oldShare();assert.deepEqual(sent,[]);assert.deepEqual(copied,[]);assert.deepEqual(shared,[]);
  const repeatedReceive=document.querySelector('[data-receive]').onclick();await flush();assert.equal(walletReads.length,1);
@@ -264,7 +264,7 @@ test('a confirmed deposit refreshes holdings without replacing a subsequently se
  assert.equal(document.querySelector('[data-deposit-form]'),null);pending.resolve();await deposit;
  assert.deepEqual(calls.find(c=>c.path==='crypto/deposits/reconcile').input,{accountId:eth.account_id,addressId:eth.address_id,txHash});
  assert.equal(document.querySelector('[data-wallet-network]').value,'SOLANA');assert.equal(document.querySelector('[data-wallet-group]').dataset.wallet,sol.account_id);
- assert.equal(document.querySelector('[data-wallet-group] dd').textContent,'987.654321');assert.equal(document.querySelector('[data-receive-network]').value,'SOLANA');
+ assert.equal(document.querySelector('[data-wallet-group] dd').textContent,'980.654321');assert.equal(document.querySelector('[data-receive-network]').value,'SOLANA');
  assert.equal(document.querySelector('.crypto-receive code').textContent,'public-'+sol.address_id);assert.equal(document.querySelector('[data-deposit-result]'),null);
  document.querySelector('dialog .close').click();await choose('[data-wallet-network]','ETHEREUM');assert.equal(document.querySelector('[data-wallet-group] dd').textContent,'124.456789012345678001');
 });
