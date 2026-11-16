@@ -10,6 +10,19 @@ export const ROBOT_MESSAGES={ROBOT_SYMBOL:'Select the exact market symbol on thi
 export class TradingRobotCore extends TradingInstructionsCore {
  constructor(pool,options={}){super(pool,options);this.venue=options.tradingVenue||new BinanceSpot({env:this.secretEnv});}
  async validateRobotProviders(actor){admin(actor);const env=this.secretEnv;
+  const market=async()=>{
+   const key=env.COINAPI_MARKET_DATA_API_KEY||env.COINAPI_API_KEY||env.APIBRICKS_COINAPI_KEY;
+   if(!key)return {provider:'CoinAPI Market Data',configured:false,verified:false,setting:'COINAPI_API_KEY'};
+   try{
+    const response=await this.cryptoFetch('https://rest.coinapi.io/v1/exchangerate/BTC/USD',{
+     headers:{'X-CoinAPI-Key':key,accept:'application/json'},signal:AbortSignal.timeout(10000),redirect:'error'
+    });
+    if(!response.ok)return {provider:'CoinAPI Market Data',configured:true,verified:false,code:'MARKET_HTTP_'+response.status};
+    const row=await response.json();
+    if(row.asset_id_base!=='BTC'||row.asset_id_quote!=='USD'||typeof row.rate!=='number'||!Number.isFinite(row.rate)||row.rate<=0)throw Error('MARKET_SCHEMA');
+    return {provider:'CoinAPI Market Data',configured:true,verified:true,capability:'Authenticated reference pricing',checkedAt:new Date().toISOString()};
+   }catch(e){return {provider:'CoinAPI Market Data',configured:true,verified:false,code:e.message==='MARKET_SCHEMA'?'MARKET_SCHEMA':'MARKET_TRANSPORT'};}
+  };
   const ems=async()=>{const key=env.COINAPI_EMS_API_KEY;if(!key)return {provider:'CoinAPI EMS',configured:false,verified:false,setting:'COINAPI_EMS_API_KEY'};try{const response=await this.cryptoFetch('https://global.ems.coinapi.net/v1/balances',{headers:{'X-CoinAPI-Key':key,accept:'application/json'},signal:AbortSignal.timeout(10000),redirect:'error'});if(!response.ok)throw Error('EMS_HTTP_'+response.status);const rows=await response.json();if(!Array.isArray(rows))throw Error('EMS_SCHEMA');return {provider:'CoinAPI EMS',configured:true,verified:true,accounts:rows.map(r=>r.exchange_id).filter(Boolean),capability:'Execution API account connection',checkedAt:new Date().toISOString()};}catch(e){return {provider:'CoinAPI EMS',configured:true,verified:false,code:/^EMS_/.test(e.message)?e.message:'EMS_TRANSPORT'};}};
   const node=async provider=>{
    // A configured RPC URL can already contain the provider credential. Probe
@@ -22,7 +35,7 @@ export class TradingRobotCore extends TradingInstructionsCore {
    if(!matchingEndpoint&&!key)return {provider,configured:false,verified:false,setting:provider==='Alchemy'?'ALCHEMY_API_KEY':'COINAPI_NAAS_API_KEY'};
    const explicit={...env,AVIS_RPC_ETHEREUM:matchingEndpoint||(provider==='Alchemy'?'https://eth-mainnet.g.alchemy.com/v2/'+key:'https://ethereum-mainnet.node.coinapi.io')};
    try{const chain=new ChainAPI({env:explicit,fetcher:this.cryptoFetch});const [,block]=await Promise.all([chain.check('ETHEREUM'),chain.request('ETHEREUM','eth_blockNumber')]);return {provider,configured:true,verified:true,chainId:1,blockNumber:Number(BigInt(block)),capability:'Ethereum RPC and signed-transaction transport',checkedAt:new Date().toISOString()};}catch{return {provider,configured:true,verified:false,code:'RPC_VALIDATION'};}
-  };return {providers:await Promise.all([ems(),node('Alchemy'),node('CoinAPI NaaS')])};
+  };return {providers:await Promise.all([market(),ems(),node('Alchemy'),node('CoinAPI NaaS')])};
  }
  async configureRobot(actor,input,key){admin(actor);const venue=input.venue,symbol=text(input.symbol,'symbol',80).toUpperCase(),indexId=text(input.indexId,'indexId',80),name=text(input.name,'name',100),max=money(input.maxNotional),daily=money(input.dailyNotional),loss=money(input.maxLoss);
   if(!['AVIS','BINANCE'].includes(venue)||daily<max||!Number.isInteger(input.trailingBps)||input.trailingBps<5||input.trailingBps>2000||!Number.isFinite(input.minimumIndex)||input.minimumIndex< -100||input.minimumIndex>100)fault('ROBOT_LIMIT');
