@@ -29,11 +29,27 @@ export function encryptKey(secret,binding,env=process.env){const iv=randomBytes(
 export function decryptKey(secret,binding,env=process.env){const c=createDecipheriv('aes-256-gcm',encryptionKey(env),Buffer.from(secret.iv,'base64'));c.setAAD(Buffer.from(binding));c.setAuthTag(Buffer.from(secret.tag,'base64'));return JSON.parse(Buffer.concat([c.update(Buffer.from(secret.ciphertext,'base64')),c.final()]).toString());}
 export class ChainAPI {
  constructor({env=process.env,fetcher=fetch}={}){this.env=env;this.fetcher=fetcher;}
- connection(network){const n=networkInfo(network),env=this.env,key=env.COINAPI_NAAS_API_KEY||env.COINAPI_API_KEY||env.APIBRICKS_COINAPI_KEY;
-  const selected=env['AVIS_RPC_'+network]||env['CRYPTO_RPC_'+network]||(network==='ETHEREUM'?(env.ALCHEMY_API_KEY?'https://eth-mainnet.g.alchemy.com/v2/'+env.ALCHEMY_API_KEY:key?'https://ethereum-mainnet.node.coinapi.io':n.rpc):n.rpc);
-  let u;try{u=new URL(selected);}catch{fault('CRYPTO_CONNECTOR','network');}if(u.protocol!=='https:'||u.username||u.password)fault('CRYPTO_CONNECTOR','network');
-  const headers={'content-type':'application/json'};if(u.origin==='https://ethereum-mainnet.node.coinapi.io'){if(!key||/[\r\n]/.test(key))fault('CRYPTO_CONNECTOR','network');headers['X-CoinAPI-Key']=key;}
-  return {url:u.href.replace(/\/$/,''),headers,provider:u.hostname.endsWith('.alchemy.com')?'Alchemy':u.hostname==='ethereum-mainnet.node.coinapi.io'?'CoinAPI NaaS':env['AVIS_RPC_'+network]||env['CRYPTO_RPC_'+network]?'Configured RPC':'Public RPC'};
+ connection(network){
+  const n=networkInfo(network),env=this.env;
+  // Market-data API keys are not node credentials. Public JSON-RPC works independently
+  // of the market data provider and remains the default when no node service is set.
+  const nodeKey=env.COINAPI_NAAS_API_KEY;
+  const explicit=env['AVIS_RPC_'+network]||env['CRYPTO_RPC_'+network];
+  const alchemy=network==='ETHEREUM'&&env.ALCHEMY_API_KEY
+   ?'https://eth-mainnet.g.alchemy.com/v2/'+encodeURIComponent(env.ALCHEMY_API_KEY):null;
+  const coinapi=network==='ETHEREUM'&&nodeKey?'https://ethereum-mainnet.node.coinapi.io':null;
+  const selected=explicit||alchemy||coinapi||n.rpc;
+  let u;try{u=new URL(selected);}catch{fault('CRYPTO_CONNECTOR','network');}
+  if(u.protocol!=='https:'||u.username||u.password)fault('CRYPTO_CONNECTOR','network');
+  const headers={'content-type':'application/json'};
+  if(u.origin==='https://ethereum-mainnet.node.coinapi.io'){
+   if(!nodeKey||/[\r\n]/.test(nodeKey))fault('CRYPTO_CONNECTOR','network');
+   headers['X-CoinAPI-Key']=nodeKey;
+  }
+  return {url:u.href.replace(/\/$/,''),headers,
+   provider:u.hostname.endsWith('.alchemy.com')?'Alchemy':
+    u.hostname==='ethereum-mainnet.node.coinapi.io'?'CoinAPI NaaS':
+    explicit?'Configured RPC':'Public RPC'};
  }
  endpoint(network){return this.connection(network).url;}
  async request(network,method,params=[]){const n=networkInfo(network),url=this.endpoint(network);try{
