@@ -37,7 +37,7 @@ export function createCryptoWorkspace({api,identity,purchase,sell,send,notice}){
  const networkOptions=group=>group.networks.map(network=>`<option value="${esc(network)}">${esc(networkName(network))}</option>`).join('');
  const receivingBusy=group=>receiveState?.key===group.key&&receiveState.network===group.network&&receiveState.loading;
  function syncReceiveOptions(){const state=receiveState,group=state&&walletGroup(state.key);if(!group||dialog!==state.el||!state.el.isConnected)return;if(state.network!==group.network){void loadReceive(state);return;}const chooser=state.el.querySelector('[data-receive-network]');chooser.innerHTML=networkOptions(group);chooser.value=group.network;}
- const allocationUnits=value=>{const text=String(value??'').trim();if(!/^\\d{1,36}(?:\\.\\d{1,18})?$/.test(text))return null;const [whole,fraction='']=text.split('.');return BigInt(whole)*10n**18n+BigInt(fraction.padEnd(18,'0'));};
+ const allocationUnits=value=>{const text=String(value??'').trim();if(!/^\d{1,36}(?:\.\d{1,18})?$/.test(text))return null;const [whole,fraction='']=text.split('.');return BigInt(whole)*10n**18n+BigInt(fraction.padEnd(18,'0'));};
  const unitsText=n=>{const str=String(n/10n**18n),f=(n%10n**18n).toString().padStart(18,'0').replace(/0+$/,'');return str+(f?'.'+f:'');};
  function openTradingDelegation(card,key){
   delegation?.remove();delegation=null;const group=walletGroup(key),wallet=group?.holding;if(!wallet?.account_id||group.scope!=='FUNDING')return;
@@ -51,7 +51,7 @@ export function createCryptoWorkspace({api,identity,purchase,sell,send,notice}){
   place();popup.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>{popup.remove();if(delegation===popup)delegation=null;});
   popup.querySelectorAll('[data-release-delegation]').forEach(button=>button.onclick=async()=>{button.disabled=true;try{await api('crypto/trading/revoke-wallet',{delegationId:button.dataset.releaseDelegation},crypto.randomUUID());popup.remove();if(delegation===popup)delegation=null;if(root)await mount(root);}catch(e){popup.querySelector('[data-allocation-error]').textContent=e.message;button.disabled=false;}});
   const input=popup.querySelector('[data-allocate-quantity]'),consent=popup.querySelector('[data-consent]'),confirm=popup.querySelector('[data-confirm]');
-  const valid=()=>{const value=allocationUnits(input.value);return /^\\d{1,18}(?:\\.\\d{1,18})?$/.test(input.value.trim())&&value!==null&&value>0n&&value<=free;};
+  const valid=()=>{const value=allocationUnits(input.value);return /^\d{1,18}(?:\.\d{1,18})?$/.test(input.value.trim())&&value!==null&&value>0n&&value<=free;};
   const sync=()=>{consent.disabled=!valid();if(!valid())consent.checked=false;input.readOnly=consent.checked;confirm.disabled=!valid()||!consent.checked;};
   input.addEventListener('input',sync);popup.querySelector('[data-max]').onclick=()=>{if(!input.readOnly){input.value=unitsText(free);sync();}};consent.onchange=sync;
   confirm.onclick=async()=>{if(!valid()||!consent.checked)return;confirm.disabled=true;try{await api('crypto/trading/delegate-wallet',{accountId:wallet.account_id,amount:input.value.trim(),consent:true},crypto.randomUUID());popup.remove();if(delegation===popup)delegation=null;if(root)await mount(root);}catch(e){popup.querySelector('[data-allocation-error]').textContent=e.message;sync();}};
