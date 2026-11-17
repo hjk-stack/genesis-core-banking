@@ -1,5 +1,5 @@
 """Read-only release acceptance for the multi-coin trading row."""
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 
 
 def verify_wallet_allowances(read):
@@ -8,11 +8,13 @@ def verify_wallet_allowances(read):
     if not isinstance(rows, list) or not isinstance(delegations, list):
         raise RuntimeError('Trade allowance API schema mismatch')
     expected = {}
-    for item in delegations:
-        if item.get('state') != 'ACTIVE':
-            continue
-        account = item['account_id']
-        expected[account] = expected.get(account, Decimal(0)) + Decimal(item['quantity'])
+    with localcontext() as context:
+        context.prec = 80
+        for item in delegations:
+            if item.get('state') != 'ACTIVE':
+                continue
+            account = item['account_id']
+            expected[account] = expected.get(account, Decimal(0)) + Decimal(item['quantity'])
     found = {}
     for row in rows:
         account = row.get('account_id')
