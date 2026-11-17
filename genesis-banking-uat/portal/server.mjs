@@ -42,6 +42,10 @@ const messages={...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX_ADVICE_MESSAGES,..
  SECURITY_CATALOGUE_READ:'The Green Bond catalogue could not be refreshed. Try Refresh catalogue again.',
  SECURITY_TERMS_CHANGED:'The security denomination or currency changed. Select the security again.',
  SECURITY_NOT_FOUND:'Select a registered security.',POSITION_CHANGED:'This holding changed. Reopen it before saving.',
+ TREASURY_SECURITY_SOURCE:'Select an existing institution Treasury security source.',
+ TREASURY_SECURITY_IDENTITY:'Select the security registered for this Treasury source.',
+ TREASURY_SECURITY_LINKED:'This Portfolio position is already linked to another Treasury source.',
+ TREASURY_SECURITY_QUANTITY:'The existing Portfolio quantity differs from this Treasury source. Select its matching position.',
  SECURITY_QUANTITY_PRECISION:'Enter a quantity in the security’s registered unit size.',
  SECURITY_QUANTITY_RESERVED:'The quantity cannot be reduced below the units reserved for sell orders.',
  ORDER_TOTAL_CHANGED:'Check the quantity, price and calculated total.',INSUFFICIENT_SECURITIES:'This portfolio has insufficient available units to sell.',
@@ -146,7 +150,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const reply=await buildPacs002({messageId:randomBytes(16).toString('hex'),uetr:original.uetr,senderBic:p.local_bic,receiverBic:p.peer_bic,status:receipt.status,bankReference:receipt.id.replaceAll('-','')});
     res.setHeader('content-type','application/xml');return res.end(reply);
    }
-   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/portfolio.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
+   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/portfolio.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
     const file=path==='/'?'index.html':path==='/card-message'?'public/card-message.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     // Always present the deployed UAT revision's current application source after an update.
@@ -245,7 +249,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     'checkouts/capture':'captureCheckout','checkouts/release':'releaseCheckout','checkouts/refund':'refundCheckout',
     cards:'registerCard',terminals:'registerTerminal','cards/authorize':'authorizeCard','cards/capture':'settleCard','cards/reverse':'settleCard'};
    routes['accounts/open']='openAccount';
-   Object.assign(routes,{'portfolio/exchange-security':'resolveExchangeSecurity','portfolio/catalogue/sync':'syncSecurities','portfolio/securities':'addSecurity','portfolio/positions':'recordPosition','portfolio/orders/review':'reviewSecurityOrder','portfolio/orders/submit':'submitSecurityOrder','portfolio/orders/cancel':'cancelSecurityOrder'});
+   Object.assign(routes,{'portfolio/exchange-security':'resolveExchangeSecurity','portfolio/catalogue/sync':'syncSecurities','portfolio/securities':'addSecurity','portfolio/positions':'recordPosition','portfolio/treasury-source':'registerTreasurySecuritySource','portfolio/orders/review':'reviewSecurityOrder','portfolio/orders/submit':'submitSecurityOrder','portfolio/orders/cancel':'cancelSecurityOrder'});
    Object.assign(routes,{'crypto/trading/index-policy':'saveIndexPolicy','crypto/trading/validate-providers':'validateRobotProviders','crypto/trading/configure':'configureRobot','crypto/trading/toggle':'toggleRobot','crypto/trading/delegate-wallet':'delegateWalletTrading','crypto/trading/select-wallet':'selectWalletTrading','crypto/trading/revoke-wallet':'revokeWalletTrading','crypto/approve':'approveCrypto','crypto/activate':'activateCrypto','crypto/wallet/visibility':'setCryptoWalletVisibility','crypto/wallet':'cryptoWallet','crypto/balance':'cryptoChainBalance','crypto/check-network':'checkCryptoNetwork','crypto/markets/refresh':'refreshCryptoMarkets','crypto/securities/demo-convert':'convertDemoSecurity','crypto/securities/prepare':'prepareRealSecurity','crypto/securities/wallet':'createSecurityWallet','crypto/securities/package':'cryptoContractPackage','crypto/robot/channels':'createRollingChannel','crypto/actions/cancel':'cancelCryptoReview','crypto/actions/review':'prepareCryptoAction','crypto/actions/submit':'submitCryptoAction','crypto/actions/broadcast':'broadcastCryptoAction','crypto/actions/confirm':'confirmCryptoAction'});
    routes['crypto/deposits/reconcile']='reconcileCryptoDeposit';
    routes['crypto/trading/tests']='runTradingTest';

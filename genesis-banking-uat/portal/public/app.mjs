@@ -1,6 +1,6 @@
 import {createCryptoWorkspace} from './crypto-workspace.mjs';
 import {readExchangeIntent} from './exchange-intent.mjs';
-import {createPortfolio,securitiesTable,securityOrdersTable,securityBookTable} from './portfolio.mjs';
+import {createPortfolio,securitiesTable,stockRegisterTable,securityOrdersTable,securityBookTable} from './portfolio.mjs';
 import {accountTypes,accountSummaryTable,backofficeAccountTable,createAccountStatements} from './accounts.mjs';
 import {createCardManager,cardAccountTable,cardProducts} from './cards.mjs';
 import {openCardMessage} from './card-message.mjs';
@@ -80,7 +80,7 @@ html+=results.map((r,i)=>{
  if(view==='accountsummaries')return accountSummaryTable(rows,page.views[i][1]);
  if(view==='backofficeaccounts')return backofficeAccountTable(rows);
  if(view==='cardaccounts')return cardAccountTable(rows);
- if(view==='securitypositions')return securitiesTable(rows,identity.admin);
+ if(view==='securitypositions')return (identity.admin?stockRegisterTable(cache.treasurypositions,rows):'')+securitiesTable(rows,identity.admin);
  if(view==='securityorders')return securityOrdersTable(rows);
  if(view==='exchangebook')return securityBookTable(rows);
  return table(view,page.views[i][1],rows)+(view==='portfolio'&&!rows.length?'<p class="panel-empty">No investment holdings recorded yet.</p>':'');

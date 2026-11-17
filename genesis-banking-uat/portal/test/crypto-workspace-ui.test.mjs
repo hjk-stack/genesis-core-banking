@@ -327,7 +327,9 @@ test('admin removes a wallet card without exposing duplicate restore controls or
 test('the registered AVISPay PLC share converter is visible without asserting a completed chain issuance',async()=>{
  const share={card_id:'a0000000-0000-4000-8000-000000000001',name:'AVISPay PLC',symbol:'aAVISP',mode:'DEMO',state:'DRAFT',token_quantity:'0',dossier:{assetType:'STOCK',issuedVolume:'100000000',assetValue:'100000000',currency:'CHF',faceValue:'1',marginHaircutBps:1500,tradingFeeBps:10},actions:[]};
  await mount({cryptosecurities:[share],treasurypositions:[{asset_code:'AVISPAY-PLC-SHARES',quantity:'100000000',source_reference:'AVISPAY-PLC-EXISTING-SHARES'}]},()=>{},()=>{},()=>({admin:true,customerUserId:null}));
- assert.match(document.querySelector('.crypto-stock-register').textContent,/100,000,000 registered shares/);
+ assert.equal(document.querySelector('.crypto-stock-register'),null,'the highlighted long Treasury strip is removed');
  assert.equal(document.querySelector('[data-security="'+share.card_id+'"] strong').textContent,'AVISPay PLC');
- assert.ok(document.querySelector('[data-stock-convert]'));
+ assert.match(document.querySelector('[data-security="'+share.card_id+'"] dl').textContent,/Source holding100,000,000 units/);
+ assert.ok(document.querySelector('[data-security-details]'));
+ assert.ok(document.querySelector('[data-security-detail] .security-conversion'));
 });

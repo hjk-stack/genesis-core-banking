@@ -75,9 +75,11 @@ export async function greenBondCatalogue(fetcher=fetch){
 }
 
 const securitySelect=`SELECT security_id,name,short_name,currency_code,isin,cusip,denomination::text,quote_basis,quantity_decimals,kind,source,exchange_symbol,reference_price::text,source_updated_at FROM avis_core_v2.portfolio_securities`;
-const positionSelect=`SELECT p.position_id,p.user_id,u.full_name,s.security_id,s.name,s.short_name,s.currency_code,s.isin,s.cusip,s.denomination::text,s.quote_basis,s.source,s.exchange_symbol,
- p.quantity::text,p.reserved_quantity::text,(p.quantity-p.reserved_quantity)::text AS available_quantity,p.issuing_price::text,p.market_price::text,p.version,p.updated_at
- FROM avis_core_v2.portfolio_positions p JOIN avis_core_v2.portfolio_securities s USING(security_id) JOIN avis_core_v2.sovereign_users u USING(user_id)`;
+const positionSelect=`SELECT p.position_id,p.user_id,u.full_name,u.account_role,s.security_id,s.name,s.short_name,s.currency_code,s.isin,s.cusip,s.denomination::text,s.quote_basis,s.kind,s.source,s.exchange_symbol,
+ p.quantity::text,p.reserved_quantity::text,(p.quantity-p.reserved_quantity)::text AS available_quantity,p.issuing_price::text,p.market_price::text,p.version,p.updated_at,
+ p.treasury_booking_id,t.source_reference AS treasury_source_reference
+ FROM avis_core_v2.portfolio_positions p JOIN avis_core_v2.portfolio_securities s USING(security_id) JOIN avis_core_v2.sovereign_users u USING(user_id)
+ LEFT JOIN avis_core_v2.treasury_opening_positions t ON t.booking_id=p.treasury_booking_id`;
 
 export class SecuritiesPortfolio extends AccountManagement {
  constructor(pool,options={}){super(pool,options);this.readCatalogue=options.readCatalogue||greenBondCatalogue;}
@@ -135,6 +137,51 @@ export class SecuritiesPortfolio extends AccountManagement {
   });
  }
  async security(db,id){const s=(await db.query(securitySelect+' WHERE security_id=$1',[id])).rows[0];if(!s)fault('SECURITY_NOT_FOUND','securityId',404);return s;}
+ async registerTreasurySecuritySource(actor,input,key){
+  actualAdmin(actor);
+  const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  if(!uuid(input.bookingId))fault('TREASURY_SECURITY_SOURCE','bookingId');
+  if(!uuid(input.securityId))fault('SECURITY_NOT_FOUND','securityId');
+  return this.operation(actor,'REGISTER_TREASURY_SECURITY_SOURCE',input,key,async db=>{
+   const source=(await db.query(`SELECT t.*,u.account_role FROM avis_core_v2.treasury_opening_positions t
+    JOIN avis_core_v2.sovereign_users u ON u.user_id=t.owner_user_id
+    WHERE t.booking_id=$1 FOR UPDATE OF t`,[input.bookingId])).rows[0];
+   if(!source||source.asset_class!=='SECURITY'||source.destination!=='TREASURY_PORTFOLIO'||source.account_role!=='INSTITUTION')fault('TREASURY_SECURITY_SOURCE','bookingId');
+   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['securities:'+input.securityId]);
+   const security=await this.security(db,input.securityId);
+   if(source.isin&&source.isin!==security.isin||source.asset_code==='AVISPAY-PLC-SHARES'&&security.kind!=='share')fault('TREASURY_SECURITY_IDENTITY','securityId');
+   const result=(position,created)=>({id:position.position_id,positionId:position.position_id,
+    bookingId:source.booking_id,securityId:position.security_id,quantity:String(position.quantity),created,
+    sourceReference:source.source_reference,sourceSystem:source.source_system});
+   const linked=(await db.query('SELECT * FROM avis_core_v2.portfolio_positions WHERE treasury_booking_id=$1 FOR UPDATE',[source.booking_id])).rows[0];
+   if(linked){
+    if(linked.security_id!==security.security_id||String(linked.user_id)!==String(source.owner_user_id))fault('TREASURY_SECURITY_IDENTITY','securityId');
+    return result(linked,false);
+   }
+   const quantity=decimal(quantityUnits(source.quantity,security));
+   const existing=(await db.query('SELECT * FROM avis_core_v2.portfolio_positions WHERE user_id=$1 AND security_id=$2 FOR UPDATE',[source.owner_user_id,security.security_id])).rows[0];
+   let position;
+   if(existing){
+    if(existing.treasury_booking_id)fault('TREASURY_SECURITY_LINKED','bookingId');
+    if(units(existing.quantity)!==units(quantity))fault('TREASURY_SECURITY_QUANTITY','securityId');
+    position=(await db.query(`UPDATE avis_core_v2.portfolio_positions SET treasury_booking_id=$2,
+     version=version+1,updated_at=now() WHERE position_id=$1 RETURNING *`,[existing.position_id,source.booking_id])).rows[0];
+   }else{
+    const price=(value,field)=>{try{return decimal(units(value));}catch(error){if(error.code==='INVALID_AMOUNT')fault('INVALID_AMOUNT',field);throw error;}};
+    const issuingPrice=price(input.issuingPrice,'issuingPrice'),marketPrice=price(input.marketPrice,'marketPrice');
+    position=(await db.query(`INSERT INTO avis_core_v2.portfolio_positions
+     (user_id,security_id,quantity,issuing_price,market_price,treasury_booking_id)
+     VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,[source.owner_user_id,security.security_id,quantity,issuingPrice,marketPrice,source.booking_id])).rows[0];
+   }
+   // The immutable source retains the complete reference. The operation receipt
+   // also records it when it is longer than the movement reference field.
+   const reference=source.source_reference.length<=128?source.source_reference:'TREASURY:'+source.booking_id;
+   await db.query(`INSERT INTO avis_core_v2.portfolio_movements
+    (position_id,quantity_delta,resulting_quantity,reference,actor_id) VALUES($1,$2,$3,$4,$5)`,
+    [position.position_id,existing?'0':quantity,quantity,reference,actor.id]);
+   return result(position,!existing);
+  });
+ }
  async recordPosition(actor,input,key){
   actualAdmin(actor);const qty=decimal(units(input.quantity)),issue=decimal(units(input.issuingPrice)),market=decimal(units(input.marketPrice)),reference=text(input.reference,'reference',128);
   return this.operation(actor,'RECORD_PORTFOLIO_POSITION',input,key,async(db,k)=>{

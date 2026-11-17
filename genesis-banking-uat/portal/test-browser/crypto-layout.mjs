@@ -94,7 +94,7 @@ before(async()=>{
    }
    return json({id:'result'});
   }
-  if(['/crypto-workspace.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(req.url)){
+  if(['/treasury-source.mjs','/crypto-workspace.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(req.url)){
    res.setHeader('content-type',req.url.endsWith('.jpg')?'image/jpeg':req.url.endsWith('.webp')?'image/webp':req.url.endsWith('.png')?'image/png':req.url.endsWith('.css')?'text/css':'text/javascript');
    return res.end(await readFile(new URL('../public'+req.url,import.meta.url)));
   }
@@ -281,7 +281,8 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   assert.equal(await page.locator('[data-index-policy] textarea[name=instructions]').count(),1);assert.equal(await page.locator('[data-robot-instruction-form] textarea[name=instructions]').count(),1);
   assert.equal(await page.locator('[data-security]').count(),10,'the AVISPay security and nine requested demo wallets remain in the row');
   assert.equal(await page.locator('[data-security] strong').first().textContent(),'AVISPay PLC');
-  assert.equal(await page.locator('[data-stock-convert]').count(),1);
+  assert.equal(await page.locator('[data-stock-convert],.crypto-stock-register').count(),0,'the removed Treasury strip stays absent');
+  assert.equal(await page.locator('[data-real-prepare]').count(),1,'the selected security keeps its conversion action');
   assert.equal(await page.locator('[data-markets] .crypto-market').count(),100);
   assert.equal(await page.locator('.crypto-currency-row').count(),200);
   const layout=await page.evaluate(()=>{

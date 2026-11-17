@@ -84,6 +84,7 @@ jobs:
             genesis-banking-uat/portal/test-results/crypto-trading-tests-*.png
             genesis-banking-uat/portal/test-results/crypto-live-trader-*.png
             genesis-banking-uat/portal/test-results/crypto-trader-instructions-*.png
+            genesis-banking-uat/portal/test-results/treasury-source-*.png
           if-no-files-found: ignore
           retention-days: 7
   deploy:

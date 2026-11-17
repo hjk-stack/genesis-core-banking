@@ -33,7 +33,9 @@ export class TradingRobotCore extends TradingInstructionsCore {
    let endpointProvider=null;
    try{const host=new URL(endpoint).hostname;endpointProvider=host.endsWith('.alchemy.com')?'Alchemy':host==='ethereum-mainnet.node.coinapi.io'?'CoinAPI NaaS':null;}catch{}
    const matchingEndpoint=endpointProvider===provider?endpoint:null;
-   const key=provider==='Alchemy'?env.ALCHEMY_API_KEY:env.COINAPI_NAAS_API_KEY||env.COINAPI_API_KEY||env.APIBRICKS_COINAPI_KEY;
+   // Use the same dedicated node credential as ChainAPI; market-data keys
+   // do not configure a CoinAPI node connection.
+   const key=provider==='Alchemy'?env.ALCHEMY_API_KEY:env.COINAPI_NAAS_API_KEY;
    if(!matchingEndpoint&&!key)return {provider,configured:false,verified:false,setting:provider==='Alchemy'?'ALCHEMY_API_KEY':'COINAPI_NAAS_API_KEY'};
    const explicit={...env,AVIS_RPC_ETHEREUM:matchingEndpoint||(provider==='Alchemy'?'https://eth-mainnet.g.alchemy.com/v2/'+key:'https://ethereum-mainnet.node.coinapi.io')};
    try{const chain=new ChainAPI({env:explicit,fetcher:this.cryptoFetch});const [,block]=await Promise.all([chain.check('ETHEREUM'),chain.request('ETHEREUM','eth_blockNumber')]);return {provider,configured:true,verified:true,chainId:1,blockNumber:Number(BigInt(block)),capability:'Ethereum RPC and signed-transaction transport',checkedAt:new Date().toISOString()};}catch{return {provider,configured:true,verified:false,code:'RPC_VALIDATION'};}
@@ -43,7 +45,15 @@ export class TradingRobotCore extends TradingInstructionsCore {
   if(!['AVIS','BINANCE'].includes(venue)||daily<max||!Number.isInteger(input.trailingBps)||input.trailingBps<5||input.trailingBps>2000||!Number.isFinite(input.minimumIndex)||input.minimumIndex< -100||input.minimumIndex>100)fault('ROBOT_LIMIT');
   let market=null;if(venue==='BINANCE'){market=await this.venue.market(symbol);this.venue.credentials(input.keyRef);await this.venue.balance(input.keyRef);}
   return this.operation(actor,'CONFIGURE_W_ROBOT',input,key,async db=>{const user=(await db.query("SELECT * FROM avis_core_v2.sovereign_users WHERE user_id=$1 AND account_role='INSTITUTION'",[input.userId])).rows[0];if(!user)fault('ROBOT_ACCOUNT','userId');let security=null;
-   if(venue==='AVIS'){security=await this.security(db,input.securityId);const a=(await db.query("SELECT * FROM avis_core_v2.ledger_accounts WHERE account_id=$1 AND user_id=$2 AND network IS NULL AND currency_code=$3 AND owner_type='USER'",[input.accountId,input.userId,security.currency_code])).rows[0];if(!a)fault('ROBOT_ACCOUNT','accountId');market={baseAsset:security.short_name,quoteAsset:security.currency_code,quantityStep:'0.'+'0'.repeat(Math.max(0,security.quantity_decimals-1))+'1',priceTick:'0.01'};if(!security.quantity_decimals)market.quantityStep='1';}
+   if(venue==='AVIS'){
+    security=await this.security(db,input.securityId);
+    const a=(await db.query(`SELECT a.* FROM avis_core_v2.ledger_accounts a
+     JOIN avis_core_v2.abiq_routing_bridge b ON b.ledger_account_id=a.account_id AND b.status='ACTIVE'
+     WHERE a.account_id=$1 AND a.user_id=$2 AND a.network IS NULL AND a.currency_code=$3
+      AND a.owner_type='USER' AND a.account_category='LIABILITY' AND a.wallet_scope='FUNDING'`,[input.accountId,input.userId,security.currency_code])).rows[0];
+    if(!a)fault('ROBOT_ACCOUNT','accountId');
+    market={baseAsset:security.short_name,quoteAsset:security.currency_code,quantityStep:'0.'+'0'.repeat(Math.max(0,security.quantity_decimals-1))+'1',priceTick:'0.01'};if(!security.quantity_decimals)market.quantityStep='1';
+   }
    const existing=(await db.query('SELECT * FROM avis_core_v2.trading_robots WHERE venue=$1 AND symbol=$2 AND user_id=$3 FOR UPDATE',[venue,symbol,input.userId])).rows[0];if(existing&&(U(existing.position_quantity)>0n||(await db.query("SELECT 1 FROM avis_core_v2.trading_robot_orders WHERE robot_id=$1 AND status IN('CREATED','DISPATCHING','ACKNOWLEDGED')",[existing.robot_id])).rows.length))fault('ROBOT_POSITION');
    const id=existing?.robot_id||randomUUID();await db.query(`INSERT INTO avis_core_v2.trading_robots(robot_id,name,user_id,venue,symbol,index_id,security_id,account_id,key_ref,max_notional,daily_notional,max_loss,minimum_index,trailing_bps,quantity_step,price_tick,base_asset,quote_asset) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) ON CONFLICT(robot_id) DO UPDATE SET name=$2,index_id=$6,security_id=$7,account_id=$8,key_ref=$9,max_notional=$10,daily_notional=$11,max_loss=$12,minimum_index=$13,trailing_bps=$14,quantity_step=$15,price_tick=$16,base_asset=$17,quote_asset=$18,enabled=false,version=trading_robots.version+1`,[id,name,input.userId,venue,symbol,indexId,security?.security_id||null,input.accountId||null,input.keyRef||null,decimal(max),decimal(daily),decimal(loss),input.minimumIndex,input.trailingBps,market.quantityStep,market.priceTick,market.baseAsset,market.quoteAsset]);return {id};});
  }

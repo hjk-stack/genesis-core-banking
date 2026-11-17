@@ -99,3 +99,22 @@ test('AVIS settlement rechecks a pause under the robot lock before moving securi
  assert.equal(order.status,'REJECTED');assert.equal(order.response.code,'ROBOT_ENTRY_EXPIRED');
  assert.deepEqual((await pool.query('SELECT account_id,available_balance,locked_balance FROM avis_core_v2.ledger_accounts ORDER BY account_id')).rows,before);
 });
+
+test('AVIS configuration accepts only the same active funding account required by execution',async()=>{
+ const institution=account(1),s=(await core.addSecurity(actor,{name:'Funding setup regression',shortName:'SETUP',currency:'EUR',denomination:'1',quoteBasis:'UNIT',kind:'share'},key())).id;
+ const input={name:'Funding setup',userId:'1',venue:'AVIS',symbol:'SETUP',indexId:'SETUP',securityId:s,accountId:institution.account_id,maxNotional:'100',dailyNotional:'1000',maxLoss:'100',trailingBps:50,minimumIndex:0};
+ const before=(await pool.query('SELECT account_id,available_balance,locked_balance FROM avis_core_v2.ledger_accounts ORDER BY account_id')).rows;
+ const unusable=(await pool.query("SELECT account_id,wallet_scope FROM avis_core_v2.ledger_accounts WHERE owner_type='USER' AND user_id=1 AND network IS NULL AND currency_code='EUR' AND wallet_scope IN ('MARGIN','CUSTODY')")).rows;
+ assert.deepEqual(unusable.map(a=>a.wallet_scope).sort(),['CUSTODY','MARGIN']);
+ const rejected=e=>e.code==='ROBOT_ACCOUNT'&&e.field==='accountId';
+ for(const a of unusable)await assert.rejects(core.configureRobot(actor,{...input,accountId:a.account_id},key()),rejected,a.wallet_scope+' is not a payable funding account');
+ await pool.query("UPDATE avis_core_v2.abiq_routing_bridge SET status='SUSPENDED' WHERE ledger_account_id=$1",[institution.account_id]);
+ try{await assert.rejects(core.configureRobot(actor,input,key()),rejected);}finally{await pool.query("UPDATE avis_core_v2.abiq_routing_bridge SET status='ACTIVE' WHERE ledger_account_id=$1",[institution.account_id]);}
+ await assert.rejects(core.configureRobot(actor,{...input,accountId:account(2).account_id},key()),rejected);
+ const wrongCurrency=accounts.find(a=>String(a.user_id)==='1'&&a.currency_code!=='EUR');
+ assert.ok(wrongCurrency);await assert.rejects(core.configureRobot(actor,{...input,accountId:wrongCurrency.account_id},key()),rejected);
+ const saved=await core.configureRobot(actor,input,key()),profile=(await core.list(actor,'tradingrobots')).find(r=>r.robot_id===saved.id);
+ assert.equal(profile.enabled,false);assert.equal(profile.account_id,institution.account_id);
+ assert.equal((await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.trading_robot_orders WHERE robot_id=$1',[saved.id])).rows[0].n,0);
+ assert.deepEqual((await pool.query('SELECT account_id,available_balance,locked_balance FROM avis_core_v2.ledger_accounts ORDER BY account_id')).rows,before);
+});

@@ -1,5 +1,6 @@
 import {mountTradingPanel} from './trading-panel.mjs';
 import {mountWalletTradingScroller} from './wallet-trading-scroller.mjs';
+import {openTreasurySource} from './treasury-source.mjs';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=v=>{if(v===null||v===undefined)return '—';const value=String(v),decimal=/^([+-]?\d+)(?:\.(\d*))?$/.exec(value);if(!decimal)return value;const whole=decimal[1].replace(/\B(?=(\d{3})+(?!\d))/g,','),fraction=(decimal[2]||'').replace(/0+$/,'');return whole+(fraction?'.'+fraction:'');};
 const marketChange=v=>{if(!['number','string'].includes(typeof v)||String(v).trim()==='')return null;const n=Number(v);return Number.isFinite(n)?n:null;};
@@ -18,8 +19,85 @@ export function createCryptoWorkspace({api,identity,purchase,sell,send,notice}){
  const currentContext=(version,key)=>!!root&&version===lifecycle&&key===actorKey&&key===actor();
  // Card display, Receive and Send must all resolve the same booked account.
  const holdingAt=(group,network)=>{const rows=group.rows.filter(w=>w.network===network);return rows.find(w=>/[1-9]/.test(String(w.available_balance)+String(w.locked_balance)))||rows[0];};
- // Demo cards are the administrator's existing converter examples, not payment assets.
+ // Stored converter slots remain available until the owner selects a real source.
  const securityCards=()=>data.cryptosecurities.filter(s=>s.mode==='REAL'||s.symbol==='aAVISP'||isAdmin()&&s.mode==='DEMO');
+ const securitySlot=s=>s.mode==='DEMO'&&/^DEMO\d+$/i.test(s.symbol)&&!s.position_id&&!s.security_id;
+ const securityTitle=s=>securitySlot(s)?'Security wallet '+String(s.sort_order||Math.max(1,securityCards().findIndex(row=>row.card_id===s.card_id)+1)).padStart(2,'0'):s.name;
+ const securitySource=s=>{
+  if(s.sourceHolding)return s.sourceHolding;
+  const positions=(data.securitypositions||[]).filter(p=>p.position_id===s.position_id&&(!s.user_id||String(p.user_id)===String(s.user_id)));
+  if(positions.length===1)return {quantity:positions[0].quantity,userId:positions[0].user_id,name:positions[0].name};
+  if(s.symbol==='aAVISP'){
+   const sources=(data.treasurypositions||[]).filter(p=>p.asset_code==='AVISPAY-PLC-SHARES'&&(!s.user_id||String(p.owner_user_id)===String(s.user_id)));
+   if(sources.length===1)return {quantity:sources[0].quantity,userId:sources[0].owner_user_id,name:sources[0].asset_name};
+  }
+  return null;
+ };
+ const securityAccount=s=>{
+  if(s.mode!=='REAL'||s.state!=='BOOKED'||!s.user_id||!s.network||!s.wallet_address_id||!s.wallet_public_address)return null;
+  const matches=(data.cryptowallets||[]).filter(w=>w.account_id&&w.wallet_scope==='CUSTODY'&&String(w.user_id)===String(s.user_id)&&w.network===s.network&&
+   String(w.currency_code).toUpperCase()===String(s.symbol).toUpperCase()&&String(w.address_id)===String(s.wallet_address_id)&&
+   String(w.public_address).toLowerCase()===String(s.wallet_public_address).toLowerCase());
+  return matches.length===1?matches[0]:null;
+ };
+ function renderSecurityWallets(){
+  const host=q('[data-security-wallets]');if(!host)return;
+  host.innerHTML=securityCards().map(s=>{
+   const title=securityTitle(s),slot=securitySlot(s),account=securityAccount(s),source=securitySource(s),available=allocationUnits(account?.available_balance),reserved=allocationUnits(account?.locked_balance);
+   const holder=(data.customers||[]).find(u=>String(u.user_id)===String(s.user_id||source?.userId));
+   return `<article class="crypto-wallet security-wallet ${selected===s.card_id?'selected':''}" role="listitem" tabindex="0" data-security="${esc(s.card_id)}" aria-label="${esc(title)} wallet" ${selected===s.card_id?'aria-current="true"':''}>
+    <div class="security-wallet-top">${s.symbol==='aAVISP'?'<img class="security-brand-logo" src="/crypto-icons/avispay.webp" alt="AVISPay">':'<span class="security-symbol" aria-hidden="true">◈</span>'}<span class="crypto-badge">${esc(s.network||'')}</span></div>
+    <strong>${esc(title)}</strong><span>${slot?'Security wallet':esc(s.symbol)+' · '+esc(s.dossier?.assetType||'Security')}</span>${holder?`<p class="crypto-holder">${esc(holder.full_name)}</p>`:''}
+    <dl><dt>Available</dt><dd>${available!==null&&reserved!==null?fmt(unitsText(available-reserved)):'—'}</dd><dt>Reserved</dt><dd>${reserved===null?'—':fmt(unitsText(reserved))}</dd>${source?.quantity!=null?`<dt>Source holding</dt><dd>${fmt(source.quantity)} units</dd>`:''}</dl>
+    <div class="security-wallet-receiving"><span>Receiving wallet</span><code class="security-wallet-address">${esc(s.wallet_public_address||'—')}</code></div>
+    <div class="security-wallet-tools"><button type="button" data-security-details aria-label="Details for ${esc(title)}" aria-pressed="${selected===s.card_id}">Details</button>${s.wallet_address_id?`<button type="button" data-security-receive aria-label="Receive ${esc(title)}">Receive</button>`:isAdmin()?'<button type="button" data-security-create>Create receiving wallet</button>':''}${account&&canSend(account)?`<button type="button" data-security-send aria-label="Send ${esc(s.symbol)}">Send</button>`:''}</div>
+    <p class="form-error" role="alert" data-security-wallet-error></p></article>`;
+  }).join('');
+  host.querySelectorAll('[data-security]').forEach(card=>{
+   const get=()=>securityCards().find(s=>s.card_id===card.dataset.security);
+   card.onclick=e=>{if(!e.target.closest('button,a,select,input'))void showSecurity(card.dataset.security);};
+   card.onkeydown=e=>{if(e.target===card&&['Enter',' '].includes(e.key)){e.preventDefault();void showSecurity(card.dataset.security);}};
+   card.querySelector('[data-security-details]').onclick=()=>showSecurity(card.dataset.security);
+   const receive=card.querySelector('[data-security-receive]');if(receive)receive.onclick=()=>receiveSecurityWallet(get());
+   const create=card.querySelector('[data-security-create]');if(create)create.onclick=()=>createSecurityReceivingWallet(get());
+   const sendButton=card.querySelector('[data-security-send]');if(sendButton)sendButton.onclick=()=>{const account=securityAccount(get());if(account&&canSend(account))send(account);};
+  });
+ }
+ async function receiveSecurityWallet(s){
+  if(!s?.wallet_address_id)return;
+  const context=lifecycle,who=actorKey,title=securityTitle(s),el=modal('Receive '+title,'<div class="crypto-receive"><div class="crypto-receive-content" data-security-receive-content><p role="status">Loading receiving address…</p></div></div>');
+  const current=()=>currentContext(context,who)&&dialog===el&&el.isConnected,content=el.querySelector('[data-security-receive-content]');
+  try{
+   const wallet=await api('crypto/wallet',{addressId:s.wallet_address_id});if(!current())return;
+   if(String(wallet.address_id)!==String(s.wallet_address_id)||String(wallet.user_id)!==String(s.user_id)||wallet.network!==s.network||
+    !wallet.public_address||s.wallet_public_address&&wallet.public_address.toLowerCase()!==s.wallet_public_address.toLowerCase()||!wallet.qr?.startsWith('data:image/png;base64,'))
+    throw new Error('The receiving address does not match this security wallet.');
+   content.innerHTML=`<p>${esc(title)} · ${esc(networkName(wallet.network))}</p><img class="crypto-qr" src="${esc(wallet.qr)}" alt="Receiving address QR code"><code>${esc(wallet.public_address)}</code>${wallet.destination_tag!=null?`<p>Destination tag: ${esc(wallet.destination_tag)}</p>`:''}<div class="crypto-inline-actions"><button type="button" data-security-copy>Copy address</button><button type="button" data-security-share>Share</button></div><p role="status" data-security-receive-status></p><p class="form-error" role="alert" data-security-receive-error></p>`;
+   const issue=content.querySelector('[data-security-receive-error]'),status=content.querySelector('[data-security-receive-status]');
+   content.querySelector('[data-security-copy]').onclick=async()=>{if(!current())return;try{await navigator.clipboard.writeText(wallet.public_address);if(current())status.textContent='Address copied.';}catch(e){if(current())error(e,issue);}};
+   content.querySelector('[data-security-share]').onclick=async()=>{if(!current())return;try{const text=title+' · '+wallet.network+'\n'+wallet.public_address+(wallet.destination_tag!=null?'\nTag: '+wallet.destination_tag:'');if(navigator.share)await navigator.share({title:'AVISPay security receiving wallet',text});else{await navigator.clipboard.writeText(text);if(current())status.textContent='Wallet details copied for sharing.';}}catch(e){if(current()&&e.name!=='AbortError')error(e,issue);}};
+  }catch(e){if(current()){content.innerHTML='<p class="form-error" role="alert" data-security-receive-error></p>';error(e,content.querySelector('[data-security-receive-error]'));}}
+ }
+ async function createSecurityReceivingWallet(s){
+  if(!s||!isAdmin())return;if(s.wallet_address_id)return receiveSecurityWallet(s);
+  const context=lifecycle,who=actorKey,source=securitySource(s),owner=s.user_id||source?.userId;
+  const users=(data.customers||[]).filter(u=>u.account_role==='INSTITUTION'&&(!owner||String(u.user_id)===String(owner)));
+  const networks=data.cryptonetworks.filter(n=>n.kind==='EVM'&&(!s.network||n.code===s.network));
+  const el=modal('Create receiving wallet · '+securityTitle(s),`<form><div class="crypto-form-grid">${select('userId','Portfolio holder',users.map(u=>[u.user_id,u.full_name]),'required')}${select('network','Blockchain',networks.map(n=>[n.code,n.name]),'required')}</div><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" data-cancel>Cancel</button><button class="primary" type="submit">Create receiving wallet</button></div></form>`),f=el.querySelector('form');
+  if(owner)f.elements.userId.value=String(owner);if(s.network)f.elements.network.value=s.network;
+  const current=()=>currentContext(context,who)&&dialog===el&&el.isConnected;let busy=false,lastInput='',lastKey='';
+  el.querySelector('[data-cancel]').onclick=()=>el.close();
+  f.onsubmit=async event=>{
+   event.preventDefault();if(!current()||busy||!f.reportValidity())return;
+   const input={...Object.fromEntries(new FormData(f)),cardId:s.card_id},serialized=JSON.stringify(input);if(serialized!==lastInput){lastInput=serialized;lastKey=crypto.randomUUID();}
+   const button=f.querySelector('[type=submit]');busy=true;button.disabled=true;f.querySelector('.form-error').textContent='';
+   try{
+    const wallet=await api('crypto/securities/wallet',input,lastKey);if(!current())return;
+    if(!wallet.address_id||!wallet.public_address||String(wallet.user_id)!==input.userId||wallet.network!==input.network)throw new Error('The created wallet did not match the selected institution and blockchain.');
+    el.close();if(currentContext(context,who))await mount(root);
+   }catch(e){if(current())error(e,f.querySelector('.form-error'));}finally{busy=false;if(current())button.disabled=false;}
+  };
+ }
  function close(){allowanceScroller?.close();allowanceScroller=null;epoch++;lifecycle++;receiveState=null;delegation?.remove();delegation=null;dialog?.close();dialog?.remove();dialog=null;root=null;actorKey=null;selectedNetworks.clear();activationJobs.clear();walletIssues.clear();selectionVersions.clear();}
  function error(e,element=q('[data-crypto-error]')){if(element)element.textContent=e.message||'Please retry this action.';}
  function modal(title,body){receiveState=null;dialog?.remove();dialog=document.createElement('dialog');dialog.className='crypto-dialog';dialog.innerHTML=`<div class="dialog-heading"><h2>${esc(title)}</h2><button type="button" class="close" aria-label="Close">×</button></div>${body}`;document.body.append(dialog);const ownDialog=dialog;ownDialog.querySelector('.close').onclick=()=>ownDialog.close();ownDialog.addEventListener('close',()=>{ownDialog.remove();if(dialog===ownDialog){dialog=null;receiveState=null;renderWallets();}},{once:true});dialog.showModal();renderWallets();return dialog;}
@@ -112,11 +190,11 @@ export function createCryptoWorkspace({api,identity,purchase,sell,send,notice}){
     ${isAdmin()?'<details class="crypto-connectors"><summary>Registered rolling settlement channels</summary><div class="crypto-inline-actions"><button data-channel>＋ Trading channel</button></div><div class="crypto-robot-channels">'+data.cryptorobots.filter(r=>r.mode==='REAL').map(r=>'<article><strong>'+esc(r.name)+'</strong><p>'+esc(r.chain_channel)+' · '+esc(r.settlement_asset)+'</p>'+details([['Security quantity',fmt(r.security_amount)],['Gross settlement',fmt(r.gross_value)],['State',r.state]])+'<div class="crypto-inline-actions">'+[['LOCK','Lock margin'],['APPROVE','Approve settlement'],['ROLL','Review next trade'],['BATCH','Review parallel batch'],['CLOSE','Close channel'],['RELEASE','Release margin']].map(([a,t])=>'<button data-chain-action="'+a+'" data-card="'+esc(r.card_id)+'" data-channel-id="'+esc(r.channel_id)+'">'+t+'</button>').join('')+'</div></article>').join('')+'</div></details>':''}
    </section>
    <section class="crypto-section" id="crypto-security-desk"><div class="crypto-section-heading"><div><span class="crypto-section-number">III</span><h2>Stock → Blockchain asset converter</h2></div><span>Security register · tokenisation · custody</span></div>
-    ${isAdmin()?(()=>{const stock=(data.treasurypositions||[]).find(p=>p.asset_code==='AVISPAY-PLC-SHARES');return `<div class="crypto-stock-register"><div><small>AVISPay PLC Treasury · Source stock holding</small><strong>AVISPay PLC · ${stock?fmt(stock.quantity):'—'} registered shares</strong><span>Security source reference: ${esc(stock?.source_reference||'Not recorded in Treasury register')}</span></div><button type="button" data-stock-convert>Open stock converter</button></div>`;})():''}<div class="crypto-scroller" role="list" aria-label="Security wallets">${securityCards().map(s=>`<button class="crypto-wallet security-wallet ${selected===s.card_id?'selected':''}" data-security="${esc(s.card_id)}" aria-pressed="${selected===s.card_id}"><span class="security-wallet-top">${s.symbol==='aAVISP'?'<img class="security-brand-logo" src="/crypto-icons/avispay.webp" alt="AVISPay">':'<span class="security-symbol">◈</span>'}<span class="crypto-badge">${esc(s.network||'')}</span></span><strong>${esc(s.name)}</strong><span>${esc(s.symbol)} · ${esc(s.dossier.assetType)}</span><span class="security-volume">${fmt(s.token_quantity)} units</span><code class="security-wallet-address">${esc(s.wallet_public_address||'')}</code><span>${esc(s.mode==='DEMO'?(s.symbol==='aAVISP'?'Open converter':'Demo wallet'):s.state==='BOOKED'?'Wallet booked':s.contract_address?'Contract deployed':'Open converter')} →</span></button>`).join('')}</div><div data-security-detail></div></section>
+    <div class="crypto-scroller" role="list" aria-label="Security wallets" data-security-wallets></div><div data-security-detail></div></section>
    <section class="crypto-section" id="crypto-market-desk"><div class="crypto-section-heading"><div><span class="crypto-section-number">IV</span><h2>Market performance</h2></div><select aria-label="Market selection" data-market-filter><option value="top">Top 100 currencies</option><option value="performance">Top 10 performers</option></select></div><div class="crypto-scroller" data-markets></div><p class="crypto-source">Market data: CoinGecko · observation time shown per currency</p></section>
    ${isAdmin()?`<section class="crypto-section"><div class="crypto-section-heading"><div><span class="crypto-section-number">V</span><h2>Accepted currencies & blockchains</h2></div><button data-market-refresh>Refresh market prices</button></div><div class="crypto-admin-filter"><input type="search" data-catalogue-search aria-label="Search accepted currencies" placeholder="Search ${data.cryptocatalogue.length} currencies"><span>Green switches enable customer selection on that blockchain.</span></div><div class="crypto-catalogue" data-catalogue></div><details class="crypto-connectors"><summary>Blockchain API connections</summary><div>${data.cryptonetworks.map(n=>`<p><strong>${esc(n.name)}</strong> · ${esc(n.kind)} <button data-probe="${esc(n.code)}">Check API</button><span data-probe-result="${esc(n.code)}"></span></p>`).join('')}</div></details></section>`:''}`;
   if(failed.length)error(failed[0]);q('[data-refresh]').onclick=()=>mount(target);target.querySelectorAll('[data-add-asset]').forEach(b=>b.onclick=addAsset);q('[data-purchase]').onclick=purchase;q('[data-sell]').onclick=sell;
-  renderWallets();syncReceiveOptions();target.querySelectorAll('[data-security]').forEach(b=>b.onclick=()=>showSecurity(b.dataset.security));if(q('[data-stock-convert]'))q('[data-stock-convert]').onclick=()=>{const stock=data.cryptosecurities.find(s=>s.symbol==='aAVISP');if(stock)void showSecurity(stock.card_id);q('#crypto-security-desk')?.scrollIntoView({behavior:'smooth',block:'start'});};
+  renderWallets();syncReceiveOptions();renderSecurityWallets();
   q('[data-market-filter]').onchange=markets;markets();if(isAdmin()){q('[data-channel]').onclick=channel;q('[data-catalogue-search]').oninput=catalogue;catalogue();q('[data-market-refresh]').onclick=async e=>{const b=e.currentTarget;b.disabled=true;try{await api('crypto/markets/refresh',{});await mount(target);}catch(e){error(e);}finally{b.disabled=false;}};target.querySelectorAll('[data-probe]').forEach(b=>b.onclick=async()=>{b.disabled=true;const el=target.querySelector(`[data-probe-result="${b.dataset.probe}"]`);try{const r=await api('crypto/check-network',{network:b.dataset.probe});el.textContent=' · Connected · '+new Date(r.checkedAt).toLocaleTimeString();}catch(e){el.textContent=' · '+e.message;}finally{b.disabled=false;}});}
   allowanceScroller=mountWalletTradingScroller({api,host:q('[data-trading-allowances]'),isCurrent:()=>serial===epoch&&currentContext(context,who)});
   if(isAdmin())void mountTradingPanel({api,host:q('[data-trading-panel]'),form,refresh:()=>mount(target),isAdmin:()=>isAdmin()&&serial===epoch&&currentContext(context,who)}).then(()=>{if(serial!==epoch||!currentContext(context,who))return;const panel=q('.trading-advanced');if(panel){panel.open=advancedExpanded;panel.addEventListener('toggle',()=>{if(panel.isConnected&&serial===epoch)advancedExpanded=panel.open;});}}).catch(e=>{if(serial===epoch&&currentContext(context,who))error(e);});
@@ -156,22 +234,68 @@ export function createCryptoWorkspace({api,identity,purchase,sell,send,notice}){
   finally{if(current()){state.loading=false;renderWallets();}}
   })();return state.pending;
  }
- async function showSecurity(id){selected=id;const serial=epoch;root.querySelectorAll('[data-security]').forEach(b=>{b.classList.toggle('selected',b.dataset.security===id);b.setAttribute('aria-pressed',String(b.dataset.security===id));});try{const s=await api('crypto/securities/'+id);if(serial!==epoch||selected!==id)return;const source=s.sourceHolding;const d=source?{...s.dossier,assetType:source.assetType,isin:source.isin,cusip:source.cusip,currency:source.currency,assetValue:source.assetValue,issuedVolume:source.quantity,faceValue:source.price,collateralHouseRef:source.reference,source:source.source}:s.dossier;
-  q('[data-security-detail]').innerHTML=`<article class="security-detail"><div class="crypto-section-heading"><h3>${esc(s.name)} · Asset contents & conversion</h3><span class="crypto-badge">${s.symbol==='aAVISP'?'Portfolio-linked security':s.mode==='DEMO'?'Demo security':esc(s.network)}</span></div><div class="security-conversion"><div><p class="eyebrow">SOURCE ASSET</p>${details([['Asset name',source?.name||s.name],['Security',d.assetType],['ISIN',d.isin],['CUSIP',d.cusip],['Asset value',d.assetValue==null?'—':fmt(d.assetValue)+' '+(d.currency||'')],['Issued volume',fmt(d.issuedVolume)],['Value per token',d.faceValue==null?'—':fmt(d.faceValue)+' '+(d.currency||'')],['Custody reference',d.collateralHouseRef],['Source',d.source]])}</div><div class="conversion-code-column"><strong>CONVERTER CODE</strong><span class="conversion-arrow" aria-hidden="true">⇄</span><code>${esc(s.conversion_code||'—')}</code></div><div><p class="eyebrow">ROLLING TRADE-LOOP SECURITY</p>${details([['Token',s.symbol],['Token volume',fmt(s.token_quantity)],['Receiving wallet',s.wallet_public_address],['Margin haircut',d.marginHaircutBps/100+'%'],['Trading fee',d.tradingFeeBps/100+'%'],['Blockchain',s.network],['Contract address',s.contract_address],['Conversion code',s.conversion_code],['Wallet booking',s.journal_id]])}</div></div><div class="crypto-inline-actions">${isAdmin()&&s.mode==='DEMO'?(s.symbol==='aAVISP'?'<button class="primary" data-real-prepare>Convert Portfolio security</button>':'<button class="primary" data-demo-convert>Convert demo security</button><button data-real-prepare>Select Portfolio security</button>'):''}${isAdmin()&&!s.wallet_address_id?'<button type="button" data-security-wallet>Create security receiving wallet</button>':''}${isAdmin()&&s.mode==='REAL'&&s.state!=='BOOKED'?`<button class="primary" data-chain-action="${!s.hub_address?'HUB':!s.contract_address?'DEPLOY':!s.dossier.capConfirmed?'CAP':'MINT'}" data-card="${s.card_id}">${!s.hub_address?'Review hub deployment':!s.contract_address?'Review security deployment':!s.dossier.capConfirmed?'Review custody cap':'Review treasury wallet booking'}</button>`:''}${isAdmin()?'<button data-contract-package>Download contract & dossier</button>':''}</div><p class="form-error" role="alert" data-security-error></p>${s.actions?.length?`<div class="crypto-action-history"><h4>Contract transactions</h4>${s.actions.map(a=>`<p><strong>${esc(a.action_type)}</strong> · ${esc(a.status)} ${a.tx_hash?`<code>${esc(a.tx_hash)}</code>`:''}${['SIGNED','SUBMITTED'].includes(a.status)?` <button data-confirm-action="${a.action_id}">Check receipt</button>`:''}</p>`).join('')}</div>`:''}<p class="crypto-source">Contract source: ${esc(s.sourceSpecification)}</p></article>`;
-  if(q('[data-demo-convert]'))q('[data-demo-convert]').onclick=async()=>{try{await api('crypto/securities/demo-convert',{cardId:id});await mount(root);}catch(e){error(e,q('[data-security-error]'));}};
-  if(q('[data-real-prepare]'))q('[data-real-prepare]').onclick=()=>prepareReal(s);
-  if(q('[data-security-wallet]'))q('[data-security-wallet]').onclick=async()=>{
-   const users=data.customers.filter(u=>u.account_role==='INSTITUTION'),nets=data.cryptonetworks.filter(n=>n.kind==='EVM');
-   const f=await form('Security receiving wallet',select('userId','Portfolio holder',users.map(u=>[u.user_id,u.full_name]),'required')+select('network','Blockchain',nets.map(n=>[n.code,n.name]),'required'),(v,k)=>api('crypto/securities/wallet',{...v,cardId:s.card_id},k),'Create receiving wallet');
-   if(source?.userId)f.elements.userId.value=String(source.userId);if(s.network)f.elements.network.value=s.network;
-  };
-  if(q('[data-contract-package]'))q('[data-contract-package]').onclick=async()=>{try{const p=await api('crypto/securities/package',{cardId:id});const blob=new Blob([JSON.stringify(p,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=s.symbol+'-rolling-contract.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){error(e,q('[data-security-error]'));}};
-  bindChain(q('[data-security-detail]'));q('[data-security-detail]').querySelectorAll('[data-confirm-action]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{const r=await api('crypto/actions/confirm',{actionId:b.dataset.confirmAction});if(r.status!=='CONFIRMED'&&r.status!=='FAILED')notice('Confirmations: '+r.confirmations+' / 12');await mount(root);}catch(e){error(e,q('[data-security-error]'));}finally{b.disabled=false;}});
- }catch(e){error(e);}}
- async function prepareReal(s){const cardWallet=s.wallet_address_id&&s.wallet_public_address?[{address_id:s.wallet_address_id,public_address:s.wallet_public_address,user_id:s.user_id,full_name:s.name,account_role:'INSTITUTION',network:s.network}]:[];const conversionWallets=[...data.cryptowallets,...cardWallet];const positions=data.securitypositions.filter(p=>p.account_role==='INSTITUTION'||data.customers.some(u=>String(u.user_id)===String(p.user_id)&&u.account_role==='INSTITUTION'));
-  const f=await form('Prepare '+s.name+' conversion',select('positionId','Registered security holding',positions.map(p=>[p.position_id,p.name+' · '+fmt(p.quantity)+' units']),'required')+field('quantity','Source security quantity','text','required inputmode="decimal"')+field('tokenQuantity','Tokens to issue','text','required inputmode="decimal"')+field('custodyReference','Collateral House custody reference','text','required maxlength="128"')+select('addressId','Institution blockchain wallet',conversionWallets.filter(w=>w.account_role==='INSTITUTION'&&w.address_id&&data.cryptonetworks.some(n=>n.code===w.network&&n.kind==='EVM')).filter((w,i,a)=>a.findIndex(v=>v.address_id===w.address_id)===i).map(w=>[w.address_id,w.full_name+' · '+w.network+' · '+w.public_address]),'required')+field('marginHaircutBps','Margin haircut (basis points)','number','required min="0" max="9999" value="1500"')+field('tradingFeeBps','Trading fee (basis points)','number','required min="0" max="10000" value="10"')+'<label class="crypto-check"><input name="greenHighTechVerified" type="checkbox" required> Green High-Tech asset verified in the registered dossier</label>',(v,k)=>{const w=conversionWallets.find(w=>String(w.address_id)===v.addressId);return api('crypto/securities/prepare',{...v,cardId:s.card_id,network:w.network,marginHaircutBps:Number(v.marginHaircutBps),tradingFeeBps:Number(v.tradingFeeBps),greenHighTechVerified:v.greenHighTechVerified==='on'},k);},'Prepare conversion');
-  f.elements.positionId.onchange=()=>{const p=positions.find(p=>p.position_id===f.elements.positionId.value);if(p){f.elements.quantity.value=p.quantity;f.elements.tokenQuantity.value=p.quantity;}};
+ async function showSecurity(id){
+  if(!root)return;selected=id;const serial=epoch,context=lifecycle,who=actorKey;
+  renderSecurityWallets();q('[data-security-detail]').innerHTML='<article class="security-detail"><p role="status">Loading security wallet…</p><p class="form-error" role="alert" data-security-error></p></article>';
+  const current=()=>serial===epoch&&selected===id&&currentContext(context,who);
+  try{
+   const s=await api('crypto/securities/'+id);if(!current())return;
+   if(!s||s.card_id!==id)throw new Error('Could not load the selected security wallet.');
+   const row=data.cryptosecurities.find(c=>c.card_id===id);if(row)Object.assign(row,s);
+   renderSecurityWallets();
+   const source=s.sourceHolding,slot=securitySlot(s),title=securityTitle(s);
+   const d=source?{...s.dossier,assetType:source.assetType,isin:source.isin,cusip:source.cusip,currency:source.currency,assetValue:source.assetValue,issuedVolume:source.quantity,faceValue:source.price,collateralHouseRef:source.reference,source:source.source}:
+    s.mode==='DEMO'?{assetType:slot?null:s.dossier?.assetType}:s.dossier||{};
+   const percent=value=>value==null?'—':value/100+'%';
+   q('[data-security-detail]').innerHTML=`<article class="security-detail"><div class="crypto-section-heading"><h3>${esc(title)} · Asset contents & conversion</h3><span class="crypto-badge">${s.symbol==='aAVISP'?'Portfolio-linked security':slot?'Security wallet':esc(s.network||'Security')}</span></div><div class="security-conversion"><div><p class="eyebrow">SOURCE ASSET</p>${details([['Asset name',source?.name||(slot?'—':s.name)],['Security',d.assetType],['ISIN',d.isin],['CUSIP',d.cusip],['Asset value',d.assetValue==null?'—':fmt(d.assetValue)+' '+(d.currency||'')],['Issued volume',fmt(d.issuedVolume)],['Value per token',d.faceValue==null?'—':fmt(d.faceValue)+' '+(d.currency||'')],['Custody reference',d.collateralHouseRef],['Source',d.source]])}</div><div class="conversion-code-column"><strong>CONVERTER CODE</strong><span class="conversion-arrow" aria-hidden="true">⇄</span><code>${esc(s.conversion_code||'—')}</code></div><div><p class="eyebrow">ROLLING TRADE-LOOP SECURITY</p>${details([['Token',slot?'—':s.symbol],[s.state==='BOOKED'?'Token volume':'Tokens to issue',s.mode==='REAL'?fmt(s.token_quantity):'—'],['Receiving wallet',s.wallet_public_address],['Margin haircut',percent(d.marginHaircutBps)],['Trading fee',percent(d.tradingFeeBps)],['Blockchain',s.network],['Contract address',s.contract_address],['Conversion code',s.conversion_code],['Wallet booking',s.journal_id]])}</div></div><div class="crypto-inline-actions">${isAdmin()&&s.mode==='DEMO'?'<button class="primary" data-real-prepare>'+((source?.bookingId&&!source.positionId)?'Register source holding':s.symbol==='aAVISP'?'Convert Portfolio security':'Select Portfolio security')+'</button>':''}${s.wallet_address_id?'<button type="button" data-security-receive-detail>Receive security</button>':isAdmin()?'<button type="button" data-security-wallet>Create security receiving wallet</button>':''}${isAdmin()&&s.mode==='REAL'&&s.state!=='BOOKED'?`<button class="primary" data-chain-action="${!s.hub_address?'HUB':!s.contract_address?'DEPLOY':!s.dossier?.capConfirmed?'CAP':'MINT'}" data-card="${s.card_id}">${!s.hub_address?'Review hub deployment':!s.contract_address?'Review security deployment':!s.dossier?.capConfirmed?'Review custody cap':'Review treasury wallet booking'}</button>`:''}${isAdmin()&&!slot?'<button data-contract-package>Download contract & dossier</button>':''}</div><p class="form-error" role="alert" data-security-error></p>${s.actions?.length?`<div class="crypto-action-history"><h4>Contract transactions</h4>${s.actions.map(a=>`<p><strong>${esc(a.action_type)}</strong> · ${esc(a.status)} ${a.tx_hash?`<code>${esc(a.tx_hash)}</code>`:''}${['SIGNED','SUBMITTED'].includes(a.status)?` <button data-confirm-action="${a.action_id}">Check receipt</button>`:''}</p>`).join('')}</div>`:''}${s.sourceSpecification?`<p class="crypto-source">Contract source: ${esc(s.sourceSpecification)}</p>`:''}</article>`;
+   if(q('[data-real-prepare]'))q('[data-real-prepare]').onclick=()=>prepareReal(s);
+   if(q('[data-security-wallet]'))q('[data-security-wallet]').onclick=()=>createSecurityReceivingWallet(s);
+   if(q('[data-security-receive-detail]'))q('[data-security-receive-detail]').onclick=()=>receiveSecurityWallet(s);
+   if(q('[data-contract-package]'))q('[data-contract-package]').onclick=async()=>{try{const p=await api('crypto/securities/package',{cardId:id});if(!current())return;const blob=new Blob([JSON.stringify(p,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=s.symbol+'-rolling-contract.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){if(current())error(e,q('[data-security-error]'));}};
+   bindChain(q('[data-security-detail]'));q('[data-security-detail]').querySelectorAll('[data-confirm-action]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{const r=await api('crypto/actions/confirm',{actionId:b.dataset.confirmAction});if(!current())return;if(r.status!=='CONFIRMED'&&r.status!=='FAILED')notice('Confirmations: '+r.confirmations+' / 12');await mount(root);}catch(e){if(current())error(e,q('[data-security-error]'));}finally{if(b.isConnected)b.disabled=false;}});
+  }catch(e){if(current())error(e,q('[data-security-error]'));}
  }
+ async function registerSource(s){
+  const context=lifecycle,who=actorKey,current=()=>currentContext(context,who)&&selected===s.card_id;
+  try{await openTreasurySource({api,modal,bookingId:s.sourceHolding.bookingId,isCurrent:current,onRegistered:async()=>{if(current()){await mount(root);if(current())await showSecurity(s.card_id);}}});}
+  catch(e){if(current())error(e,q('[data-security-error]'));}
+ }
+ async function prepareReal(s){
+  if(s.sourceHolding?.bookingId&&!s.sourceHolding.positionId)return registerSource(s);
+  const cardWallet=s.wallet_address_id&&s.wallet_public_address?[{address_id:s.wallet_address_id,public_address:s.wallet_public_address,user_id:s.user_id,full_name:s.name,account_role:'INSTITUTION',network:s.network}]:[];
+  const conversionWallets=[...data.cryptowallets,...cardWallet].filter(w=>w.account_role==='INSTITUTION'&&w.address_id&&data.cryptonetworks.some(n=>n.code===w.network&&n.kind==='EVM'))
+   .filter(w=>(!s.user_id||String(w.user_id)===String(s.user_id))&&(!s.network||w.network===s.network)&&(!s.wallet_address_id||String(w.address_id)===String(s.wallet_address_id)))
+   .filter((w,i,a)=>a.findIndex(v=>v.address_id===w.address_id)===i);
+  const positions=data.securitypositions.filter(p=>(p.account_role==='INSTITUTION'||data.customers.some(u=>String(u.user_id)===String(p.user_id)&&u.account_role==='INSTITUTION'))&&(!s.user_id||String(p.user_id)===String(s.user_id)));
+  const available=p=>p.available_quantity??p.quantity;
+  const f=await form('Prepare '+securityTitle(s)+' conversion',
+   select('positionId','Registered security holding',positions.map(p=>[p.position_id,p.name+' · '+fmt(available(p))+' available units']),'required')+
+   (securitySlot(s)?field('tokenSymbol','Token symbol','text','required maxlength="25" pattern="[A-Za-z][A-Za-z0-9._\\-]{0,24}" autocapitalize="off"'):'' )+
+   field('quantity','Source security quantity','text','required inputmode="decimal"')+
+   field('tokenQuantity','Tokens to issue','text','required inputmode="decimal"')+
+   field('custodyReference','Collateral House custody reference','text','required maxlength="128"')+
+   select('addressId','Institution blockchain wallet',[],'required')+
+   field('marginHaircutBps','Margin haircut (basis points)','number','required min="0" max="9999" value="1500"')+
+   field('tradingFeeBps','Trading fee (basis points)','number','required min="0" max="10000" value="10"')+
+   '<label class="crypto-check"><input name="greenHighTechVerified" type="checkbox" required> Green High-Tech asset verified in the registered dossier</label>',
+   (v,k)=>{
+    const p=positions.find(p=>p.position_id===v.positionId),w=conversionWallets.find(w=>String(w.address_id)===v.addressId&&String(w.user_id)===String(p?.user_id));
+    if(!w)throw Object.assign(new Error('Select a blockchain wallet for this institution.'),{field:'addressId'});
+    return api('crypto/securities/prepare',{...v,cardId:s.card_id,network:w.network,marginHaircutBps:Number(v.marginHaircutBps),tradingFeeBps:Number(v.tradingFeeBps),greenHighTechVerified:v.greenHighTechVerified==='on'},k);
+   },'Prepare conversion');
+  const sync=()=>{
+   const p=positions.find(p=>p.position_id===f.elements.positionId.value),previous=f.elements.addressId.value;
+   const wallets=conversionWallets.filter(w=>String(w.user_id)===String(p?.user_id));
+   f.elements.addressId.innerHTML='<option value="">Select…</option>'+wallets.map(w=>`<option value="${esc(w.address_id)}">${esc(w.full_name+' · '+w.network+' · '+w.public_address)}</option>`).join('');
+   if(wallets.some(w=>String(w.address_id)===previous))f.elements.addressId.value=previous;
+   else if(wallets.some(w=>String(w.address_id)===String(s.wallet_address_id)))f.elements.addressId.value=String(s.wallet_address_id);
+   f.elements.quantity.value=p?available(p):'';f.elements.tokenQuantity.value=p?available(p):'';
+  };
+  f.elements.positionId.onchange=sync;
+  if(positions.some(p=>p.position_id===s.sourceHolding?.positionId))f.elements.positionId.value=s.sourceHolding.positionId;
+  sync();
+ }
+
  async function channel(){await form('Configure rolling trade channel',select('cardId','Security wallet',data.cryptosecurities.map(s=>[s.card_id,s.name+(s.mode==='DEMO'?' · Demo':'')]),'required')+field('channel','Channel number','number','min="1" required')+select('settlementAsset','Settlement currency',[['AG','AG'],['AGi','AGi']],'required')+field('securityAmount','Security quantity per channel','text','required inputmode="decimal"')+field('grossValue','Gross settlement per trade','text','required inputmode="decimal"'),(v,k)=>api('crypto/robot/channels',v,k));}
  function bindChain(target){target?.querySelectorAll('[data-chain-action]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{const r=await api('crypto/actions/review',{cardId:b.dataset.card,action:b.dataset.chainAction,channelId:b.dataset.channelId,cycles:1});const el=modal('Review '+r.action.toLowerCase()+' transaction',details([['Blockchain',r.instruction.chainId],['From wallet',r.instruction.from],['Contract',r.instruction.to||'New contract'],['Maximum network fee',r.instruction.feeMaximum+' '+r.instruction.nativeCurrency]])+'<p class="form-error" role="alert"></p><div class="dialog-actions"><button data-cancel>Close</button><button class="primary" data-submit>Sign & submit</button></div>');let submitted=false,signing=false;el.addEventListener('close',()=>{if(!submitted&&!signing)void api('crypto/actions/cancel',{actionId:r.id}).catch(()=>{});},{once:true});el.querySelector('[data-cancel]').onclick=()=>el.close();el.querySelector('[data-submit]').onclick=async e=>{e.currentTarget.disabled=true;signing=true;try{await api('crypto/actions/submit',{actionId:r.id,reviewHash:r.reviewHash});submitted=true;el.close();await mount(root);}catch(e){error(e,el.querySelector('.form-error'));el.querySelector('[data-submit]').disabled=false;}finally{signing=false;}};}catch(e){error(e,q('[data-security-error]')||q('[data-crypto-error]'));}finally{b.disabled=false;}});}
  function markets(){
