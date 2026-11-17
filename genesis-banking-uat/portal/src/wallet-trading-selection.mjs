@@ -74,7 +74,8 @@ export async function setWalletTradingSelection(core, actor, input, key) {
    ON CONFLICT(account_id) DO UPDATE SET enabled=EXCLUDED.enabled,
     version=wallet_trading_selections.version+1,updated_by=EXCLUDED.updated_by,updated_at=now()
    RETURNING account_id,enabled,version,updated_at`, [intent.accountId,intent.enabled,actor.id])).rows[0];
-  // Selecting a coin neither moves money nor reserves its allowance a second time.
-  return {...row,currency_code:account.currency_code,network:account.network,quantity:allowance.quantity};
+  // Store a JSON-stable response: a retry must return the same timestamp type
+  // and value as the original operation, not a mixture of Date and string.
+  return {...row,updated_at:new Date(row.updated_at).toISOString(),currency_code:account.currency_code,network:account.network,quantity:allowance.quantity};
  });
 }
