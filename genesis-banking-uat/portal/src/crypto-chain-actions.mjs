@@ -82,6 +82,7 @@ export class CryptoChainActions extends CryptoWorkspace {
     await db.query("UPDATE avis_core_v2.crypto_security_cards SET state='BOOKED',journal_id=$2,version=version+1 WHERE card_id=$1",[c.card_id,journalId]);
     await db.query("INSERT INTO avis_core_v2.crypto_assets(asset_id,currency_code,name,source) VALUES($1,$2,$3,'SECURITY')",['security:'+c.card_id,c.symbol,c.name]);
     await db.query('INSERT INTO avis_core_v2.crypto_asset_networks(asset_id,network,contract_address,decimals,approved,verified_at) VALUES($1,$2,$3,18,true,now())',['security:'+c.card_id,c.network,c.contract_address]);
+    await db.query('INSERT INTO avis_core_v2.crypto_asset_wallet_routes(user_id,asset_id,network,address_id) VALUES($1,$2,$3,$4)',[c.user_id,'security:'+c.card_id,c.network,c.wallet_address_id]);
    }
    await releaseRollingReservation(db,r);
    const rollingJournal=await bookRollingReceipt(this,db,actor,r,c,receipt,(await contractArtifact('AVISGreenRollingSecurityToken')).abi);if(rollingJournal)journalId=rollingJournal;

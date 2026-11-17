@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {CardManagement} from './card-management.mjs';
 import {ABIQ_PARTITIONS} from './avispay-core-accounts.mjs';
 import {fault,text} from './core.mjs';
+import {enrichPortfolioHistory} from './crypto-asset-routing.mjs';
 
 const owners=['COMMON_POOL','SUSPENSE_INBOUND','SUSPENSE_OUTBOUND','SUSPENSE_CARD_FX'];
 const accountSelect=`SELECT a.account_id,a.owner_type,a.sub_account_code AS account_reference,
@@ -79,12 +80,13 @@ export class AccountManagement extends CardManagement {
   if(!actor?.admin)fault('FORBIDDEN',null,403);
   // Aggregate holdings once, by asset and network. Exclude cash accounts,
   // customer records and matching system-side accounting entries.
-  return (await this.pool.query(`SELECT a.currency_code,a.network,
+  const rows=(await this.pool.query(`SELECT a.currency_code,a.network,
    sum(a.available_balance)::text AS available_balance,sum(a.locked_balance)::text AS locked_balance
    FROM avis_core_v2.ledger_accounts a JOIN avis_core_v2.sovereign_users u USING(user_id)
    WHERE a.owner_type='USER' AND a.account_category='LIABILITY' AND a.wallet_scope='FUNDING' AND a.network IS NOT NULL
    AND (($1::bigint IS NULL AND u.account_role='INSTITUTION') OR a.user_id=$1)
    GROUP BY a.currency_code,a.network ORDER BY a.currency_code,a.network`,[actor.customerUserId||null])).rows;
+  return enrichPortfolioHistory(this.pool,actor,rows);
  }
  async list(actor,view){
   if(view==='backofficeaccounts'){adminOnly(actor);return (await this.pool.query(accountSelect.replace('SELECT a.account_id','SELECT totals.credit,totals.debit,latest.reference_id, a.account_id').replace(' WHERE a.owner_type',' '+balanceTotals+' WHERE a.owner_type')+' ORDER BY account_type,a.currency_code,a.network,a.sub_account_code,a.account_id',[owners])).rows;}

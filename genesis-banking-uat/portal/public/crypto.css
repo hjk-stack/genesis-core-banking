@@ -157,3 +157,23 @@
 .crypto-trading-desk .trading-robot-filters button{background:#f6fafa;color:#245346;border:1px solid #9db7ab}
 .crypto-trading-desk .trading-robot-filters button[aria-pressed=true]{background:#d3efe2;color:#165742;border-color:#58a082}
 .crypto-trading-desk .terminal-live-trades,.crypto-trading-desk .terminal-live-book,.crypto-trading-desk .terminal-price-screen{background:linear-gradient(#fff,#f4f8f5);border-color:#c3d1c9}
+
+.portfolio-chain-proof{display:block;font:11px/1.45 ui-monospace,SFMono-Regular,monospace;max-width:26em;overflow-wrap:anywhere;color:#176455}
+.currency-native-control{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip-path:inset(50%);white-space:nowrap}
+.currency-icon-picker{position:relative;min-width:0;border:1px solid #afc1b8;border-radius:8px;background:#fff;align-self:start}
+.currency-icon-picker>summary{list-style:none;cursor:pointer;padding:13px;min-height:25px;font-size:13px}
+.currency-icon-picker>summary [data-currency-choice]{display:flex;align-items:center;gap:9px}
+.currency-icon-picker .coin-icon{width:26px;height:26px}
+.currency-icon-options{padding:10px;border-top:1px solid #d8e2dc}
+.currency-icon-options [role=listbox]{max-height:260px;overflow:auto;display:flex;flex-direction:column;gap:3px;margin-top:8px}
+.currency-icon-options [role=option]{display:flex;gap:11px;align-items:center;width:100%;text-align:left;padding:9px;background:#fff;color:#173c31;border:1px solid transparent;border-radius:6px;white-space:normal}
+.currency-icon-options [role=option][hidden]{display:none}
+.currency-icon-options [role=option]>span{display:grid;gap:3px}
+.currency-icon-options [role=option]:hover,.currency-icon-options [aria-selected=true]{background:#e8f4ed;border-color:#a8c9b8}
+.security-brand-logo{width:125px;height:38px;object-fit:contain;object-position:left center}
+.security-wallet-address{font:10px/1.4 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere;white-space:normal;color:#d3eee3;min-height:28px}
+.security-conversion{grid-template-columns:minmax(0,1fr) minmax(150px,.55fr) minmax(0,1fr)}
+.conversion-code-column{display:flex;flex-direction:column;align-items:center;gap:12px;justify-content:center;min-width:0;align-self:stretch;padding:18px 10px;border-inline:1px solid #e0e7e3}
+.conversion-code-column strong{font-size:11px;letter-spacing:.1em;color:#326953}
+.conversion-code-column code{font:11px/1.5 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere;text-align:center;max-width:100%}
+@media(max-width:720px){.security-conversion{grid-template-columns:1fr}.conversion-code-column{border-inline:0;border-block:1px solid #e0e7e3}.currency-icon-picker{grid-column:1/-1}}

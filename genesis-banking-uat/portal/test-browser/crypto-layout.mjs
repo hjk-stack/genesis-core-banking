@@ -94,8 +94,8 @@ before(async()=>{
    }
    return json({id:'result'});
   }
-  if(['/crypto-workspace.mjs','/trading-panel.mjs','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png'].includes(req.url)){
-   res.setHeader('content-type',req.url.endsWith('.png')?'image/png':req.url.endsWith('.css')?'text/css':'text/javascript');
+  if(['/crypto-workspace.mjs','/trading-panel.mjs','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp'].includes(req.url)){
+   res.setHeader('content-type',req.url.endsWith('.webp')?'image/webp':req.url.endsWith('.png')?'image/png':req.url.endsWith('.css')?'text/css':'text/javascript');
    return res.end(await readFile(new URL('../public'+req.url,import.meta.url)));
   }
   res.writeHead(404);res.end();
@@ -168,7 +168,7 @@ async function verifyCurrencyActivation(page,width){
  await dialog.getByRole('heading',{name:'Add accepted currency',exact:true}).waitFor();
  assert.equal(await dialog.locator('select[name=network]').count(),0,'currency activation must not require a per-chain creation step');
  await dialog.getByLabel('Account holder',{exact:true}).selectOption('1');
- await dialog.getByLabel('Currency',{exact:true}).selectOption('asset-dai');
+ await dialog.getByLabel('Currency',{exact:true}).selectOption('asset-dai', {force:true});
  const included=await dialog.locator('[data-included-networks]').textContent();
  assert.match(included,/Ethereum/i);assert.match(included,/Polygon/i);assert.doesNotMatch(included,/Solana/i,'only approved blockchains belong to activation');
  await mkdir('test-results',{recursive:true});
@@ -279,7 +279,7 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   await page.getByRole('textbox',{name:'Analysis instructions',exact:true}).waitFor();
   await page.waitForFunction(()=>document.querySelector('[data-run-test]')?.disabled===false);
   assert.equal(await page.locator('[data-index-policy] textarea[name=instructions]').count(),1);assert.equal(await page.locator('[data-robot-instruction-form] textarea[name=instructions]').count(),1);
-  assert.equal(await page.locator('[data-security]').count(),1,'only the registered AVISPay PLC stock converter card is retained in the live scroller');
+  assert.equal(await page.locator('[data-security]').count(),10,'the AVISPay security and nine requested demo wallets remain in the row');
   assert.equal(await page.locator('[data-security] strong').first().textContent(),'AVISPay PLC');
   assert.equal(await page.locator('[data-stock-convert]').count(),1);
   assert.equal(await page.locator('[data-markets] .crypto-market').count(),100);
@@ -349,7 +349,7 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   await verifyCurrencyActivation(page,width);
   await verifyTradingTests(page,width);
   await verifyLiveTrading(page,width);
-  assert.equal(await page.locator('[data-security]').count(),1,'the PLC shares converter is restored without publishing other demo security cards');
+  assert.equal(await page.locator('[data-security]').count(),10,'the security scroller retains all ten requested wallets');
   assert.equal(await page.locator('[data-security] strong').first().textContent(),'AVISPay PLC');
   await mkdir('test-results',{recursive:true});
   await page.screenshot({path:'test-results/crypto-'+width+'.png',fullPage:false});
