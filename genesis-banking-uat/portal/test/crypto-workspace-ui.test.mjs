@@ -291,3 +291,42 @@ test('first-time administrator approval refreshes authoritative verification and
  assert.equal(calls.filter(c=>c.path==='crypto/wallet').length,1,'updating available options must preserve the active receiving route');
  assert.equal(calls.filter(c=>c.path==='crypto/activate').length,0);
 });
+
+
+test('admin can remove and restore a single wallet card without touching its original address or account fields',async()=>{
+ const ag=holding('AG',{account_id:'00000000-0000-4000-8000-000000000071',asset_id:'avis-green',address_id:'71',public_address:'original-ag',wallet_visible:true});
+ const agi=holding('AGi',{account_id:'00000000-0000-4000-8000-000000000072',asset_id:'avis-green-investment',address_id:'72',public_address:'original-agi',wallet_visible:true});
+ const views={cryptowallets:[ag,agi]};
+ const originalAg={...ag};
+ const originalAgi={...agi};
+ const actions=[];
+ await mount(views,()=>{},async(path,input)=>{
+  actions.push({path,input});
+  if(path==='crypto/wallet/visibility'){
+   const row=views.cryptowallets.find(w=>w.account_id===input.accountId);
+   row.wallet_visible=input.visible;
+   return {accountId:row.account_id,visible:row.wallet_visible};
+  }
+  throw new Error('Unexpected action '+path);
+ },()=>({admin:true,customerUserId:null}));
+ const remove=document.querySelector('[data-wallet="00000000-0000-4000-8000-000000000071"] [data-archive-wallet]');
+ assert.ok(remove);
+ remove.click();await flush();await flush();
+ assert.equal(document.querySelector('[data-wallet="00000000-0000-4000-8000-000000000071"]'),null);
+ assert.ok(document.querySelector('[data-wallet="00000000-0000-4000-8000-000000000072"]'));
+ const restore=document.querySelector('[data-restore-wallet="00000000-0000-4000-8000-000000000071"]');
+ assert.ok(restore);
+ restore.click();await flush();await flush();
+ assert.ok(document.querySelector('[data-wallet="00000000-0000-4000-8000-000000000071"]'));
+ assert.equal(views.cryptowallets[0].public_address,originalAg.public_address);
+ assert.equal(views.cryptowallets[1].public_address,originalAgi.public_address);
+ assert.equal(views.cryptowallets[0].available_balance,originalAg.available_balance);
+ assert.deepEqual(actions.map(a=>a.input.visible),[false,true]);
+});
+test('the registered AVISPay PLC share converter is visible without asserting a completed chain issuance',async()=>{
+ const share={card_id:'a0000000-0000-4000-8000-000000000001',name:'AVISPay PLC',symbol:'aAVISP',mode:'DEMO',state:'DRAFT',token_quantity:'0',dossier:{assetType:'STOCK',issuedVolume:'100000000',assetValue:'100000000',currency:'CHF',faceValue:'1',marginHaircutBps:1500,tradingFeeBps:10},actions:[]};
+ await mount({cryptosecurities:[share],treasurypositions:[{asset_code:'AVISPAY-PLC-SHARES',quantity:'100000000',source_reference:'AVISPAY-PLC-EXISTING-SHARES'}]},()=>{},()=>{},()=>({admin:true,customerUserId:null}));
+ assert.match(document.querySelector('.crypto-stock-register').textContent,/100,000,000 registered shares/);
+ assert.equal(document.querySelector('[data-security="'+share.card_id+'"] strong').textContent,'AVISPay PLC');
+ assert.ok(document.querySelector('[data-stock-convert]'));
+});
