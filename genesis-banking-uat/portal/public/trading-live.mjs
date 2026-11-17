@@ -108,7 +108,7 @@ function chart(samples){
  return '<svg viewBox="0 0 620 136" role="img" aria-label="Recorded bid and ask prices">'+['bid','ask'].map(key=>'<polyline class="quote-'+key+'" points="'+samples.map(sample=>point(sample,key)).join(' ')+'"/><circle class="quote-'+key+'" cx="'+point(samples.at(-1),key).split(',')[0]+'" cy="'+point(samples.at(-1),key).split(',')[1]+'" r="3"/>').join('')+'</svg>';
 }
 
-export async function mountTradingLive({api,host,isCurrent=()=>host?.isConnected,onSelection=()=>{},selectedRobotId=null,pollMs=2000}){
+export async function mountTradingLive({api,host,isCurrent=()=>host?.isConnected,onSelection=()=>{},selectedRobotId=null,pollMs=2000,onSnapshot=()=>{}}){
  const current=()=>host?.isConnected&&isCurrent();if(!current())return;
  let selected=selectedRobotId,snapshot=null,profiles=[],epoch=0,liquidityEpoch=0,liquidityBusy=false,backingBinding=null,loading=false,closed=false,pollTimer=null,activityTimer=null,side='ALL',focused=null;
  const live=()=>!closed&&current(),activity=createExecutionActivity(),samplesByRobot=new Map(),document=host.ownerDocument;
@@ -171,7 +171,7 @@ export async function mountTradingLive({api,host,isCurrent=()=>host?.isConnected
    const data=await api('crypto/trading/live'+(requested?'?robotId='+encodeURIComponent(requested):''));if(!live()||serial!==epoch)return;
    if(data?.schemaVersion!==1||!Array.isArray(data.profiles)||requested&&data.selectedRobotId!==requested||data.selectedRobotId&&!data.profiles.some(profile=>profile.robotId===data.selectedRobotId))throw Error('The selected market view could not be read. Refresh to try again.');
    snapshot=data;profiles=data.profiles;selected=data.selectedRobotId||null;selector.innerHTML=profiles.length?profiles.map(profile=>'<option value="'+escape(profile.robotId)+'">'+escape(profile.name+' · '+profile.venue+' · '+profile.symbol)+'</option>').join(''):'<option value="">Select a saved robot</option>';selector.value=selected||'';selector.disabled=!profiles.length;
-   issue.textContent='';render(data);onSelection(data.profiles.find(profile=>profile.robotId===selected)||null);
+   issue.textContent='';render(data);onSelection(data.profiles.find(profile=>profile.robotId===selected)||null);onSnapshot(data);
   }catch(error){if(live()&&serial===epoch)issue.textContent=error.message;}finally{if(serial===epoch){loading=false;if(live())refreshButton.disabled=false;schedule();}}
  }
  selector.onchange=()=>{

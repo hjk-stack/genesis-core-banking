@@ -4,6 +4,7 @@ import {CryptoChainActions} from './crypto-chain-actions.mjs';
 import {cryptoLedgerAccount} from './crypto/rolling-ledger.mjs';
 import {decryptKey,networkInfo} from './crypto/networks.mjs';
 import {fault,text,money,decimal} from './core.mjs';
+import {assetReceivingWallet} from './crypto-asset-routing.mjs';
 
 const tokenABI=new Interface([
  'function transfer(address,uint256) returns(bool)',
@@ -67,8 +68,9 @@ export class EvmWalletTransfers extends CryptoChainActions {
    const registered=(await db.query("SELECT card_id FROM avis_core_v2.crypto_security_cards WHERE symbol=$1 AND network=$2 AND state='BOOKED' AND mode='REAL' AND lower(contract_address)=lower($3)",[source.currency_code,source.network,asset.contract_address])).rows[0];
    if(asset.source!=='SECURITY'||!registered)fault('CRYPTO_SEND_SCOPE','cryptoAccount');
   }
-  const wallet=(await db.query('SELECT d.*,k.encrypted_key FROM avis_core_v2.user_deposit_addresses d JOIN avis_core_v2.crypto_wallet_keys k USING(address_id) WHERE d.user_id=$1 AND d.network=$2'+(lock?' FOR SHARE OF d,k':''),[source.user_id,source.network])).rows[0];
-  if(!wallet)fault('CRYPTO_SIGNING_KEY','cryptoAccount');
+  const wallet=await assetReceivingWallet(db,source.user_id,source.network,asset.asset_id,{lock});
+  if(wallet)wallet.encrypted_key=(await db.query('SELECT encrypted_key FROM avis_core_v2.crypto_wallet_keys WHERE address_id=$1'+(lock?' FOR SHARE':''),[wallet.address_id])).rows[0]?.encrypted_key;
+  if(!wallet?.encrypted_key)fault('CRYPTO_SIGNING_KEY','cryptoAccount');
   return {source,asset,wallet};
  }
 
@@ -103,7 +105,9 @@ export class EvmWalletTransfers extends CryptoChainActions {
    const {source,asset,wallet}=await this.walletSendSource(db,actor,clean.cryptoAccount);
    let recipient,recipientUserId=null,receiverName,recipientScope=null;
    if(clean.cryptoDestination==='INTERNAL'){
-    const r=(await db.query('SELECT u.user_id,u.full_name,d.public_address FROM avis_core_v2.sovereign_users u JOIN avis_core_v2.user_deposit_addresses d USING(user_id) WHERE u.user_id=$1 AND d.network=$2',[clean.receiverUserId,source.network])).rows[0];
+    const receiving=await assetReceivingWallet(db,clean.receiverUserId,source.network,asset.asset_id);
+    const owner=(await db.query('SELECT user_id,full_name FROM avis_core_v2.sovereign_users WHERE user_id=$1',[clean.receiverUserId])).rows[0];
+    const r=receiving&&owner?{...owner,public_address:receiving.public_address}:null;
     if(!r)fault('CRYPTO_WALLET_REQUIRED','receiverUserId');
     if(String(r.user_id)===String(source.user_id))fault('SAME_ACCOUNT','receiverUserId');
     recipient=address(r.public_address,'receiverUserId');recipientUserId=String(r.user_id);receiverName=r.full_name;recipientScope='CUSTODY';

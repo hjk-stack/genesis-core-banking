@@ -405,7 +405,10 @@ class FrontendReleaseIntegrityTests(unittest.TestCase):
                  '/trading-panel.mjs': 'public/trading-panel.mjs',
                  '/trading-live.mjs': 'public/trading-live.mjs',
                  '/index-advice.mjs': 'public/index-advice.mjs',
-                 '/crypto.css': 'public/crypto.css'}
+                 '/crypto.css': 'public/crypto.css',
+                 '/approved-robot.mjs': 'public/approved-robot.mjs',
+                 '/approved-robot.css': 'public/approved-robot.css',
+                 '/crypto-icons/robot-approved.jpg': 'public/crypto-icons/robot-approved.jpg'}
         seen = []
         class Opener:
             def open(self, request, timeout):

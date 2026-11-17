@@ -293,7 +293,7 @@ test('first-time administrator approval refreshes authoritative verification and
 });
 
 
-test('admin can remove and restore a single wallet card without touching its original address or account fields',async()=>{
+test('admin removes a wallet card without exposing duplicate restore controls or changing original records',async()=>{
  const ag=holding('AG',{account_id:'00000000-0000-4000-8000-000000000071',asset_id:'avis-green',address_id:'71',public_address:'original-ag',wallet_visible:true});
  const agi=holding('AGi',{account_id:'00000000-0000-4000-8000-000000000072',asset_id:'avis-green-investment',address_id:'72',public_address:'original-agi',wallet_visible:true});
  const views={cryptowallets:[ag,agi]};
@@ -314,14 +314,15 @@ test('admin can remove and restore a single wallet card without touching its ori
  remove.click();await flush();await flush();
  assert.equal(document.querySelector('[data-wallet="00000000-0000-4000-8000-000000000071"]'),null);
  assert.ok(document.querySelector('[data-wallet="00000000-0000-4000-8000-000000000072"]'));
- const restore=document.querySelector('[data-restore-wallet="00000000-0000-4000-8000-000000000071"]');
- assert.ok(restore);
- restore.click();await flush();await flush();
- assert.ok(document.querySelector('[data-wallet="00000000-0000-4000-8000-000000000071"]'));
+ assert.equal(document.querySelector('.crypto-wallet-archive'),null);
+ assert.equal(document.querySelector('[data-restore-wallet]'),null);
+ await workspace.mount(document.querySelector('#view'));
+ assert.equal(document.querySelector('[data-wallet="00000000-0000-4000-8000-000000000071"]'),null);
+ assert.equal(document.querySelector('[data-restore-wallet]'),null);
  assert.equal(views.cryptowallets[0].public_address,originalAg.public_address);
  assert.equal(views.cryptowallets[1].public_address,originalAgi.public_address);
  assert.equal(views.cryptowallets[0].available_balance,originalAg.available_balance);
- assert.deepEqual(actions.filter(a=>a.path==='crypto/wallet/visibility').map(a=>a.input.visible),[false,true]);
+ assert.deepEqual(actions.filter(a=>a.path==='crypto/wallet/visibility').map(a=>a.input.visible),[false]);
 });
 test('the registered AVISPay PLC share converter is visible without asserting a completed chain issuance',async()=>{
  const share={card_id:'a0000000-0000-4000-8000-000000000001',name:'AVISPay PLC',symbol:'aAVISP',mode:'DEMO',state:'DRAFT',token_quantity:'0',dossier:{assetType:'STOCK',issuedVolume:'100000000',assetValue:'100000000',currency:'CHF',faceValue:'1',marginHaircutBps:1500,tradingFeeBps:10},actions:[]};
