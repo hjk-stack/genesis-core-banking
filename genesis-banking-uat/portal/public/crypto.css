@@ -139,3 +139,8 @@
 .crypto-trading-desk .terminal-trading-actions button{border-radius:7px;font-weight:700}
 @media(max-width:1220px){.crypto-trading-desk .trading-live-workspace{grid-template-columns:minmax(160px,1fr) minmax(140px,1fr) minmax(140px,1fr)}.crypto-trading-desk .terminal-price-screen{grid-column:1/-1}}
 @media(max-width:760px){.crypto-trading-desk .trading-live-workspace{grid-template-columns:repeat(2,minmax(0,1fr))}.crypto-trading-desk .trading-live-robot{grid-column:1/-1}.crypto-trading-desk .terminal-price-screen{grid-column:1/-1}.crypto-trading-desk .terminal-live-trades,.crypto-trading-desk .terminal-live-book{min-height:290px}.crypto-trading-desk .crypto-trading-console{padding:7px}}
+
+.crypto-token-identity{display:grid;gap:4px;min-width:0;margin:10px 0 2px;font-size:10px;color:#bfd6dc}
+.crypto-token-identity a,.crypto-token-identity code{font-size:10px;line-height:1.35;color:#eafcff;text-decoration:none;overflow-wrap:anywhere;white-space:normal}
+.crypto-token-identity a:hover{text-decoration:underline}
+.crypto-token-identity code{font-family:ui-monospace,SFMono-Regular,monospace}
