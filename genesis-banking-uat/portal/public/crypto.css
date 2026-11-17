@@ -144,3 +144,16 @@
 .crypto-token-identity a,.crypto-token-identity code{font-size:10px;line-height:1.35;color:#eafcff;text-decoration:none;overflow-wrap:anywhere;white-space:normal}
 .crypto-token-identity a:hover{text-decoration:underline}
 .crypto-token-identity code{font-family:ui-monospace,SFMono-Regular,monospace}
+
+/* Owner-approved institutional palette: white liquid chrome, glass, AVIS green and minimal gold. */
+.crypto-trading-desk .crypto-trading-console{background:linear-gradient(135deg,#f7faf9 0%,#dbe7e4 50%,#e9f0ee 100%);border:1px solid #abc5bb;box-shadow:inset 0 2px #ffffffba,0 14px 34px #1b3a3030}
+.crypto-trading-desk .terminal-identity,.crypto-trading-desk .terminal-identity h3{color:#203932}
+.crypto-trading-desk .terminal-identity p{color:#44685b}
+.crypto-trading-desk .terminal-identity strong{color:#0e7160}
+.crypto-trading-desk .trading-live{background:linear-gradient(120deg,#fbfdfc,#eef4f1);border:1px solid #b4c6bd}
+.crypto-trading-desk .trading-live-robot{color:#193a32;background:radial-gradient(ellipse at 50% 20%,#ffffff 0%,#e1eeeb 45%,#b6ccc5 92%);border:1px solid #a1bbb2;box-shadow:inset 0 2px #fff,inset 0 -20px 45px #29584a22,0 12px 23px #345c4b1f}
+.crypto-trading-desk .trading-robot-name span,.crypto-trading-desk .trading-robot-latest span{color:#496c60}
+.crypto-trading-desk .trading-robot-art{filter:drop-shadow(0 8px 8px #15271c41) drop-shadow(0 0 11px #a9dcc74b)}
+.crypto-trading-desk .trading-robot-filters button{background:#f6fafa;color:#245346;border:1px solid #9db7ab}
+.crypto-trading-desk .trading-robot-filters button[aria-pressed=true]{background:#d3efe2;color:#165742;border-color:#58a082}
+.crypto-trading-desk .terminal-live-trades,.crypto-trading-desk .terminal-live-book,.crypto-trading-desk .terminal-price-screen{background:linear-gradient(#fff,#f4f8f5);border-color:#c3d1c9}
