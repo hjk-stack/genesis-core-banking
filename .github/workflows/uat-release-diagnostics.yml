@@ -1,0 +1,46 @@
+name: AVISPay UAT release diagnostics
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/uat-release-diagnostics.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  remote-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Inspect previous sovereign UAT releases and deployment job conclusions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow sovereign-uat.yml --branch main --limit 8 --json databaseId,headSha,status,conclusion,event,createdAt --jq '.[] | {run: .databaseId, commit: .headSha, status, conclusion, event, createdAt}'
+      - name: Inspect current UAT DNS, TLS, readiness and deployed revision
+        shell: bash
+        run: |
+          set -u
+          host=genesis-banking-uat.orangemushroom-9faae382.italynorth.azurecontainerapps.io
+          echo "### UAT remote release probe" >> "$GITHUB_STEP_SUMMARY"
+          echo "Host: $host"
+          getent ahosts "$host" || true
+          python3 - <<'PY'
+          import json, ssl, urllib.error, urllib.request, socket
+          host="genesis-banking-uat.orangemushroom-9faae382.italynorth.azurecontainerapps.io"
+          print("dns start", flush=True)
+          try: print("DNS", socket.getaddrinfo(host,443)[0][4], flush=True)
+          except Exception as e: print("DNS ERROR",repr(e),flush=True)
+          base="https://"+host
+          for path in ["/readyz","/healthz","/"]:
+              url=base+path
+              print("REQUEST",url,flush=True)
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(url,headers={"User-Agent":"AVISPay-UAT-Release-Probe/1.0"}),timeout=12) as resp:
+                      raw=resp.read(1024)
+                      print("HTTP",resp.status,"FINAL",resp.url,"BODY",repr(raw[:1024]),flush=True)
+              except urllib.error.HTTPError as e:
+                  print("HTTP ERROR",e.code,"BODY",repr(e.read(512)),flush=True)
+              except Exception as e:
+                  print("NETWORK ERROR",type(e).__name__,str(e),flush=True)
+          PY

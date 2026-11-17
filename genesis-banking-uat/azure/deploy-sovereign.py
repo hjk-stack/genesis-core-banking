@@ -84,6 +84,36 @@ def api(opener, base, path, body=None, csrf=None, idempotency_key=None):
     with opener.open(request, timeout=30) as response:
         return json.load(response)
 
+def verify_deployed_frontend(opener, base, sha):
+    """Refuse a release whose served Crypto Suite differs from checked-out source."""
+    from pathlib import Path
+    portal = Path(__file__).resolve().parent.parent / 'portal'
+    assets = {
+        '/': 'index.html',
+        '/app.mjs': 'public/app.mjs',
+        '/crypto-workspace.mjs': 'public/crypto-workspace.mjs',
+        '/trading-panel.mjs': 'public/trading-panel.mjs',
+        '/trading-live.mjs': 'public/trading-live.mjs',
+        '/index-advice.mjs': 'public/index-advice.mjs',
+        '/crypto.css': 'public/crypto.css',
+    }
+    for route, relative in assets.items():
+        request = urllib.request.Request(
+            base + route + ('?' if '?' not in route else '&') + 'release=' + sha,
+            headers={'Cache-Control': 'no-cache'})
+        with opener.open(request, timeout=20) as response:
+            data = response.read(2_000_000)
+            if response.status != 200 or response.headers.get('x-avispay-release') != sha:
+                raise RuntimeError('UAT frontend release identity mismatch: ' + route)
+            if 'no-store' not in response.headers.get('cache-control', '').lower():
+                raise RuntimeError('UAT frontend cache policy mismatch: ' + route)
+        expected = (portal / relative).read_bytes()
+        if hashlib.sha256(data).digest() != hashlib.sha256(expected).digest():
+            raise RuntimeError('UAT frontend source checksum mismatch: ' + route)
+    print('Verified served UAT frontend release and source checksums: ' +
+          str(len(assets)) + ' files including Crypto Suite, trading and INDEX')
+
+
 def verify_index_access(opener, base, csrf):
     """Read the private policy and verify workspace boundaries without trading."""
     policy = api(opener, base, '/api/crypto/trading/index-policy')
@@ -470,6 +500,8 @@ def main():
             time.sleep(5)
         else:
             raise RuntimeError('New application did not become ready')
+        stage = 'live frontend asset integrity and cache verification'
+        verify_deployed_frontend(opener, base, sha)
         # Existing administrator sign-in; read records only. Never create or fund test customers here.
         stage = 'administrator authentication'
         login = api(opener, base, '/api/login', {'username': 'mifos', 'password': secret('genesis-mifos-uat', 'admin-password')})
