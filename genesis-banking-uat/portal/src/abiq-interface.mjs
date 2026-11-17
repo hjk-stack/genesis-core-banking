@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {fault,text} from './core.mjs';
-import {ABIQ_ISSUER,ABIQ_PARTITIONS,parseAbiqIban,provisionAbiqAccounts,resolveAbiqAccount} from './avispay-core-accounts.mjs';
+import {ABIQ_ISSUER,ABIQ_PARTITIONS,parseAbiqIban,provisionAbiqAccounts,findAbiqAccountIdentifier} from './avispay-core-accounts.mjs';
 
 // fit.INTELECT v1 message adapter for this core's configured issuer.
 // userId is local ownership context, outside the vendor's fitREQUEST envelope.
@@ -20,7 +20,7 @@ export async function processAbiqRequest(core,actor,input) {
  if(h.function==='IBANCHECK'){
   try {
    const parsed=parseAbiqIban(request.ABIQ_INFO?.abiqIBAN);
-   const account=await resolveAbiqAccount(core.pool,{identifier:parsed.identifier,currency:parsed.currency});
+   const account=await findAbiqAccountIdentifier(core.pool,{identifier:parsed.identifier,currency:parsed.currency});
    return response(h,account?'00':'34',account?'Request processed successfully':'Invalid account');
   } catch(e) {if(e.code?.startsWith('ABIQ_'))return response(h,'34','Invalid account');throw e;}
  }

@@ -1,4 +1,5 @@
 import contextlib
+from copy import deepcopy
 import importlib.util
 import io
 import json
@@ -410,6 +411,134 @@ class LiveTraderVerificationTests(unittest.TestCase):
 
 
 
+class BankAccountIdentifierVerificationTests(unittest.TestCase):
+    def fixture(self):
+        def row(index, identifier, owner='USER', scope='FUNDING', currency='EUR'):
+            return {'account_id': f'11111111-1111-4111-8111-{index:012d}',
+                    'abiq_iban': identifier, 'account_reference': identifier,
+                    'currency_code': currency, 'network': None, 'wallet_scope': scope,
+                    'owner_type': owner, 'user_id': '1' if owner == 'USER' else None,
+                    'account_holder': 'private-holder-fixture',
+                    'available_balance': '123.456789012345678901', 'locked_balance': '0'}
+        funding = row(1, 'TN89AVIP000978000011000101')
+        margin = row(2, 'TN39AVIP97800000000001001', scope='MARGIN')
+        custody = row(3, 'TN12AVIP97800000000001002', scope='CUSTODY')
+        common = row(4, 'TN82AVIP97800000000001003', owner='COMMON_POOL')
+        common['account_type'] = 'COMMON'
+        suspense = row(5, 'TN55AVIP97800000000001004', owner='SUSPENSE_INBOUND')
+        suspense['account_type'] = 'SUSPENSE'
+        treasury = row(6, 'TN14AVIP84000000000001005', owner='TREASURY', currency='USD')
+        crypto = []
+        for index, (currency, network) in enumerate([('AG', None), ('AGi', None),
+                                                    ('BTC', 'BITCOIN'), ('USD', 'ETHEREUM')], 7):
+            item = row(index, None, owner='COMMON_POOL', currency=currency)
+            item.update(network=network, account_reference='private-crypto-code')
+            crypto.append(item)
+        accounts = [{'abiq_iban': funding['abiq_iban'], 'user_id': '1', 'currency_code': 'EUR'}]
+        ledger = deepcopy([funding, margin, custody, common, suspense, treasury, *crypto])
+        views = {'/api/views/accountsummaries': {'rows': deepcopy([funding, margin, custody])},
+                 '/api/views/backofficeaccounts': {'rows': deepcopy([common, suspense])}}
+        for item in [common, suspense, custody, margin]:
+            views['/api/accounts/' + item['account_id']] = {'account': deepcopy(item), 'entries': []}
+        calls = []
+
+        def request(client, base, path, *args, **kwargs):
+            self.assertFalse(args or kwargs, 'bank numbering verifier must use GET reads only')
+            calls.append(path)
+            return views[path]
+        return accounts, ledger, views, calls, request
+
+    def verify(self, fixture):
+        accounts, ledger, _, _, request = fixture
+        with patch.object(deploy, 'api', side_effect=request):
+            return deploy.verify_bank_account_identifiers(object(), 'https://bank.example', accounts, ledger)
+
+    def test_validates_existing_common_suspense_and_custody_without_mutation_or_private_output(self):
+        fixture = self.fixture()
+        snapshot = deepcopy(fixture[:3])
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            evidence = self.verify(fixture)
+        self.assertEqual(fixture[:3], snapshot)
+        self.assertEqual({key: value for key, value in evidence.items() if key != 'identifierMapSha256'},
+                         {'bankLedgerRows': 6, 'common': 1, 'suspense': 1, 'custody': 1,
+                          'margin': 1, 'primaryFunding': 1, 'cryptoLedgerRowsExcluded': 4,
+                          'statementsVerified': 4})
+        self.assertRegex(evidence['identifierMapSha256'], r'^[a-f0-9]{64}$')
+        self.assertEqual(len(fixture[3]), 6)
+        for private in ['private-', '11111111-', 'TN89AVIP', '123.456789012345678901']:
+            self.assertNotIn(private, output.getvalue())
+
+    def test_rejects_missing_iban_and_internal_codes_on_common_or_suspense_rows(self):
+        for index in (0, 1):
+            for update in ({'abiq_iban': None}, {'account_reference': 'MANAGED:private-code'}):
+                with self.subTest(index=index, update=update):
+                    fixture = self.fixture()
+                    fixture[2]['/api/views/backofficeaccounts']['rows'][index].update(update)
+                    with self.assertRaisesRegex(RuntimeError, 'identifier missing|reference or scope mismatch'):
+                        self.verify(fixture)
+
+    def test_rejects_network_wallets_and_unnetworked_crypto_in_banking_views(self):
+        for index in range(6, 10):
+            with self.subTest(crypto_index=index):
+                fixture = self.fixture()
+                fixture[2]['/api/views/backofficeaccounts']['rows'].append(deepcopy(fixture[1][index]))
+                with self.assertRaisesRegex(RuntimeError, 'Crypto wallet|currency unsupported'):
+                    self.verify(fixture)
+
+    def test_crypto_accounting_rows_cannot_receive_bank_identifiers(self):
+        for index in range(6, 10):
+            with self.subTest(crypto_index=index):
+                fixture = self.fixture()
+                fixture[1][index]['abiq_iban'] = 'TN98AVIP97800000000001006'
+                with self.assertRaisesRegex(RuntimeError, 'Crypto ledger was assigned'):
+                    self.verify(fixture)
+
+    def test_distinct_custody_or_margin_cannot_reuse_the_funding_identifier(self):
+        for index in (1, 2):
+            with self.subTest(scope_index=index):
+                fixture = self.fixture()
+                rows = fixture[2]['/api/views/accountsummaries']['rows']
+                rows[index].update(abiq_iban=rows[0]['abiq_iban'], account_reference=rows[0]['abiq_iban'])
+                with self.assertRaisesRegex(RuntimeError, 'share an ABIQ identifier'):
+                    self.verify(fixture)
+
+    def test_missing_common_or_user_account_from_the_ui_fails_verification(self):
+        for path in ('/api/views/backofficeaccounts', '/api/views/accountsummaries'):
+            fixture = self.fixture()
+            fixture[2][path]['rows'].pop()
+            with self.assertRaisesRegex(RuntimeError, 'missing from Accounts & ABIQ'):
+                self.verify(fixture)
+
+    def test_primary_payment_account_must_retain_its_exact_funding_identity(self):
+        fixture = self.fixture()
+        fixture[0][0]['abiq_iban'] = 'TN98AVIP97800000000001006'
+        with self.assertRaisesRegex(RuntimeError, 'Primary funding account identity'):
+            self.verify(fixture)
+
+    def test_statement_must_match_the_same_numbered_account(self):
+        fixture = self.fixture()
+        path = next(path for path in fixture[2] if path.startswith('/api/accounts/'))
+        fixture[2][path]['account'].update(abiq_iban='TN98AVIP97800000000001006',
+                                         account_reference='TN98AVIP97800000000001006')
+        with self.assertRaisesRegex(RuntimeError, 'differs across views'):
+            self.verify(fixture)
+
+    def test_issued_identifiers_require_checksum_and_currency_consistency(self):
+        deploy.validate_bank_identifier('TN89AVIP000978000011000101', 'EUR')
+        deploy.validate_bank_identifier('TN39AVIP97800000000001001', 'EUR')
+        deploy.validate_bank_identifier('TN14AVIP84000000000001005', 'USD')
+        deploy.validate_bank_identifier('AQ40AVIP097800000000000001', 'EUR')
+        for identifier, currency in [('TN40AVIP97800000000001001', 'EUR'),
+                                     ('TN39AVIP97800000000001001', 'USD'),
+                                     ('TN89AVIP000978000021000101', 'EUR'),
+                                     ('TN89AVIP000978000011000101', 'AG'),
+                                     ('TN89AVIP000978000011000101', 'AGi'),
+                                     ('MANAGED:private-code', 'EUR')]:
+            with self.subTest(currency=currency, identifier=identifier):
+                with self.assertRaisesRegex(RuntimeError, 'identifier'):
+                    deploy.validate_bank_identifier(identifier, currency)
+
+
 class TreasuryOpeningConsoleTests(unittest.TestCase):
     def run_console(self, output):
         def process(args, **kwargs):
@@ -459,6 +588,7 @@ class FrontendReleaseIntegrityTests(unittest.TestCase):
         release = 'a' * 40
         portal = Path(__file__).resolve().parent.parent / 'portal'
         files = {'/': 'index.html', '/app.mjs': 'public/app.mjs',
+                 '/accounts.mjs': 'public/accounts.mjs',
                  '/portfolio.mjs': 'public/portfolio.mjs',
                  '/crypto-workspace.mjs': 'public/crypto-workspace.mjs',
                  '/treasury-source.mjs': 'public/treasury-source.mjs',

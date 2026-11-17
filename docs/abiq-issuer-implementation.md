@@ -38,6 +38,43 @@ The manual's §3.2 distinguishes the ABIQ network's private BBAN layout from reg
 
 The corporate identity is a business account on the existing customer-account side of the core ledger. System TREASURY, reserve, common and suspense accounts retain their existing classifications and balances. This installation does not move company capital or change any historical booking. The frontend holder is an account record; it does not create a separate frontend sign-in credential.
 
+## Identification of every bank account
+
+Migration 029 extends ABIQ identification to existing and future supported FIAT
+ledger accounts, including Common, Suspense, Treasury, reserve, Margin and
+securities Custody accounts. It adds metadata to the original account IDs and
+creates no new ledger, customer, securities position or journal entry. The existing
+customer funding bridge and its 26-character identifiers remain unchanged.
+
+Additional ledgers use the installed 25-character serial issuer from migration 008:
+`TN`, two calculated check digits, `AVIP`, the three-digit ISO currency partition
+and a 14-digit permanent serial. The shared non-cycling `abiq_account_numbers`
+sequence and database uniqueness checks prevent reuse. A system account needs no
+fabricated customer identity, and separate funding, margin and custody ledgers
+receive distinct identifiers. Currency-less securities positions remain holdings;
+they are not treated as new bank accounts or assigned an invented currency.
+
+The immutable `abiq_ledger_identifiers` registry and canonical
+`abiq_account_identifiers` view associate each identifier with its exact ledger and
+currency. `ensure_ledger_abiq(uuid)` is idempotent and returns an existing primary
+bridge identifier when one exists. A deferred database trigger issues the number
+before a new bank account commits, allowing customer provisioning to install its
+primary bridge in the same transaction. Common/Suspense account opening explicitly
+calls the issuer so its response includes the number immediately.
+
+Bank classification requires both a null blockchain network and a currency in the
+configured `abiq_currencies` table. Network wallets and unnetworked crypto Treasury
+or clearing entries are excluded. Crypto account requests are rejected by the bank
+account forms and APIs; crypto activation continues through Wallets.
+
+Accounts & ABIQ and statements show the issued identifier instead of the internal
+bucket code. The code remains private processing metadata so existing system
+lookups, account IDs, balances and histories are preserved. `IBANCHECK` recognises
+registered bank identifiers, while payment routing remains restricted to the
+existing active funding bridge. Numbering a custody or suspense account does not
+make it a payment beneficiary or source. Funding selectors remain restricted even
+though account summaries now include separately numbered margin/custody accounts.
+
 ## ABIQ message interface
 
 `POST /api/abiq` accepts the manual's `fitREQUEST` envelope under existing administrator authentication, same-origin and CSRF protection. The local `userId` field supplies verified account ownership context outside that envelope.

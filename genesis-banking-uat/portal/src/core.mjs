@@ -244,16 +244,14 @@ export class SovereignCore {
     FROM avis_core_v2.ledger_accounts a
     LEFT JOIN avis_core_v2.sovereign_users u USING(user_id)
     LEFT JOIN avis_core_v2.abiq_network_participants issuer ON issuer.participant_code='AVIP'
-    LEFT JOIN avis_core_v2.abiq_routing_bridge b ON b.ledger_account_id=a.account_id OR
-     (a.owner_type='USER' AND a.wallet_scope IN ('MARGIN','CUSTODY') AND a.network IS NULL
-      AND a.user_id=b.user_id AND a.currency_code=b.currency_code AND a.sub_account_code='ABIQ:' || b.participant_code)
+    LEFT JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id
     LEFT JOIN avis_core_v2.abiq_currencies c ON c.currency_code=a.currency_code
     ORDER BY CASE WHEN u.account_role='INSTITUTION' THEN 0 WHEN a.owner_type<>'USER' THEN 1 ELSE 2 END,
-     a.user_id,a.owner_type,c.account_series NULLS LAST,a.currency_code,b.participant_code,a.sub_account_code,
-     CASE a.wallet_scope WHEN 'FUNDING' THEN 0 WHEN 'MARGIN' THEN 1 ELSE 2 END,a.account_id LIMIT 500`,
+     a.user_id,a.owner_type,c.account_series NULLS LAST,a.currency_code,a.sub_account_code,
+     CASE a.wallet_scope WHEN 'FUNDING' THEN 0 WHEN 'MARGIN' THEN 1 ELSE 2 END,b.participant_code,a.account_id LIMIT 500`,
    transactions:`SELECT j.journal_id,j.created_at,j.event_type,j.reference_id,e.direction,e.amount::text,a.currency_code,a.owner_type,b.abiq_iban
     FROM avis_core_v2.ledger_entries e JOIN avis_core_v2.ledger_journals j USING(journal_id) JOIN avis_core_v2.ledger_accounts a USING(account_id)
-    LEFT JOIN avis_core_v2.abiq_routing_bridge b ON b.ledger_account_id=a.account_id ORDER BY e.entry_id DESC LIMIT 300`,
+    LEFT JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id ORDER BY e.entry_id DESC LIMIT 300`,
    shops:`SELECT m.merchant_id,m.shop_name,m.owner_user_id,u.full_name,m.commission_rate_bps,m.status FROM avis_core_v2.marketplace_merchants m JOIN avis_core_v2.sovereign_users u ON u.user_id=m.owner_user_id ORDER BY m.created_at DESC LIMIT 300`,
    checkouts:'SELECT checkout_id,marketplace_order_ref,buyer_user_id,payment_rail,total_amount_eur::text,status,created_at FROM avis_core_v2.checkout_payment_sessions ORDER BY created_at DESC LIMIT 300',
    cards:'SELECT card_id,user_id,last_four_digits,card_type,card_rail_mode,status FROM avis_core_v2.avis_cards ORDER BY created_at DESC LIMIT 300',

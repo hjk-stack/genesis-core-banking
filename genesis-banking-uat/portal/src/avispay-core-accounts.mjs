@@ -72,6 +72,24 @@ export async function provisionAbiqAccounts(db,{userId,participantCode,currencie
  const result=await db.query('SELECT avis_core_v2.provision_abiq_accounts($1::bigint,$2::text,$3::text[],$4::text) AS accounts',args);
  return result.rows[0].accounts;
 }
+export async function ensureLedgerAbiq(db,accountId) {
+ const result=await db.query('SELECT avis_core_v2.ensure_ledger_abiq($1::uuid) AS abiq_iban',[accountId]);
+ return result.rows[0].abiq_iban;
+}
+// Identification covers every bank account; payment routing remains restricted to
+// the funding bridge in resolveAbiqAccount. Custody/system IDs do not grant routing.
+export async function findAbiqAccountIdentifier(db,{identifier,currency}) {
+ const route=parseAbiqIban(identifier),curr=currencyCode(currency);
+ if(route.currency!==curr)fail('ABIQ_CURRENCY_MISMATCH');
+ const result=await db.query(`SELECT i.ledger_account_id,i.abiq_iban,i.participant_code,i.currency_code,i.identifier_source,a.user_id
+  FROM avis_core_v2.abiq_account_identifiers i JOIN avis_core_v2.ledger_accounts a ON a.account_id=i.ledger_account_id
+  JOIN avis_core_v2.abiq_network_participants p USING(participant_code)
+  WHERE (i.abiq_iban=$1 OR i.ledger_account_id IN (
+   SELECT b.ledger_account_id FROM avis_core_v2.abiq_identifier_routes r
+   JOIN avis_core_v2.abiq_routing_bridge b USING(bridge_id) WHERE r.identifier=$1))
+   AND i.currency_code=$2 AND i.status='ACTIVE' AND p.is_active`,[route.identifier,curr]);
+ return result.rows[0]||null;
+}
 export function normalizeAbiqBankRoute(input) {
  const accountType=field(input.accountType,'ABIQ_INVALID_BANK_ACCOUNT_TYPE',8).toUpperCase();
  if(!['IBAN','LOCAL'].includes(accountType)) fail('ABIQ_INVALID_BANK_ACCOUNT_TYPE');

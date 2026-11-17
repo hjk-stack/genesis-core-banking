@@ -4,6 +4,7 @@ import {PGlite} from '@electric-sql/pglite';
 import pg from 'pg';
 import {migrate} from '../src/migrate.mjs';
 import {SovereignCore} from '../src/core.mjs';
+import {parseAbiqIban} from '../src/avispay-core-accounts.mjs';
 
 let db,pool,core,sameName,treasury,unmapped;
 const actor={id:'ledger-details',admin:true};
@@ -39,9 +40,12 @@ test('ledger details resolve the full account reference for each holder, currenc
  for(const account of accounts){
   const group=ledger.filter(r=>String(r.user_id)===String(account.user_id)&&r.currency_code===account.currency_code&&r.sub_account_code==='ABIQ:'+account.participant_code&&r.network===null);
   assert.deepEqual(group.map(r=>r.wallet_scope),['FUNDING','MARGIN','CUSTODY']);
+  assert.equal(new Set(group.map(r=>r.abiq_iban)).size,3);
   for(const row of group){
-   assert.equal(row.abiq_iban,account.abiq_iban);
-   assert.equal(row.account_reference,account.abiq_iban);
+   if(row.wallet_scope==='FUNDING')assert.equal(row.abiq_iban,account.abiq_iban);
+   else assert.notEqual(row.abiq_iban,account.abiq_iban);
+   assert.equal(parseAbiqIban(row.abiq_iban).currency,row.currency_code);
+   assert.equal(row.account_reference,row.abiq_iban);
    assert.equal(row.account_holder,account.full_name);
    assert.equal(row.owner_class,account.account_role);
   }
@@ -55,14 +59,15 @@ test('ledger details resolve the full account reference for each holder, currenc
  assert.ok(ledger.filter(r=>String(r.user_id)===sameName.userId).every(r=>r.owner_class==='CUSTOMER'));
 });
 
-test('system and unrelated network ledgers retain their own references and actual accounting categories',async()=>{
+test('system FIAT ledgers use their own ABIQ while network ledgers retain wallet references and accounting categories',async()=>{
  const ledger=await core.list(actor,'ledger');
  const capital=ledger.find(r=>r.account_id===treasury);
  assert.equal(capital.owner_class,'TREASURY');
  assert.equal(capital.account_holder,'AVISPay PLC');
- assert.equal(capital.account_reference,'CORPORATE_CAPITAL');
+ assert.equal(capital.account_reference,capital.abiq_iban);
+ assert.equal(capital.sub_account_code,'CORPORATE_CAPITAL');
  assert.equal(capital.account_category,'ASSET');
- assert.equal(capital.abiq_iban,null);
+ assert.equal(parseAbiqIban(capital.abiq_iban).currency,'EUR');
  const network=ledger.find(r=>r.account_id===unmapped);
  assert.equal(network.abiq_iban,null);
  assert.equal(network.account_reference,'ABIQ:AVIP');
