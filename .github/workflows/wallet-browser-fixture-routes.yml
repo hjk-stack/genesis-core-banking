@@ -1,0 +1,38 @@
+name: Integrate allowance browser fixture routes
+on:
+  pull_request:
+    types: [synchronize]
+permissions:
+  contents: write
+jobs:
+  source-integration:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'fix/multi-coin-trade-allowance-scroller-20261117'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Add exact source module routes to Chromium fixture
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path=Path('genesis-banking-uat/portal/test-browser/crypto-layout.mjs')
+          source=path.read_text()
+          old="'/crypto-workspace.mjs','/trading-panel.mjs'"
+          new="'/crypto-workspace.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs'"
+          if source.count(old)!=1: raise RuntimeError('Browser fixture static routes changed')
+          path.write_text(source.replace(old,new))
+          PY
+          node --check genesis-banking-uat/portal/test-browser/crypto-layout.mjs
+          git diff --check
+      - name: Commit fixture update and remove this one-time integration workflow
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add genesis-banking-uat/portal/test-browser/crypto-layout.mjs
+          git rm .github/workflows/wallet-browser-fixture-routes.yml
+          git commit -m 'Serve wallet trading scroller assets in Chromium banking-shell acceptance'
+          git push origin HEAD:refs/heads/fix/multi-coin-trade-allowance-scroller-20261117
