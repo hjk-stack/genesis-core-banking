@@ -1,14 +1,14 @@
 name: Import approved AVISPay robot artwork
 on:
   pull_request:
-    paths: ['.github/workflows/import-approved-robot.yml', 'genesis-banking-uat/portal/scripts/install-approved-robot.py']
+    paths: ['.github/workflows/import-approved-robot.yml', 'genesis-banking-uat/portal/scripts/install-approved-robot.py', 'genesis-banking-uat/portal/scripts/finalize-approved-robot.py']
 permissions:
   contents: write
 jobs:
   import:
     if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'fix/portfolio-linked-crypto-wallets-20261117'
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     concurrency:
       group: avispay-approved-robot-source-integration
       cancel-in-progress: false
@@ -28,6 +28,7 @@ jobs:
           assert hashlib.sha256(path.read_bytes()).hexdigest() == '085f7dee99acb6ee9b15f34f42642bc53f269b5aad03a8b09d854cf2af0b9fa1', 'Approved artwork checksum changed'
           PY
           python3 genesis-banking-uat/portal/scripts/install-approved-robot.py
+          python3 genesis-banking-uat/portal/scripts/finalize-approved-robot.py
           node --check genesis-banking-uat/portal/server.mjs
           node --check genesis-banking-uat/portal/public/app.mjs
           node --check genesis-banking-uat/portal/public/trading-panel.mjs
@@ -38,11 +39,16 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           node --test test/approved-robot.test.mjs test/trading-live-ui.test.mjs test/index-advice-ui.test.mjs test/trading-testing-ui.test.mjs test/exchange-intent.test.mjs
+      - name: Check desktop tablet and phone interaction in Chromium
+        working-directory: genesis-banking-uat/portal
+        run: |
+          npx playwright install --with-deps chromium
+          node --test test-browser/crypto-layout.mjs
       - name: Commit exact inspected integration paths
         run: |
           git config user.name 'AVISPay release automation'
           git config user.email 'avispay-release@users.noreply.github.com'
-          git add genesis-banking-uat/portal/server.mjs genesis-banking-uat/portal/public/trading-panel.mjs genesis-banking-uat/portal/public/trading-live.mjs genesis-banking-uat/portal/public/approved-robot.mjs genesis-banking-uat/portal/public/app.mjs genesis-banking-uat/portal/test/approved-robot.test.mjs genesis-banking-uat/portal/test-browser/crypto-layout.mjs
+          git add genesis-banking-uat/portal/server.mjs genesis-banking-uat/portal/public/trading-panel.mjs genesis-banking-uat/portal/public/trading-live.mjs genesis-banking-uat/portal/public/approved-robot.mjs genesis-banking-uat/portal/public/approved-robot.css genesis-banking-uat/portal/public/app.mjs genesis-banking-uat/portal/test/approved-robot.test.mjs genesis-banking-uat/portal/test-browser/crypto-layout.mjs
           if ! git diff --cached --quiet; then
             git commit -m 'Verify approved robot chart, wallet preservation and reviewed order navigation'
             git push origin HEAD:fix/portfolio-linked-crypto-wallets-20261117
@@ -52,10 +58,12 @@ jobs:
           git rev-parse HEAD > "$RUNNER_TEMP/approved-robot-source-sha.txt"
           git archive --format=zip HEAD genesis-banking-uat/portal > "$RUNNER_TEMP/approved-robot-source.zip"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: approved-robot-source
           path: |
             ${{ runner.temp }}/approved-robot-source.zip
             ${{ runner.temp }}/approved-robot-source-sha.txt
+            genesis-banking-uat/portal/test-results/crypto-live-trader-*.png
           retention-days: 3
-          if-no-files-found: error
+          if-no-files-found: warn
