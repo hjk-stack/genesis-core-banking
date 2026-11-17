@@ -116,6 +116,7 @@ def verify_deployed_frontend(opener, base, sha):
     assets = {
         '/': 'index.html',
         '/app.mjs': 'public/app.mjs',
+        '/accounts.mjs': 'public/accounts.mjs',
         '/portfolio.mjs': 'public/portfolio.mjs',
         '/crypto-workspace.mjs': 'public/crypto-workspace.mjs',
         '/treasury-source.mjs': 'public/treasury-source.mjs',
@@ -143,7 +144,119 @@ def verify_deployed_frontend(opener, base, sha):
         if hashlib.sha256(data).digest() != hashlib.sha256(expected).digest():
             raise RuntimeError('UAT frontend source checksum mismatch: ' + route)
     print('Verified served UAT frontend release and source checksums: ' +
-          str(len(assets)) + ' files including Crypto Suite, trading and INDEX')
+          str(len(assets)) + ' files including Accounts & ABIQ, Crypto Suite, trading and INDEX')
+
+
+ABIQ_CURRENCY_NUMBERS = {
+    'EUR': ('978', 1), 'USD': ('840', 2), 'GBP': ('826', 3), 'CHF': ('756', 4),
+    'SEK': ('752', 5), 'NOK': ('578', 6), 'DKK': ('208', 7), 'PLN': ('985', 8),
+    'CZK': ('203', 9), 'HUF': ('348', 10), 'RON': ('946', 11), 'AED': ('784', 12),
+    'SGD': ('702', 13), 'JPY': ('392', 14),
+}
+
+
+def validate_bank_identifier(identifier, currency):
+    """Validate supported primary, serial and legacy ABIQ identifiers without logging them."""
+    if not isinstance(identifier, str) or currency not in ABIQ_CURRENCY_NUMBERS:
+        raise RuntimeError('Bank account identifier missing or currency unsupported')
+    numbered = re.fullmatch(r'TN[0-9]{2}AVIP000([0-9]{3})([0-9]{5})([0-9]{7})', identifier)
+    serial = re.fullmatch(r'TN[0-9]{2}AVIP([0-9]{3})([0-9]{14})', identifier)
+    legacy = re.fullmatch(r'AQ[0-9]{2}[A-Z0-9]{4}0([0-9]{3})([0-9]{14})', identifier)
+    match = numbered or serial or legacy
+    iso_numeric, series = ABIQ_CURRENCY_NUMBERS[currency]
+    if (not match or match[1] != iso_numeric
+            or numbered and (int(numbered[2]) != series or int(numbered[3]) < 1000101)
+            or not numbered and int(match[2]) < 1):
+        raise RuntimeError('Bank account identifier format or currency mismatch')
+    expanded = ''.join(str(ord(c) - 55) if c.isalpha() else c
+                       for c in identifier[4:] + identifier[:4])
+    if int(expanded) % 97 != 1:
+        raise RuntimeError('Bank account identifier checksum mismatch')
+
+
+def verify_bank_account_identifiers(opener, base, accounts, ledger):
+    """Read existing bank accounts and statements; never create accounts or move funds."""
+    summaries = api(opener, base, '/api/views/accountsummaries')['rows']
+    backoffice = api(opener, base, '/api/views/backofficeaccounts')['rows']
+    if not all(isinstance(rows, list) for rows in (accounts, ledger, summaries, backoffice)):
+        raise RuntimeError('Bank account verification read schema mismatch')
+    by_account, by_identifier = {}, {}
+
+    def verify_row(row):
+        if not isinstance(row, dict) or row.get('network') is not None:
+            raise RuntimeError('Crypto wallet appeared as a bank account')
+        identifier, account_id = row.get('abiq_iban'), row.get('account_id')
+        validate_bank_identifier(identifier, row.get('currency_code'))
+        if (not isinstance(account_id, str) or not account_id
+                or row.get('account_reference') != identifier
+                or row.get('wallet_scope') not in ('FUNDING', 'MARGIN', 'CUSTODY')):
+            raise RuntimeError('Bank account reference or scope mismatch')
+        previous = by_account.get(account_id)
+        if previous and any(row.get(key) != previous.get(key)
+                            for key in ('abiq_iban', 'currency_code', 'wallet_scope')):
+            raise RuntimeError('Bank account identifier differs across views')
+        if identifier in by_identifier and by_identifier[identifier] != account_id:
+            raise RuntimeError('Distinct bank accounts share an ABIQ identifier')
+        by_account[account_id] = row
+        by_identifier[identifier] = account_id
+
+    for rows in (summaries, backoffice):
+        seen = set()
+        for row in rows:
+            verify_row(row)
+            if row['account_id'] in seen:
+                raise RuntimeError('Bank account listed more than once')
+            seen.add(row['account_id'])
+    summary_ids = {row['account_id'] for row in summaries}
+    backoffice_ids = {row['account_id'] for row in backoffice}
+    backoffice_owners = {'COMMON_POOL', 'SUSPENSE_INBOUND', 'SUSPENSE_OUTBOUND', 'SUSPENSE_CARD_FX'}
+    for row in backoffice:
+        expected_type = 'COMMON' if row.get('owner_type') == 'COMMON_POOL' else 'SUSPENSE'
+        if row.get('owner_type') not in backoffice_owners or row.get('account_type') != expected_type:
+            raise RuntimeError('Backoffice bank account classification mismatch')
+    crypto_count = bank_count = 0
+    for row in ledger:
+        if row.get('network') is None and row.get('currency_code') in ABIQ_CURRENCY_NUMBERS:
+            verify_row(row)
+            bank_count += 1
+            if (row.get('owner_type') == 'USER' and row['account_id'] not in summary_ids
+                    or row.get('owner_type') in backoffice_owners and row['account_id'] not in backoffice_ids):
+                raise RuntimeError('Numbered bank account missing from Accounts & ABIQ')
+        else:
+            crypto_count += 1
+            if row.get('abiq_iban'):
+                raise RuntimeError('Crypto ledger was assigned a bank identifier')
+    funding = {row['abiq_iban']: row for row in summaries if row['wallet_scope'] == 'FUNDING'}
+    for account in accounts:
+        validate_bank_identifier(account.get('abiq_iban'), account.get('currency_code'))
+        row = funding.get(account['abiq_iban'])
+        if (not row or str(row.get('user_id')) != str(account.get('user_id'))
+                or row['currency_code'] != account['currency_code']):
+            raise RuntimeError('Primary funding account identity was not preserved')
+
+    # Verify real statement responses for existing Common, Suspense and custody rows.
+    selected = []
+    for rows, key, value in ((backoffice, 'account_type', 'COMMON'),
+                             (backoffice, 'account_type', 'SUSPENSE'),
+                             (summaries, 'wallet_scope', 'CUSTODY'),
+                             (summaries, 'wallet_scope', 'MARGIN')):
+        row = next((item for item in rows if item[key] == value), None)
+        if row:
+            detail = api(opener, base, '/api/accounts/' + row['account_id'])['account']
+            if detail.get('account_id') != row['account_id']:
+                raise RuntimeError('Bank account statement identity mismatch')
+            verify_row(detail)
+            selected.append(row['account_id'])
+
+    digest = hashlib.sha256(json.dumps(sorted(by_identifier.items()), separators=(',', ':')).encode()).hexdigest()
+    evidence = {'bankLedgerRows': bank_count, 'common': sum(row['account_type'] == 'COMMON' for row in backoffice),
+                'suspense': sum(row['account_type'] == 'SUSPENSE' for row in backoffice),
+                'custody': sum(row['wallet_scope'] == 'CUSTODY' for row in summaries),
+                'margin': sum(row['wallet_scope'] == 'MARGIN' for row in summaries),
+                'primaryFunding': len(accounts), 'cryptoLedgerRowsExcluded': crypto_count,
+                'statementsVerified': len(selected), 'identifierMapSha256': digest}
+    print('Verified bank account numbering: ' + json.dumps(evidence, sort_keys=True))
+    return evidence
 
 
 def verify_index_access(opener, base, csrf):
@@ -592,6 +705,7 @@ def main():
         print('Verified ABIQ issuer, corporate user 1, frontend user 2 and EUR/USD/GBP customer numbering and checksums')
         stage = 'ledger account details verification'
         ledger = api(opener, base, '/api/views/ledger')['rows']
+        verify_bank_account_identifiers(opener, base, accounts, ledger)
         for uid in ['1', '2']:
             for currency in ['EUR', 'USD', 'GBP']:
                 account = next(a for a in accounts if str(a['user_id']) == uid and a['currency_code'] == currency and a['participant_code'] == 'AVIP')
@@ -599,9 +713,11 @@ def main():
                 if {row['wallet_scope'] for row in scopes} != {'FUNDING', 'MARGIN', 'CUSTODY'} or len(scopes) != 3:
                     raise RuntimeError('Ledger account scopes mismatch')
                 for row in scopes:
-                    if row['account_reference'] != account['abiq_iban'] or row['owner_class'] != holders[uid]['account_role'] or row['account_holder'] != holders[uid]['full_name']:
+                    if (row['wallet_scope'] == 'FUNDING' and row['abiq_iban'] != account['abiq_iban']
+                            or row['owner_class'] != holders[uid]['account_role']
+                            or row['account_holder'] != holders[uid]['full_name']):
                         raise RuntimeError('Ledger account details mismatch')
-        print('Verified ABIQ references, institution/customer roles and all three ledger scopes')
+        print('Verified distinct ABIQ references, preserved primary funding identifiers, institution/customer roles and all three ledger scopes')
         stage = 'published FX data verification'
         expected_fx = {'EUR', 'GBP', 'CHF', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'HUF', 'RON', 'USD', 'SGD', 'JPY'}
         # Startup refresh is asynchronous. Read public price metadata only; never submit a conversion.

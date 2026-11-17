@@ -1,15 +1,16 @@
 import {randomUUID} from 'node:crypto';
 import {CardManagement} from './card-management.mjs';
-import {ABIQ_PARTITIONS} from './avispay-core-accounts.mjs';
+import {ABIQ_PARTITIONS,ensureLedgerAbiq} from './avispay-core-accounts.mjs';
 import {fault,text} from './core.mjs';
 import {enrichPortfolioHistory} from './crypto-asset-routing.mjs';
 
 const owners=['COMMON_POOL','SUSPENSE_INBOUND','SUSPENSE_OUTBOUND','SUSPENSE_CARD_FX'];
-const accountSelect=`SELECT a.account_id,a.owner_type,a.sub_account_code AS account_reference,
+const accountSelect=`SELECT a.account_id,a.owner_type,b.abiq_iban,b.abiq_iban AS account_reference,p.abiq_bic,b.status,
  CASE WHEN a.owner_type='COMMON_POOL' THEN 'COMMON' ELSE 'SUSPENSE' END AS account_type,
  COALESCE(a.display_name,CASE WHEN a.owner_type='COMMON_POOL' THEN 'Common Account' ELSE 'Suspense Account' END) AS display_name,
- a.currency_code,a.network,a.available_balance::text,a.locked_balance::text
- FROM avis_core_v2.ledger_accounts a WHERE a.owner_type=ANY($1::text[])`;
+ a.currency_code,a.network,a.wallet_scope,a.account_category,a.available_balance::text,a.locked_balance::text
+ FROM avis_core_v2.ledger_accounts a JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id
+ JOIN avis_core_v2.abiq_network_participants p USING(participant_code) WHERE a.owner_type=ANY($1::text[])`;
 const balanceTotals=`LEFT JOIN LATERAL (SELECT
  COALESCE(sum(e.amount) FILTER(WHERE e.direction='CREDIT'),0)::text AS credit,
  COALESCE(sum(e.amount) FILTER(WHERE e.direction='DEBIT'),0)::text AS debit
@@ -17,10 +18,11 @@ const balanceTotals=`LEFT JOIN LATERAL (SELECT
  LEFT JOIN LATERAL (SELECT j.reference_id FROM avis_core_v2.ledger_entries e JOIN avis_core_v2.ledger_journals j USING(journal_id)
  WHERE e.account_id=a.account_id ORDER BY e.entry_id DESC LIMIT 1) latest ON true`;
 const bankSelect=`SELECT a.account_id,a.user_id,u.full_name,u.full_name AS display_name,u.account_type,u.account_role,u.postal_address,
- b.abiq_iban,b.abiq_iban AS account_reference,p.abiq_bic,b.status,a.currency_code,a.network,
+ b.abiq_iban,b.abiq_iban AS account_reference,p.abiq_bic,b.status,a.currency_code,a.network,a.wallet_scope,a.account_category,
  a.available_balance::text,a.locked_balance::text
- FROM avis_core_v2.ledger_accounts a JOIN avis_core_v2.abiq_routing_bridge b ON b.ledger_account_id=a.account_id
- JOIN avis_core_v2.sovereign_users u ON u.user_id=a.user_id JOIN avis_core_v2.abiq_network_participants p USING(participant_code)`;
+ FROM avis_core_v2.ledger_accounts a JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id
+ JOIN avis_core_v2.sovereign_users u ON u.user_id=a.user_id JOIN avis_core_v2.abiq_network_participants p USING(participant_code)
+ JOIN avis_core_v2.abiq_currencies c ON c.currency_code=a.currency_code`;
 const cursor=value=>{if(value!==null&&(!/^[1-9][0-9]{0,18}$/.test(String(value))||BigInt(value)>9223372036854775807n))fault('INVALID_FIELD','before');};
 const adminOnly=actor=>{if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403);};
 
@@ -36,7 +38,8 @@ export class AccountManagement extends CardManagement {
    for(const currency of new Set(currencies)){
     const id=await this.system(db,input.accountType==='COMMON'?'COMMON_POOL':'SUSPENSE_INBOUND',currency,group);
     await db.query('UPDATE avis_core_v2.ledger_accounts SET display_name=$2 WHERE account_id=$1',[id,name]);
-    accounts.push({id,currency});
+    const abiqIban=await ensureLedgerAbiq(db,id);
+    accounts.push({id,currency,abiqIban});
    }
    return {id:accounts[0].id,accountType:input.accountType,managedAccounts:accounts};
   });
@@ -89,10 +92,10 @@ export class AccountManagement extends CardManagement {
   return enrichPortfolioHistory(this.pool,actor,rows);
  }
  async list(actor,view){
-  if(view==='backofficeaccounts'){adminOnly(actor);return (await this.pool.query(accountSelect.replace('SELECT a.account_id','SELECT totals.credit,totals.debit,latest.reference_id, a.account_id').replace(' WHERE a.owner_type',' '+balanceTotals+' WHERE a.owner_type')+' ORDER BY account_type,a.currency_code,a.network,a.sub_account_code,a.account_id',[owners])).rows;}
+  if(view==='backofficeaccounts'){adminOnly(actor);return (await this.pool.query(accountSelect.replace('SELECT a.account_id','SELECT totals.credit,totals.debit,latest.reference_id, a.account_id').replace(' WHERE a.owner_type',' '+balanceTotals+' WHERE a.owner_type')+' ORDER BY account_type,a.currency_code,b.abiq_iban,a.account_id',[owners])).rows;}
   if(view==='accountsummaries'){
    if(!actor?.admin)fault('FORBIDDEN',null,403);
-   return (await this.pool.query(bankSelect.replace('SELECT a.account_id','SELECT totals.credit,totals.debit,latest.reference_id, a.account_id')+' '+balanceTotals+' WHERE ($1::bigint IS NULL OR a.user_id=$1) ORDER BY a.user_id,b.account_series,b.abiq_iban',[actor.customerUserId||null])).rows;
+   return (await this.pool.query(bankSelect.replace('SELECT a.account_id','SELECT totals.credit,totals.debit,latest.reference_id, a.account_id')+' '+balanceTotals+' WHERE ($1::bigint IS NULL OR a.user_id=$1) ORDER BY a.user_id,c.account_series,CASE a.wallet_scope WHEN \'FUNDING\' THEN 0 WHEN \'MARGIN\' THEN 1 ELSE 2 END,b.abiq_iban',[actor.customerUserId||null])).rows;
   }
   if(view==='portfolio')return this.portfolio(actor);
   return super.list(actor,view);

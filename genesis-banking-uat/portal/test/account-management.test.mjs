@@ -7,6 +7,8 @@ import {migrate} from '../src/migrate.mjs';
 import {AccountManagement} from '../src/account-management.mjs';
 import {CustomerAccess} from '../src/customer-access.mjs';
 import {createBankServer} from '../server.mjs';
+import {ABIQ_PARTITIONS,parseAbiqIban,resolveAbiqAccount} from '../src/avispay-core-accounts.mjs';
+import {processAbiqRequest} from '../src/abiq-interface.mjs';
 let pool,db,core,common,suspense,server,base;
 const admin={id:'fineract:999',admin:true},customer={id:'fineract:101',admin:false,customerUserId:'2'},key=()=>randomUUID();
 before(async()=>{
@@ -22,12 +24,50 @@ test('Common and Suspense account types create zero-balance backoffice accounts 
  assert.deepEqual(await core.list(admin,'accounts'),accounts);
  const now=await core.list(admin,'ledger');for(const row of ledger)assert.deepEqual(now.find(a=>a.account_id===row.account_id),row);
  const managed=await core.list(admin,'backofficeaccounts');assert.equal(managed.length,2);assert.ok(managed.every(a=>Number(a.available_balance)===0));assert.ok(managed.some(a=>a.account_type==='COMMON'&&a.display_name==='Settlement common'));assert.ok(managed.some(a=>a.account_type==='SUSPENSE'));
+ for(const opened of [common,suspense]){
+  const row=managed.find(a=>a.account_id===opened.id);assert.equal(row.abiq_iban,opened.managedAccounts[0].abiqIban);assert.equal(row.account_reference,row.abiq_iban);assert.equal(parseAbiqIban(row.abiq_iban).currency,row.currency_code);assert.equal(row.sub_account_code,undefined);
+ }
+ assert.equal(new Set(managed.map(a=>a.abiq_iban)).size,2);
  assert.equal((await core.list(admin,'transactions')).length,0);
  await assert.rejects(core.openAccount(admin,{...body,accountType:'TREASURY'},key()),/INVALID_FIELD/);
  await assert.rejects(core.openAccount(admin,{...body,currencies:['FAKE']},key()),/INVALID_FIELD/);
+ const countBefore=(await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.ledger_accounts')).rows[0].n;
+ for(const accountType of ['COMMON','SUSPENSE','PERSONAL','BUSINESS'])for(const currency of ['BTC','AG','AGi'])await assert.rejects(core.openAccount(admin,{...body,accountType,currencies:[currency]},key()),/INVALID_FIELD/);
+ assert.equal((await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.ledger_accounts')).rows[0].n,countBefore);
 });
 test('Personal and Business choices retain automatic ABIQ provisioning',async()=>{
  for(const accountType of ['PERSONAL','BUSINESS']){const r=await core.openAccount(admin,{accountType,fullName:'Account type fixture '+accountType,currencies:['EUR']},key());assert.match(r.accounts[0].abiqIban,/^TN\d{2}AVIP/);}
+});
+test('funding, margin and securities custody accounts have distinct ABIQ numbers without changing payment eligibility',async()=>{
+ const access=new CustomerAccess(core),summaries=await access.list(customer,'accountsummaries'),funding=await access.list(customer,'accounts');
+ assert.equal(summaries.length,funding.length*3);assert.ok(summaries.every(a=>String(a.user_id)==='2'&&a.network===null));
+ assert.equal(new Set(summaries.map(a=>a.abiq_iban)).size,summaries.length);
+ const ledger=await access.list(customer,'ledger');
+ for(const account of summaries){
+  assert.equal(parseAbiqIban(account.abiq_iban).currency,account.currency_code);assert.equal(account.account_reference,account.abiq_iban);
+  assert.equal(ledger.find(a=>a.account_id===account.account_id).abiq_iban,account.abiq_iban);
+  const detail=await access.invoke(customer,'accountDetails',{accountId:account.account_id});assert.equal(detail.account.abiq_iban,account.abiq_iban);assert.equal(detail.account.wallet_scope,account.wallet_scope);
+  const route=await resolveAbiqAccount(pool,{identifier:account.abiq_iban,currency:account.currency_code});
+  if(account.wallet_scope==='FUNDING'){assert.equal(route.ledger_account_id,account.account_id);assert.ok(funding.some(a=>a.abiq_iban===account.abiq_iban));}
+  else{assert.equal(route,null);assert.ok(!funding.some(a=>a.abiq_iban===account.abiq_iban));}
+ }
+ const other=(await core.list(admin,'accountsummaries')).find(a=>String(a.user_id)==='1'&&a.wallet_scope==='CUSTODY');
+ await assert.rejects(access.invoke(customer,'accountDetails',{accountId:other.account_id}),/FORBIDDEN/);
+ for(const account of [...summaries,...await core.list(admin,'backofficeaccounts')]){
+  const result=await processAbiqRequest(core,admin,{fitREQUEST:{HEADER:{requestID:key().replaceAll('-',''),function:'IBANCHECK'},ABIQ_INFO:{abiqIBAN:account.abiq_iban}}});
+  assert.equal(result.fitRESPONSE.RESPONSE_INFO.responseCODE,'00');
+ }
+ for(const account of await core.list(admin,'backofficeaccounts'))assert.equal(await resolveAbiqAccount(pool,{identifier:account.abiq_iban,currency:account.currency_code}),null);
+});
+test('crypto wallet and crypto suspense ledger entries never become bank accounts or receive ABIQ numbers',async()=>{
+ const cryptoIds=[await core.system(pool,'SUSPENSE_INBOUND','BTC','CRYPTO_REVIEW'),await core.system(pool,'COMMON_POOL','AGi','CRYPTO_COMMON'),await core.networkAccount(pool,'USER','AG','ETHEREUM','CRYPTO_EXCLUSION','2')];
+ const before=(await pool.query('SELECT account_id,available_balance::text,locked_balance::text FROM avis_core_v2.ledger_accounts WHERE account_id=ANY($1::uuid[]) ORDER BY account_id',[cryptoIds])).rows;
+ for(const view of ['backofficeaccounts','accountsummaries']){
+  const rows=await core.list(admin,view);assert.ok(rows.every(a=>a.network===null&&Object.hasOwn(ABIQ_PARTITIONS,a.currency_code)));assert.ok(rows.every(a=>!cryptoIds.includes(a.account_id)));
+ }
+ const ledger=await core.list(admin,'ledger');for(const id of cryptoIds){assert.equal(ledger.find(a=>a.account_id===id).abiq_iban,null);await assert.rejects(core.accountDetails(admin,{accountId:id}),/ACCOUNT_NOT_FOUND/);}
+ assert.equal((await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.abiq_account_identifiers WHERE ledger_account_id=ANY($1::uuid[])',[cryptoIds])).rows[0].n,0);
+ assert.deepEqual((await pool.query('SELECT account_id,available_balance::text,locked_balance::text FROM avis_core_v2.ledger_accounts WHERE account_id=ANY($1::uuid[]) ORDER BY account_id',[cryptoIds])).rows,before);
 });
 test('backoffice statements include only the selected account, paginate all entries and keep exact totals',async()=>{
  await core.operation(admin,'STATEMENT_FIXTURE',{},key(),async(d,k)=>{
@@ -75,5 +115,5 @@ test('customer sessions cannot list, create or read Common/Suspense accounts or 
  assert.equal((await request(user,'accounts/open',{accountType:'COMMON',fullName:'Forbidden',currencies:['EUR']})).status,403);assert.equal((await request(user,'views/portfolio')).body.rows[0].available_balance,'7.000000000000000000');
  const operator=await login('admin');assert.equal((await request(operator,'backoffice-accounts/'+common.id+'/statement')).status,200);assert.equal((await request(operator,'views/backofficeaccounts')).status,200);assert.equal((await request(operator,'views/portfolio')).body.rows[0].available_balance,'15.000000000000000000');
  const own=(await request(user,'views/accountsummaries')).body.rows.find(a=>a.currency_code==='EUR');assert.equal(own.user_id.toString(),'2');const detail=await request(user,'accounts/'+own.account_id);assert.equal(detail.status,200);const entryId=String(detail.body.entries[0].entry_id);assert.equal((await request(user,'accounts/'+own.account_id+'/movements/'+entryId)).status,200);assert.equal((await request(user,'accounts/'+common.id)).status,403);assert.equal((await request(user,'accounts/'+common.id+'/movements/'+entryId)).status,403);
- const created=await request(operator,'accounts/open',{accountType:'SUSPENSE',fullName:'HTTP creation',currencies:['GBP']});assert.equal(created.status,200);assert.equal(created.body.accountType,'SUSPENSE');
+ const created=await request(operator,'accounts/open',{accountType:'SUSPENSE',fullName:'HTTP creation',currencies:['GBP']});assert.equal(created.status,200);assert.equal(created.body.accountType,'SUSPENSE');assert.equal(parseAbiqIban(created.body.managedAccounts[0].abiqIban).currency,'GBP');
 });

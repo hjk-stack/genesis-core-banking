@@ -7,9 +7,9 @@ const windows=[];
 afterEach(()=>{for(const dom of windows.splice(0))dom.window.close();});
 const securities=[{security_id:'eur-security',name:'EUR security',currency_code:'EUR'},{security_id:'usd-security',name:'USD security',currency_code:'USD'}];
 const users=[{user_id:1,full_name:'Institution one',account_role:'INSTITUTION'},{user_id:2,full_name:'Institution two',account_role:'INSTITUTION'},{user_id:3,full_name:'Customer',account_role:'CUSTOMER'}];
-const cash=(id,user,currency,extra={})=>({account_id:id,user_id:user,currency_code:currency,full_name:'Institution '+user,account_reference:'ABIQ-'+id,status:'ACTIVE',account_role:'INSTITUTION',network:null,...extra});
-const bankAccounts=[cash('one-eur',1,'EUR'),cash('one-eur-second',1,'EUR'),cash('one-usd',1,'USD'),cash('two-eur',2,'EUR'),cash('suspended',1,'EUR',{status:'SUSPENDED'}),cash('closed',1,'EUR',{status:'CLOSED'}),cash('network',1,'EUR',{network:'ETHEREUM'})];
-const ledger=[...bankAccounts.map(a=>({...a,owner_type:'USER',wallet_scope:'FUNDING',account_category:'LIABILITY'})),{...cash('margin',1,'EUR'),owner_type:'USER',wallet_scope:'MARGIN',account_category:'LIABILITY'},{...cash('custody',1,'EUR'),owner_type:'USER',wallet_scope:'CUSTODY',account_category:'LIABILITY'}];
+const cash=(id,user,currency,extra={})=>({account_id:id,user_id:user,currency_code:currency,full_name:'Institution '+user,account_reference:'ABIQ-'+id,status:'ACTIVE',account_role:'INSTITUTION',wallet_scope:'FUNDING',network:null,...extra});
+const bankAccounts=[cash('one-eur',1,'EUR'),cash('one-eur-second',1,'EUR'),cash('one-usd',1,'USD'),cash('two-eur',2,'EUR'),cash('suspended',1,'EUR',{status:'SUSPENDED'}),cash('closed',1,'EUR',{status:'CLOSED'}),cash('network',1,'EUR',{network:'ETHEREUM'}),cash('margin',1,'EUR',{wallet_scope:'MARGIN'}),cash('custody',1,'EUR',{wallet_scope:'CUSTODY'})];
+const ledger=bankAccounts.map(a=>({...a,owner_type:'USER',account_category:'LIABILITY'}));
 async function setup(providers=[]){
  const dom=new JSDOM('<!doctype html><main><section id="host"></section></main>',{url:'https://bank.invalid'});windows.push(dom);
  const host=dom.window.document.querySelector('#host'),calls=[];let form,submit;
@@ -31,11 +31,12 @@ async function setup(providers=[]){
 const change=(form,name,value)=>{form.elements[name].value=value;form.elements[name].onchange?.();};
 const options=form=>[...form.elements.accountId.options].map(o=>o.value).filter(Boolean);
 
-test('AVIS configuration offers active cash accounts only for the chosen institution and security currency',async()=>{
+test('AVIS configuration offers active funding accounts only for the chosen institution and security currency',async()=>{
  const ui=await setup(),form=await ui.open();
  change(form,'venue','AVIS');assert.deepEqual(options(form),[]);
  change(form,'userId','1');change(form,'securityId','eur-security');
  assert.deepEqual(options(form),['one-eur','one-eur-second']);
+ for(const id of ['margin','custody','suspended','closed','network'])assert.equal(options(form).includes(id),false,id+' is not a funding source');
  assert.match(form.elements.accountId.options[1].textContent,/ABIQ-one-eur/);
  form.elements.accountId.value='one-eur-second';change(form,'securityId','eur-security');assert.equal(form.elements.accountId.value,'one-eur-second','valid selection survives refresh');
  change(form,'securityId','usd-security');assert.deepEqual(options(form),['one-usd']);assert.equal(form.elements.accountId.value,'','changing currency clears incompatible selection');
