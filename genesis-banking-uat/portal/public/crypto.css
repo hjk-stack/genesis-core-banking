@@ -111,3 +111,31 @@
 .wallet-delegation-active summary{cursor:pointer;font-weight:750}
 .wallet-delegation-active>div{display:flex;align-items:center;justify-content:space-between;gap:7px;padding:8px 3px;border-top:1px solid #e1ece2}
 .wallet-delegation-active button{font-size:11px;padding:5px 10px;color:#285c37;background:#fff}
+
+
+/* AVISPay trading terminal: liquid-metal depth and readable workstation density. */
+.crypto-wallet-archive{margin:12px 0 16px;padding:10px 14px;border:1px solid #d6dfe6;border-radius:8px;background:#f8fafb}
+.crypto-wallet-archive>summary{cursor:pointer;font-weight:650;font-size:12px;color:#31495f}
+.crypto-wallet-archive [data-archived-wallets]{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.crypto-wallet-archive [data-archived-wallets] button{border:1px solid #8cabb8;background:#fff;color:#1b4150;border-radius:7px;font-size:12px;padding:9px 12px}
+.crypto-wallet [data-archive-wallet]{border-color:#718093;color:#f5f8fd;font-weight:600}
+.crypto-wallet [data-archive-wallet]:hover{background:#8b364844;border-color:#e6afaf}
+.crypto-stock-register{display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;padding:18px 22px;margin:10px 0 17px;border-radius:12px;border:1px solid #b9cbd5;background:linear-gradient(115deg,#10283b 0%,#274353 48%,#536c6a 100%);color:#f5f9fa;box-shadow:inset 0 1px #ffffff49,0 14px 24px #152c4117}
+.crypto-stock-register>div{display:grid;gap:6px}.crypto-stock-register small{color:#bfcfd7;letter-spacing:.09em;text-transform:uppercase}.crypto-stock-register strong{font-size:19px}.crypto-stock-register span{color:#d4e2e7;font-size:12px}
+.crypto-stock-register button{padding:11px 16px;color:#f4fafb;background:#ffffff1e;border:1px solid #ffffff90;border-radius:7px;box-shadow:inset 0 1px #ffffff6b}
+.crypto-trading-desk .crypto-trading-console{background:linear-gradient(152deg,#0d1a2b 0%,#162d3e 58%,#0d1a2b 100%);border:1px solid #476477;border-radius:14px;padding:16px;box-shadow:0 19px 40px #0b21352c,inset 0 1px #ffffff43}
+.crypto-trading-desk .terminal-identity{color:#eff8f8;padding:8px 12px 4px}
+.crypto-trading-desk .terminal-identity h3{color:#effbfa;font-size:20px;letter-spacing:.025em}
+.crypto-trading-desk .terminal-identity p{color:#b3d0d2}
+.crypto-trading-desk .trading-live{background:linear-gradient(120deg,#eaf0f1,#fcfefe);border:1px solid #89a6ae;box-shadow:inset 0 1px #ffffff,0 18px 40px #001b2630;padding:18px;border-radius:12px}
+.crypto-trading-desk .trading-live-workspace{gap:10px;grid-template-columns:minmax(192px,1.2fr) minmax(135px,.8fr) minmax(135px,.8fr) minmax(320px,2fr)}
+.crypto-trading-desk .trading-live-robot{background:radial-gradient(circle at 50% 20%,#52797b,#193e46 45%,#091d2b 96%);border:1px solid #86bfc0;box-shadow:inset 0 2px 1px #c6f5ef42,inset 0 -28px 55px #051b2a95,0 12px 30px #0024363d}
+.crypto-trading-desk .trading-robot-art{filter:drop-shadow(0 9px 10px #0007) drop-shadow(0 0 13px #a3e6dd42)}
+.crypto-trading-desk .terminal-live-trades,.crypto-trading-desk .terminal-live-book{border:1px solid #c4d3d5;border-radius:10px;background:linear-gradient(180deg,#fff,#e9f0f2);min-height:445px}
+.crypto-trading-desk .terminal-price-screen{border:1px solid #c4d3d5;border-radius:10px;background:linear-gradient(180deg,#fff,#edf4f6);padding:12px}
+.crypto-trading-desk .trading-live-heading h3{font-weight:700;letter-spacing:.02em}
+.crypto-trading-desk .trading-live-select{max-width:100%;margin:10px 0 18px}
+.crypto-trading-desk .trading-live-select select{border:1px solid #93a9ad;border-radius:7px;background:#f7fbfc}
+.crypto-trading-desk .terminal-trading-actions button{border-radius:7px;font-weight:700}
+@media(max-width:1220px){.crypto-trading-desk .trading-live-workspace{grid-template-columns:minmax(160px,1fr) minmax(140px,1fr) minmax(140px,1fr)}.crypto-trading-desk .terminal-price-screen{grid-column:1/-1}}
+@media(max-width:760px){.crypto-trading-desk .trading-live-workspace{grid-template-columns:repeat(2,minmax(0,1fr))}.crypto-trading-desk .trading-live-robot{grid-column:1/-1}.crypto-trading-desk .terminal-price-screen{grid-column:1/-1}.crypto-trading-desk .terminal-live-trades,.crypto-trading-desk .terminal-live-book{min-height:290px}.crypto-trading-desk .crypto-trading-console{padding:7px}}
