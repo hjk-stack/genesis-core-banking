@@ -349,7 +349,8 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   await verifyCurrencyActivation(page,width);
   await verifyTradingTests(page,width);
   await verifyLiveTrading(page,width);
-  assert.equal(await page.locator('[data-security]').count(),0,'live securities gallery does not mount sample conversion cards');
+  assert.equal(await page.locator('[data-security]').count(),1,'the PLC shares converter is restored without publishing other demo security cards');
+  assert.equal(await page.locator('[data-security] strong').first().textContent(),'AVISPay PLC');
   await mkdir('test-results',{recursive:true});
   await page.screenshot({path:'test-results/crypto-'+width+'.png',fullPage:false});
   if(width===2560){
