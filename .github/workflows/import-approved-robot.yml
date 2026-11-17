@@ -34,6 +34,7 @@ jobs:
           node --check genesis-banking-uat/portal/public/trading-panel.mjs
           node --check genesis-banking-uat/portal/public/trading-live.mjs
           node --check genesis-banking-uat/portal/public/approved-robot.mjs
+          python3 -m unittest discover -s genesis-banking-uat/azure -p 'test_*.py'
       - name: Test real live controller and approved interface together
         working-directory: genesis-banking-uat/portal
         run: |
@@ -48,15 +49,15 @@ jobs:
         run: |
           git config user.name 'AVISPay release automation'
           git config user.email 'avispay-release@users.noreply.github.com'
-          git add genesis-banking-uat/portal/server.mjs genesis-banking-uat/portal/public/trading-panel.mjs genesis-banking-uat/portal/public/trading-live.mjs genesis-banking-uat/portal/public/approved-robot.mjs genesis-banking-uat/portal/public/approved-robot.css genesis-banking-uat/portal/public/app.mjs genesis-banking-uat/portal/test/approved-robot.test.mjs genesis-banking-uat/portal/test-browser/crypto-layout.mjs
+          git add -u -- genesis-banking-uat/portal genesis-banking-uat/azure
           if ! git diff --cached --quiet; then
-            git commit -m 'Verify approved robot chart, wallet preservation and reviewed order navigation'
+            git commit -m 'Verify approved robot, full-width interface and live deployment asset checks'
             git push origin HEAD:fix/portfolio-linked-crypto-wallets-20261117
           fi
       - name: Export checked-out source for visual acceptance
         run: |
           git rev-parse HEAD > "$RUNNER_TEMP/approved-robot-source-sha.txt"
-          git archive --format=zip HEAD genesis-banking-uat/portal > "$RUNNER_TEMP/approved-robot-source.zip"
+          git archive --format=zip HEAD genesis-banking-uat/portal genesis-banking-uat/azure > "$RUNNER_TEMP/approved-robot-source.zip"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
