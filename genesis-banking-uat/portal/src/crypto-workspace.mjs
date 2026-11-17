@@ -107,8 +107,10 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
      FROM avis_core_v2.wallet_trading_delegations WHERE delegation_id=$1 FOR UPDATE`,[input.delegationId])).rows[0];
    if(!d||d.state!=='ACTIVE')fault('CRYPTO_WALLET_REQUIRED','delegationId');
    access(actor,d.user_id);
+   await db.query('SELECT account_id FROM avis_core_v2.ledger_accounts WHERE account_id=$1 FOR UPDATE',[d.account_id]);
+   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['wallet-trading:'+String(d.user_id)+':'+String(d.currency_code).toLowerCase()]);
    const active=(await db.query(`SELECT 1 FROM avis_core_v2.trading_robots r
-     WHERE r.user_id=$1 AND (r.base_asset=$2 OR r.quote_asset=$2)
+     WHERE r.user_id=$1 AND (lower(r.base_asset)=lower($2) OR lower(r.quote_asset)=lower($2))
      AND ((r.enabled AND COALESCE((SELECT s.enabled FROM avis_core_v2.wallet_trading_selections s WHERE s.account_id=$3),true)) OR r.position_quantity>0 OR EXISTS
        (SELECT 1 FROM avis_core_v2.trading_robot_orders o WHERE o.robot_id=r.robot_id
         AND o.status IN ('CREATED','DISPATCHING','ACKNOWLEDGED'))) LIMIT 1`,
