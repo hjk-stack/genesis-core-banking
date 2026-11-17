@@ -78,12 +78,6 @@ export function createCryptoWorkspace({api,identity,purchase,sell,send,notice}){
    const button=card.querySelector('[data-send]');if(button)button.onclick=()=>{const active=walletGroup(group.key);if(!button.disabled&&active?.holding?.account_id===button.dataset.send&&!receivingBusy(active))send(active.holding);};
   });
   host.querySelectorAll('[data-archive-wallet]').forEach(b=>b.onclick=()=>changeWalletVisibility(b.dataset.archiveWallet,false));
-  const archive=q('[data-archived-wallets]');
-  if(archive){
-   const rows=(data.cryptowallets||[]).filter(w=>w.wallet_visible===false);
-   archive.innerHTML=rows.length?rows.map(w=>`<button type="button" data-restore-wallet="${esc(w.account_id)}" aria-label="Restore ${esc(w.currency_code)} wallet card">＋ ${esc(w.currency_code)} · ${esc(networkName(w.network))} · ${esc(w.full_name)} · Restore</button>`).join(''):'<span>No removed wallet cards</span>';
-   archive.querySelectorAll('[data-restore-wallet]').forEach(b=>b.onclick=()=>changeWalletVisibility(b.dataset.restoreWallet,true));
-  }
   host.querySelectorAll('[data-add-asset]').forEach(button=>button.onclick=addAsset);
  }
  async function ensureWallet(key,network){
@@ -109,7 +103,7 @@ export function createCryptoWorkspace({api,identity,purchase,sell,send,notice}){
   const reads=await Promise.allSettled(names.map(n=>api('views/'+n)));if(serial!==epoch||root!==target||!currentContext(context,who))return;const previousWallets=data.cryptowallets,previousCatalogue=data.cryptocatalogue;data={};let failed=[];reads.forEach((r,i)=>{data[names[i]]=r.status==='fulfilled'?r.value.rows:[];if(r.status==='rejected')failed.push(r.reason);});if(walletSerial<walletApplied)data.cryptowallets=previousWallets||[];else walletApplied=walletSerial;if(catalogueSerial<catalogueApplied)data.cryptocatalogue=previousCatalogue||[];else catalogueApplied=catalogueSerial;
   target.innerHTML=`<p class="form-error" role="alert" data-crypto-error></p>
 
-   <section class="crypto-section" id="crypto-wallet-desk"><div class="crypto-section-heading"><div><span class="crypto-section-number">I</span><h2>Payment & exchange wallets</h2></div><div class="crypto-inline-actions"><button type="button" data-refresh>Refresh</button><button class="primary" data-add-asset aria-label="Add accepted currency">＋ Add currency</button></div></div><div class="crypto-scroller" aria-label="Currency wallets" data-wallets></div><details class="crypto-wallet-archive"><summary>Removed wallet cards · Restore</summary><div data-archived-wallets></div></details><div class="crypto-inline-actions"><button data-purchase>Purchase crypto</button><button data-sell>Convert to FIAT</button></div></section>
+   <section class="crypto-section" id="crypto-wallet-desk"><div class="crypto-section-heading"><div><span class="crypto-section-number">I</span><h2>Payment & exchange wallets</h2></div><div class="crypto-inline-actions"><button type="button" data-refresh>Refresh</button><button class="primary" data-add-asset aria-label="Add accepted currency">＋ Add currency</button></div></div><div class="crypto-scroller" aria-label="Currency wallets" data-wallets></div><div class="crypto-inline-actions"><button data-purchase>Purchase crypto</button><button data-sell>Convert to FIAT</button></div></section>
 
    <section class="crypto-section crypto-trading-desk" id="crypto-trading-desk" aria-label="AVISPay high-speed trading platform">
     <div class="crypto-trading-console" data-trading-panel></div>

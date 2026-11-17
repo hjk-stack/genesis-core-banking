@@ -29,10 +29,6 @@
 .wallet-robot-frozen{font-size:12px;line-height:1.5}
 .crypto-inline-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .crypto-add-card{min-width:240px;min-height:160px;border:1px dashed #94a3b8;color:#3a4e70}
-.crypto-wallet-archive{margin:12px 0 16px;padding:10px 14px;border:1px solid #d6dfe6;border-radius:8px;background:#f8fafb}
-.crypto-wallet-archive>summary{cursor:pointer;font-weight:650;font-size:12px;color:#31495f}
-.crypto-wallet-archive [data-archived-wallets]{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
-.crypto-wallet-archive [data-archived-wallets] button{border:1px solid #8cabb8;background:#fff;color:#1b4150;border-radius:7px;font-size:12px;padding:9px 12px}
 .crypto-token-identity{display:grid;gap:4px;min-width:0;margin:10px 0 2px;font-size:10px;color:#bfd6dc}
 .crypto-token-identity a,.crypto-token-identity code{font-size:10px;line-height:1.35;color:#eafcff;text-decoration:none;overflow-wrap:anywhere;white-space:normal}
 .crypto-token-identity a:hover{text-decoration:underline}
