@@ -24,7 +24,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$TARGET_JOB" =~ ^[0-9]+$ ]]
-          gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$TARGET_JOB/logs" > "$RUNNER_TEMP/failed-job.log"
+          gh api --allow-escape-sequences "repos/$GITHUB_REPOSITORY/actions/jobs/$TARGET_JOB/logs" > "$RUNNER_TEMP/failed-job.log"
           python3 - <<'PY'
           import os, pathlib, re
           lines = pathlib.Path(os.environ['RUNNER_TEMP'], 'failed-job.log').read_text().splitlines()
