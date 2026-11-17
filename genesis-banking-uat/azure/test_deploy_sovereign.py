@@ -378,3 +378,58 @@ class TreasuryOpeningConsoleTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FrontendReleaseIntegrityTests(unittest.TestCase):
+    class Response:
+        def __init__(self, body, release, cached=False):
+            self.data = io.BytesIO(body)
+            self.status = 200
+            self.headers = {'x-avispay-release': release,
+                            'cache-control': 'public, max-age=3600' if cached else 'no-store, max-age=0'}
+
+        def read(self, limit):
+            return self.data.read(limit)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def test_real_checked_out_frontend_assets_match_release(self):
+        release = 'a' * 40
+        portal = Path(__file__).resolve().parent.parent / 'portal'
+        files = {'/': 'index.html', '/app.mjs': 'public/app.mjs',
+                 '/crypto-workspace.mjs': 'public/crypto-workspace.mjs',
+                 '/trading-panel.mjs': 'public/trading-panel.mjs',
+                 '/trading-live.mjs': 'public/trading-live.mjs',
+                 '/index-advice.mjs': 'public/index-advice.mjs',
+                 '/crypto.css': 'public/crypto.css'}
+        seen = []
+        class Opener:
+            def open(self, request, timeout):
+                route = request.full_url.split('?')[0].split('.io')[-1]
+                seen.append(route)
+                return FrontendReleaseIntegrityTests.Response(
+                    (portal / files[route]).read_bytes(), release)
+        with contextlib.redirect_stdout(io.StringIO()):
+            deploy.verify_deployed_frontend(Opener(), 'https://example.azurecontainerapps.io', release)
+        self.assertEqual(set(seen), set(files))
+
+    def test_stale_crypto_asset_is_rejected_even_with_correct_ready_revision(self):
+        release = 'b' * 40
+        class Opener:
+            def open(self, request, timeout):
+                return FrontendReleaseIntegrityTests.Response(b'previous wallet JavaScript', release)
+        with self.assertRaisesRegex(RuntimeError, 'frontend source checksum'):
+            deploy.verify_deployed_frontend(Opener(), 'https://example.azurecontainerapps.io', release)
+
+    def test_cached_assets_are_rejected_by_release_acceptance(self):
+        release = 'c' * 40
+        class Opener:
+            def open(self, request, timeout):
+                return FrontendReleaseIntegrityTests.Response(b'data', release, cached=True)
+        with self.assertRaisesRegex(RuntimeError, 'cache policy'):
+            deploy.verify_deployed_frontend(Opener(), 'https://example.azurecontainerapps.io', release)
+
