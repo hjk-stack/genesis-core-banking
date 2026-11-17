@@ -33,7 +33,7 @@
 .crypto-token-identity a,.crypto-token-identity code{font-size:10px;line-height:1.35;color:#eafcff;text-decoration:none;overflow-wrap:anywhere;white-space:normal}
 .crypto-token-identity a:hover{text-decoration:underline}
 .crypto-token-identity code{font-family:ui-monospace,SFMono-Regular,monospace}
-.security-wallet{display:flex;flex-direction:column;gap:6px;cursor:pointer;min-height:190px}
+.security-wallet{display:flex;flex-direction:column;gap:6px;min-height:290px}
 .security-wallet.selected{outline:2px solid #31ac9b;outline-offset:-2px;background:linear-gradient(125deg,#25394b,#152c36)}
 .security-wallet:focus-visible{outline:2px solid #91ead6;outline-offset:-2px}
 .security-wallet-top{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
@@ -44,6 +44,12 @@
 .security-wallet .security-volume{font-size:16px!important;color:#fff!important;padding-top:8px}
 .security-brand-logo{width:125px;height:38px;object-fit:contain;object-position:left center}
 .security-wallet-address{font:10px/1.4 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere;white-space:normal;color:#d3eee3;min-height:28px}
+.security-wallet-receiving{display:grid;gap:5px;margin:5px 0 10px;min-width:0;font-size:10px;color:#b9c4d9}
+.security-wallet dl{margin:8px 0;gap:7px}
+.security-wallet-tools{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto}
+.security-wallet-tools button{font-size:11px;line-height:1.35;padding:7px 9px;min-height:34px;background:#ffffff0c;color:#edf4ff;border:1px solid #64718b;border-radius:6px;max-width:100%;white-space:normal}
+.security-wallet-tools button:hover,.security-wallet-tools button:focus-visible{background:#ffffff20;border-color:#b6d9d4}
+.security-wallet [data-security-wallet-error]{font-size:11px;color:#ffbfc4;overflow-wrap:anywhere;margin:0}
 .security-detail{background:#fff;border:1px solid #dbe2eb;border-radius:14px;padding:22px;margin-top:7px;min-width:0}
 .security-conversion{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,.55fr) minmax(0,1fr);gap:20px;align-items:start}
 .conversion-arrow{font-size:42px;color:#53667a;align-self:center;text-align:center}
@@ -55,12 +61,6 @@
 .crypto-details dd{margin:0;font-weight:500;overflow-wrap:anywhere}
 .crypto-source{font-size:11px;color:#67768b;margin-top:14px}
 .crypto-action-history code{display:block;font-size:10px;overflow-wrap:anywhere}
-.crypto-stock-register{display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;padding:18px 22px;margin:10px 0 17px;border-radius:12px;border:1px solid #b9cbd5;background:linear-gradient(115deg,#10283b 0%,#274353 48%,#536c6a 100%);color:#f5f9fa;box-shadow:inset 0 1px #ffffff49,0 14px 24px #152c4117}
-.crypto-stock-register>div{display:grid;gap:6px;min-width:0}
-.crypto-stock-register small{color:#bfcfd7;letter-spacing:.09em;text-transform:uppercase}
-.crypto-stock-register strong{font-size:19px}
-.crypto-stock-register span{color:#d4e2e7;font-size:12px;overflow-wrap:anywhere}
-.crypto-stock-register button{padding:11px 16px;color:#f4fafb;background:#ffffff1e;border:1px solid #ffffff90;border-radius:7px;box-shadow:inset 0 1px #ffffff6b}
 .portfolio-chain-proof{display:block;font:11px/1.45 ui-monospace,SFMono-Regular,monospace;max-width:26em;overflow-wrap:anywhere;color:#176455}
 .crypto-dialog{width:min(680px,94vw);max-height:90vh;overflow:auto;border-radius:14px;padding:24px}
 .crypto-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
@@ -200,3 +200,8 @@
 @media(max-width:720px){.security-conversion{grid-template-columns:1fr;gap:6px}.conversion-code-column{border-inline:0;border-block:1px solid #e0e7e3}.currency-icon-picker{grid-column:1/-1}.conversion-arrow{font-size:30px}.trading-market-heading{gap:9px}.trading-market-heading>span{max-width:60%}.trading-instructions-grid .index-advice,.robot-instructions{padding:14px}.trading-live-details{gap:13px}.trading-execution-heading{flex-wrap:wrap;gap:7px}.trading-live-table{font-size:10px}}
 @media(max-width:600px){.crypto-section-heading{align-items:flex-start;flex-wrap:wrap}.crypto-section-heading h2{font-size:16px}.crypto-section-heading>span{display:none}.crypto-wallet,.security-wallet{flex-basis:220px;min-width:220px;max-width:220px;padding:14px}.crypto-wallet-actions{gap:5px}.crypto-wallet-actions button{flex-basis:33px;width:33px}.security-detail{padding:16px}.crypto-form-grid{grid-template-columns:1fr}.crypto-admin-filter{align-items:flex-start;flex-direction:column;gap:8px}.crypto-admin-filter input{width:100%}.crypto-currency-row{grid-template-columns:1fr}.crypto-details{font-size:11px;gap:8px}.crypto-dialog{padding:18px}.crypto-robot{padding:16px}.crypto-market{flex-basis:170px}.crypto-robot-intro{flex-wrap:wrap}.crypto-robot-intro p{margin-top:0}.crypto-robot-channels>article{min-width:270px}.crypto-trading-desk{padding:8px}.terminal-identity{padding:13px}.terminal-identity h3{font-size:19px}.trading-testing{padding:14px}.trading-test-report{padding:12px}.trading-testing>.crypto-section-heading{gap:10px}.trading-testing .crypto-section-heading>span{display:block}}
 @media(prefers-reduced-motion:reduce){.trading-live-robot [data-robot-arm]{animation:none!important}}
+
+/* Source registration uses the existing floating Crypto dialog. */
+.crypto-source-fields{border:0;padding:0;margin:0;min-width:0}
+.crypto-source-fields [data-source-metadata]{grid-column:1/-1}
+.crypto-source-fields .crypto-details dd{overflow-wrap:anywhere}

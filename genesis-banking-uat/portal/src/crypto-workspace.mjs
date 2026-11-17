@@ -143,18 +143,20 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
   let sourceHolding=null;
   if(!actor.customerUserId||r.mode==='REAL'){
    const positions=await super.list(actor,'securitypositions');
+   const sources=!actor.customerUserId&&r.symbol==='aAVISP'?(await this.pool.query(`SELECT t.* FROM avis_core_v2.treasury_opening_positions t
+    JOIN avis_core_v2.sovereign_users u ON u.user_id=t.owner_user_id
+    WHERE t.asset_code='AVISPAY-PLC-SHARES' AND t.asset_class='SECURITY' AND u.account_role='INSTITUTION'
+      AND ($1::bigint IS NULL OR t.owner_user_id=$1)`,[r.user_id||null])).rows:[];
    const candidates=positions.filter(p=>r.position_id?p.position_id===r.position_id:
-    r.symbol==='aAVISP'&&p.account_role==='INSTITUTION'&&['AVISPay PLC','AVISPay PLC shares'].includes(p.name));
-   if(candidates.length===1){const p=candidates[0];sourceHolding={positionId:p.position_id,userId:p.user_id,name:p.name,
-    quantity:p.quantity,currency:p.currency_code,isin:p.isin,cusip:p.cusip,assetType:'STOCK',
-    assetValue:p.portfolio_value,price:p.market_price,reference:p.reference||p.position_id,source:'Portfolio Management'};}
-   else if(!actor.customerUserId&&r.symbol==='aAVISP'){
-    const sources=(await this.pool.query(`SELECT p.* FROM avis_core_v2.treasury_opening_positions p
-      JOIN avis_core_v2.sovereign_users u ON u.user_id=p.owner_user_id
-      WHERE p.asset_code='AVISPAY-PLC-SHARES' AND p.asset_class='SECURITY' AND u.account_role='INSTITUTION'`)).rows;
-    if(sources.length===1){const p=sources[0];sourceHolding={positionId:null,userId:p.owner_user_id,name:p.asset_name,
+    r.symbol==='aAVISP'&&(sources.length===1?p.treasury_booking_id===sources[0].booking_id&&String(p.user_id)===String(sources[0].owner_user_id)&&p.account_role==='INSTITUTION':
+     sources.length===0&&p.account_role==='INSTITUTION'&&['AVISPay PLC','AVISPay PLC shares'].includes(p.name)));
+   if(candidates.length===1){const p=candidates[0];sourceHolding={positionId:p.position_id,securityId:p.security_id,bookingId:p.treasury_booking_id||null,userId:p.user_id,name:p.name,
+    quantity:p.quantity,currency:p.currency_code,isin:p.isin,cusip:p.cusip,assetType:p.kind==='share'?'STOCK':p.kind.toUpperCase(),
+    assetValue:p.portfolio_value,price:p.market_price,reference:p.treasury_source_reference||p.reference||p.position_id,source:'Portfolio Management'};}
+   else if(!r.position_id&&sources.length===1){
+    const p=sources[0];sourceHolding={positionId:null,securityId:null,bookingId:p.booking_id,userId:p.owner_user_id,name:p.asset_name,
      quantity:String(p.quantity),currency:null,isin:p.isin,cusip:null,assetType:'STOCK',assetValue:null,price:null,
-     reference:p.source_reference,source:'Portfolio Management / Treasury register'};}
+     reference:p.source_reference,source:'Portfolio Management / Treasury register'};
    }
   }
   return {...r,sourceHolding,actions,contract:'AVISGreenRollingSecurityToken',
@@ -179,20 +181,26 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
  }
  async convertDemoSecurity(actor,input,key){actualAdmin(actor);return this.operation(actor,'CONVERT_DEMO_SECURITY',input,key,async db=>{const r=(await db.query('SELECT * FROM avis_core_v2.crypto_security_cards WHERE card_id=$1 FOR UPDATE',[input.cardId])).rows[0];if(!r||r.mode!=='DEMO')fault('CRYPTO_DEMO_REQUIRED','cardId');const code='0x'+hash({cardId:r.card_id,dossier:r.dossier,contract:'AVISGreenRollingSecurityToken:v3'});await db.query("UPDATE avis_core_v2.crypto_security_cards SET state='CONVERTED',conversion_code=$2,token_quantity=$3,version=version+1,updated_at=now() WHERE card_id=$1",[input.cardId,code,r.dossier.issuedVolume]);return {id:r.card_id,mode:'DEMO',conversionCode:code,quantity:r.dossier.issuedVolume};});}
  async prepareRealSecurity(actor,input,key){actualAdmin(actor);const quantity=money(input.quantity),tokens=money(input.tokenQuantity),reference=text(input.custodyReference,'custodyReference',128);if(!uuid(input.cardId)||!uuid(input.positionId))fault('CRYPTO_SOURCE_REQUIRED','positionId');if(!Number.isInteger(input.marginHaircutBps)||input.marginHaircutBps<0||input.marginHaircutBps>=10000||!Number.isInteger(input.tradingFeeBps)||input.tradingFeeBps<0||input.tradingFeeBps>10000)fault('INVALID_FIELD','marginHaircutBps');if(input.greenHighTechVerified!==true)fault('CRYPTO_SOURCE_REQUIRED','greenHighTechVerified');if(networkInfo(input.network).kind!=='EVM')fault('CRYPTO_EVM_REQUIRED','network');
+  const requestedSymbol=input.tokenSymbol===undefined?undefined:text(input.tokenSymbol,'tokenSymbol',25);
+  if(requestedSymbol!==undefined&&!/^[A-Za-z][A-Za-z0-9._-]{0,24}$/.test(requestedSymbol))fault('INVALID_FIELD','tokenSymbol');
   return this.operation(actor,'PREPARE_ROLLING_SECURITY',input,key,async db=>{
-   const card=(await db.query('SELECT * FROM avis_core_v2.crypto_security_cards WHERE card_id=$1 FOR UPDATE',[input.cardId])).rows[0];if(!card||card.mode==='REAL')fault('CRYPTO_DOSSIER_CHANGED','cardId');
+   const card=(await db.query('SELECT * FROM avis_core_v2.crypto_security_cards WHERE card_id=$1 FOR UPDATE',[input.cardId])).rows[0];if(!card||card.mode==='REAL'||card.state==='BOOKED')fault('CRYPTO_DOSSIER_CHANGED','cardId');
+   const symbol=requestedSymbol??card.symbol;
+   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['crypto-symbol:'+symbol.toUpperCase()]);
+   if((await db.query(`SELECT 1 FROM avis_core_v2.crypto_assets WHERE upper(currency_code)=upper($1)
+    UNION ALL SELECT 1 FROM avis_core_v2.crypto_security_cards WHERE upper(symbol)=upper($1) AND card_id<>$2 LIMIT 1`,[symbol,card.card_id])).rows.length)fault('DUPLICATE_RECORD','tokenSymbol');
    const settlement=(await db.query("SELECT a.currency_code,n.contract_address FROM avis_core_v2.crypto_asset_networks n JOIN avis_core_v2.crypto_assets a USING(asset_id) WHERE a.currency_code IN ('AG','AGi') AND n.network=$1 AND n.approved AND n.verified_at IS NOT NULL FOR SHARE OF n",[input.network])).rows;if(!['AG','AGi'].every(code=>settlement.some(a=>a.currency_code===code&&validAddress(input.network,a.contract_address))))fault('CRYPTO_SETTLEMENT_ASSET','network');
    const p=(await db.query(`SELECT p.*,s.name,s.short_name,s.isin,s.cusip,s.currency_code,s.denomination,s.kind,s.quote_basis,s.quantity_decimals,u.account_role FROM avis_core_v2.portfolio_positions p JOIN avis_core_v2.portfolio_securities s USING(security_id) JOIN avis_core_v2.sovereign_users u USING(user_id) WHERE position_id=$1 FOR UPDATE OF p`,[input.positionId])).rows[0];
    if(!p||p.account_role!=='INSTITUTION'||!p.isin||units(p.quantity)-units(p.reserved_quantity)<quantity)fault('CRYPTO_SOURCE_REQUIRED','positionId');
    const wallet=(await db.query('SELECT * FROM avis_core_v2.user_deposit_addresses WHERE address_id=$1 AND user_id=$2 AND network=$3',[input.addressId,p.user_id,input.network])).rows[0];if(!wallet)fault('CRYPTO_WALLET_REQUIRED','addressId');
+   if(card.user_id&&String(card.user_id)!==String(p.user_id)||card.network&&card.network!==input.network||card.wallet_address_id&&String(card.wallet_address_id)!==String(wallet.address_id))fault('CRYPTO_DOSSIER_CHANGED','addressId');
    if(quantity%(10n**BigInt(18-p.quantity_decimals))!==0n)fault('SECURITY_QUANTITY_PRECISION','quantity');
    const assetValue=money(securityValue(decimal(quantity),p.denomination,p.market_price,p.quote_basis,p.currency_code)),faceValue=assetValue*10n**18n/tokens;if(faceValue<=0n||faceValue*tokens/10n**18n!==assetValue)fault('INVALID_AMOUNT','tokenQuantity');
-   const dossier={isin:p.isin,cusip:p.cusip||'',assetType:p.kind==='share'?'STOCK':p.kind.toUpperCase(),collateralHouseRef:reference,currency:p.currency_code,faceValue:decimal(faceValue),assetValue:decimal(assetValue),issuedVolume:decimal(tokens),marginHaircutBps:input.marginHaircutBps,tradingFeeBps:input.tradingFeeBps,goldGramsPerToken1e6:0,greenHighTechVerified:true,sourceQuantity:decimal(quantity),sourceSecurityId:p.security_id,sourcePositionId:p.position_id,source:'Green Bond / registered securities',demo:false};
-   if((await db.query('SELECT 1 FROM avis_core_v2.crypto_assets WHERE currency_code=$1',[card.symbol])).rows.length)fault('DUPLICATE_RECORD','cardId');
+   const dossier={isin:p.isin,cusip:p.cusip||'',assetType:p.kind==='share'?'STOCK':p.kind.toUpperCase(),tokenSymbol:symbol,collateralHouseRef:reference,currency:p.currency_code,faceValue:decimal(faceValue),assetValue:decimal(assetValue),issuedVolume:decimal(tokens),marginHaircutBps:input.marginHaircutBps,tradingFeeBps:input.tradingFeeBps,goldGramsPerToken1e6:0,greenHighTechVerified:true,sourceQuantity:decimal(quantity),sourceSecurityId:p.security_id,sourcePositionId:p.position_id,source:'Green Bond / registered securities',demo:false};
    const code='0x'+hash({cardId:card.card_id,dossier,network:input.network});
    await db.query('UPDATE avis_core_v2.portfolio_positions SET reserved_quantity=reserved_quantity+$2,version=version+1 WHERE position_id=$1',[p.position_id,decimal(quantity)]);
-   await db.query("UPDATE avis_core_v2.crypto_security_cards SET mode='REAL',state='DRAFT',name=$2,dossier=$3,conversion_code=$4,security_id=$5,position_id=$6,user_id=$7,network=$8,wallet_address_id=$9,token_quantity=$10,source_quantity=$11,version=version+1,updated_at=now() WHERE card_id=$1",[card.card_id,p.name,JSON.stringify(dossier),code,p.security_id,p.position_id,p.user_id,input.network,wallet.address_id,decimal(tokens),decimal(quantity)]);
-   return {id:card.card_id,conversionCode:code,quantity:decimal(tokens),dossier};
+   await db.query("UPDATE avis_core_v2.crypto_security_cards SET mode='REAL',state='DRAFT',name=$2,dossier=$3,conversion_code=$4,security_id=$5,position_id=$6,user_id=$7,network=$8,wallet_address_id=$9,token_quantity=$10,source_quantity=$11,symbol=$12,version=version+1,updated_at=now() WHERE card_id=$1",[card.card_id,p.name,JSON.stringify(dossier),code,p.security_id,p.position_id,p.user_id,input.network,wallet.address_id,decimal(tokens),decimal(quantity),symbol]);
+   return {id:card.card_id,symbol,conversionCode:code,quantity:decimal(tokens),dossier};
   });
  }
  async createRollingChannel(actor,input,key){actualAdmin(actor);const amount=decimal(money(input.securityAmount)),gross=decimal(money(input.grossValue));if(!['AG','AGi'].includes(input.settlementAsset)||!/^\d{1,18}$/.test(String(input.channel)))fault('CRYPTO_CHANNEL','channel');return this.operation(actor,'ROLLING_CHANNEL',input,key,async db=>{const card=(await db.query('SELECT * FROM avis_core_v2.crypto_security_cards WHERE card_id=$1',[input.cardId])).rows[0];if(!card)fault('CRYPTO_SECURITY','cardId');const user=card.user_id||(await db.query("SELECT user_id FROM avis_core_v2.sovereign_users WHERE account_role='INSTITUTION' ORDER BY user_id LIMIT 1")).rows[0]?.user_id;if(!user)fault('CRYPTO_SOURCE_REQUIRED','userId');const id=randomUUID();await db.query('INSERT INTO avis_core_v2.crypto_rolling_channels(channel_id,card_id,user_id,chain_channel,settlement_asset,security_amount,gross_value) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,card.card_id,user,String(input.channel),input.settlementAsset,amount,gross]);return {id};});}
@@ -203,9 +211,11 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
    FROM avis_core_v2.wallet_trading_delegations WHERE ($1::bigint IS NULL OR user_id=$1) ORDER BY consent_at DESC LIMIT 300`,[actor.customerUserId||null])).rows;
   if(view==='treasurypositions'){
    if(actor.customerUserId)fault('FORBIDDEN',null,403);
-   return (await this.pool.query(`SELECT booking_id,source_system,source_reference,owner_user_id,asset_class,
-    asset_code,asset_name,isin,quantity::text,destination,ledger_account_id,journal_id,booking_reference,booked_by,booked_at
-    FROM avis_core_v2.treasury_opening_positions ORDER BY asset_class,asset_code`)).rows;
+   return (await this.pool.query(`SELECT t.booking_id,t.source_system,t.source_reference,t.owner_user_id,t.asset_class,
+    t.asset_code,t.asset_name,t.isin,t.quantity::text,t.destination,t.ledger_account_id,t.journal_id,t.booking_reference,t.booked_by,t.booked_at,
+    p.position_id,p.security_id
+    FROM avis_core_v2.treasury_opening_positions t LEFT JOIN avis_core_v2.portfolio_positions p ON p.treasury_booking_id=t.booking_id
+    ORDER BY t.asset_class,t.asset_code`)).rows;
   }
   if(view==='cryptomarkets')return (await this.pool.query('SELECT * FROM avis_core_v2.crypto_assets WHERE market_rank IS NOT NULL ORDER BY market_rank LIMIT 200')).rows;
   if(view==='cryptocatalogue')return (await this.pool.query(`SELECT a.*,COALESCE(jsonb_agg(jsonb_build_object('network',n.network,'contractAddress',n.contract_address,'decimals',n.decimals,'approved',n.approved,'verifiedAt',n.verified_at) ORDER BY n.network) FILTER(WHERE n.network IS NOT NULL),'[]'::jsonb) AS networks FROM avis_core_v2.crypto_assets a LEFT JOIN avis_core_v2.crypto_asset_networks n ON n.asset_id=a.asset_id AND ($1::boolean OR n.approved) WHERE $1::boolean OR n.approved GROUP BY a.asset_id ORDER BY a.market_rank NULLS LAST,a.name`,[!actor.customerUserId])).rows;

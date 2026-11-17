@@ -84,6 +84,31 @@ def api(opener, base, path, body=None, csrf=None, idempotency_key=None):
     with opener.open(request, timeout=30) as response:
         return json.load(response)
 
+
+def log_provider_validation(result):
+    """Log known provider identities and codes, never URLs, credentials or messages."""
+    providers = {
+        'CoinAPI Market Data': ('MARKET', {'MARKET_SCHEMA', 'MARKET_TRANSPORT'}),
+        'CoinAPI EMS': ('EMS', {'EMS_SCHEMA', 'EMS_TRANSPORT'}),
+        'Alchemy': (None, {'RPC_VALIDATION'}),
+        'CoinAPI NaaS': (None, {'RPC_VALIDATION'}),
+    }
+    if not isinstance(result, dict):
+        raise RuntimeError('Provider validation schema mismatch')
+    name = result.get('provider')
+    if not isinstance(name, str) or name not in providers:
+        name = 'Unknown provider'
+    line = ('Provider validation: ' + name
+            + '; configured=' + str(result.get('configured') is True)
+            + '; verified=' + str(result.get('verified') is True))
+    prefix, codes = providers.get(name, (None, set()))
+    code = result.get('code')
+    if isinstance(code, str) and (code in codes or prefix is not None
+            and re.fullmatch(prefix + r'_HTTP_[1-5][0-9]{2}', code)):
+        line += '; code=' + code
+    print(line)
+
+
 def verify_deployed_frontend(opener, base, sha):
     """Refuse a release whose served Crypto Suite differs from checked-out source."""
     from pathlib import Path
@@ -91,7 +116,9 @@ def verify_deployed_frontend(opener, base, sha):
     assets = {
         '/': 'index.html',
         '/app.mjs': 'public/app.mjs',
+        '/portfolio.mjs': 'public/portfolio.mjs',
         '/crypto-workspace.mjs': 'public/crypto-workspace.mjs',
+        '/treasury-source.mjs': 'public/treasury-source.mjs',
         '/wallet-trading-scroller.mjs': 'public/wallet-trading-scroller.mjs',
         '/wallet-trading-scroller.css': 'public/wallet-trading-scroller.css',
         '/trading-panel.mjs': 'public/trading-panel.mjs',
@@ -539,7 +566,7 @@ def main():
         verify_index_access(opener, base, login['csrf'])
         providers = api(opener, base, '/api/crypto/trading/validate-providers', {}, login['csrf'])['providers']
         for provider in providers:
-            print('Provider validation: ' + provider['provider'] + '; configured=' + str(provider['configured']) + '; verified=' + str(provider['verified']))
+            log_provider_validation(provider)
         issuer = api(opener, base, '/api/views/issuer')['rows']
         if not any(row['abiq_code'] == 'AVIPTN64XXX' and row['country_code'] == 'TN' for row in issuer):
             raise RuntimeError('ABIQ issuer mismatch')

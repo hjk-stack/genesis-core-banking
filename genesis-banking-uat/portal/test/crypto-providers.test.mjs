@@ -46,3 +46,40 @@ test('CoinAPI market-data probe reports HTTP rejection without treating a config
  const market=(await core.validateRobotProviders(actor)).providers.find(p=>p.provider==='CoinAPI Market Data');
  assert.equal(market.configured,true);assert.equal(market.verified,false);assert.equal(market.code,'MARKET_HTTP_401');
 });
+
+for(const setting of ['COINAPI_API_KEY','APIBRICKS_COINAPI_KEY','COINAPI_MARKET_DATA_API_KEY'])test('market-data credential '+setting+' does not configure CoinAPI NaaS',async()=>{
+ const env={[setting]:'fixture-market-only'},calls=[];
+ const core=new TradingRobotCore(null,{secretEnv:env,cryptoFetch:async(url,options)=>{
+  calls.push({url,options});return new Response(JSON.stringify({asset_id_base:'BTC',asset_id_quote:'USD',rate:98000}));
+ }});
+ assert.equal(new ChainAPI({env}).connection('ETHEREUM').provider,'Public RPC');
+ const result=await core.validateRobotProviders(actor),node=result.providers.find(p=>p.provider==='CoinAPI NaaS');
+ assert.deepEqual(node,{provider:'CoinAPI NaaS',configured:false,verified:false,setting:'COINAPI_NAAS_API_KEY'});
+ assert.equal(result.providers.find(p=>p.provider==='CoinAPI Market Data').verified,true);
+ assert.equal(calls.length,1);assert.equal(calls[0].url,'https://rest.coinapi.io/v1/exchangerate/BTC/USD');
+ assert.equal(calls[0].options.headers['X-CoinAPI-Key'],env[setting]);
+ assert.ok(!JSON.stringify(result).includes('fixture-market-only'));
+});
+
+test('dedicated CoinAPI node credential validates NaaS independently of market-data access',async()=>{
+ const calls=[],env={COINAPI_NAAS_API_KEY:'fixture-node-only'};
+ const core=new TradingRobotCore(null,{secretEnv:env,cryptoFetch:async(url,options)=>{
+  calls.push({url,options});return new Response(JSON.stringify({result:JSON.parse(options.body).method==='eth_chainId'?'0x1':'0x1234'}));
+ }});
+ const result=await core.validateRobotProviders(actor),node=result.providers.find(p=>p.provider==='CoinAPI NaaS');
+ assert.equal(node.configured,true);assert.equal(node.verified,true);assert.equal(node.blockNumber,4660);
+ assert.equal(result.providers.find(p=>p.provider==='CoinAPI Market Data').configured,false);
+ assert.equal(calls.length,2);assert.ok(calls.every(call=>call.url==='https://ethereum-mainnet.node.coinapi.io'&&call.options.headers['X-CoinAPI-Key']===env.COINAPI_NAAS_API_KEY));
+ assert.ok(!JSON.stringify(result).includes('fixture-node-only'));
+});
+
+for(const setting of ['AVIS_RPC_ETHEREUM','CRYPTO_RPC_ETHEREUM'])test('provider validation preserves the configured CoinAPI node endpoint from '+setting,async()=>{
+ const endpoint='https://ethereum-mainnet.node.coinapi.io',calls=[];
+ const core=new TradingRobotCore(null,{secretEnv:{[setting]:endpoint,COINAPI_NAAS_API_KEY:'fixture-node-key'},cryptoFetch:async(url,options)=>{
+  calls.push({url,options});return new Response(JSON.stringify({result:JSON.parse(options.body).method==='eth_chainId'?'0x1':'0x1234'}));
+ }});
+ const result=await core.validateRobotProviders(actor),node=result.providers.find(p=>p.provider==='CoinAPI NaaS');
+ assert.equal(node.configured,true);assert.equal(node.verified,true);assert.equal(node.blockNumber,4660);
+ assert.equal(calls.length,2);assert.ok(calls.every(call=>call.url===endpoint&&call.options.headers['X-CoinAPI-Key']==='fixture-node-key'));
+ assert.ok(!JSON.stringify(result).includes('fixture-node-key'));
+});

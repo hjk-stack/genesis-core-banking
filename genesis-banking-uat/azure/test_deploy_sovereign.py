@@ -82,6 +82,64 @@ class AzureDiagnosticsTests(unittest.TestCase):
         self.assertNotIn('PrivateProviderFixture', str(caught.exception))
 
 
+class ProviderValidationDiagnosticsTests(unittest.TestCase):
+    def output(self, result):
+        with contextlib.redirect_stdout(io.StringIO()) as captured:
+            deploy.log_provider_validation(result)
+        return captured.getvalue()
+
+    def test_retains_known_provider_codes_without_private_response_fields(self):
+        cases = [
+            ('CoinAPI Market Data', 'MARKET_HTTP_401'),
+            ('CoinAPI Market Data', 'MARKET_HTTP_429'),
+            ('CoinAPI Market Data', 'MARKET_SCHEMA'),
+            ('CoinAPI Market Data', 'MARKET_TRANSPORT'),
+            ('CoinAPI EMS', 'EMS_HTTP_403'),
+            ('CoinAPI EMS', 'EMS_SCHEMA'),
+            ('CoinAPI EMS', 'EMS_TRANSPORT'),
+            ('Alchemy', 'RPC_VALIDATION'),
+            ('CoinAPI NaaS', 'RPC_VALIDATION'),
+        ]
+        for provider, code in cases:
+            with self.subTest(provider=provider, code=code):
+                output = self.output({'provider': provider, 'configured': True,
+                                      'verified': False, 'code': code,
+                                      'endpoint': 'https://node.example/private-key',
+                                      'key': 'private-key', 'message': 'private-message',
+                                      'accounts': ['private-account']})
+                self.assertEqual(output, 'Provider validation: ' + provider
+                                 + '; configured=True; verified=False; code=' + code + '\n')
+                self.assertNotIn('private-', output)
+                self.assertNotIn('https://', output)
+
+    def test_codes_require_exact_known_format_for_the_correct_provider(self):
+        for code in ('https://node.example/private-key', 'MARKET_HTTP_401 private-key',
+                     'MARKET_HTTP_401\nprivate-key', 'MARKET_HTTP_401\rprivate-key',
+                     'MARKET_HTTP_999', 'MARKET_HTTP_4010', 'MARKET_PRIVATE_KEY',
+                     'EMS_HTTP_401', 'RPC_VALIDATION', {'key': 'private-key'},
+                     ['MARKET_HTTP_401'], None):
+            with self.subTest(code_type=type(code).__name__):
+                output = self.output({'provider': 'CoinAPI Market Data', 'configured': True,
+                                      'verified': False, 'code': code})
+                self.assertEqual(output,
+                                 'Provider validation: CoinAPI Market Data; configured=True; verified=False\n')
+
+    def test_provider_name_and_boolean_fields_cannot_log_freeform_values(self):
+        for name in ('https://node.example/private-key', 'CoinAPI NaaS\nprivate-key',
+                     {'private-key': True}, None):
+            with self.subTest(name_type=type(name).__name__):
+                output = self.output({'provider': name, 'configured': 'private-key',
+                                      'verified': {'message': 'private-message'},
+                                      'code': 'RPC_VALIDATION'})
+                self.assertEqual(output,
+                                 'Provider validation: Unknown provider; configured=False; verified=False\n')
+
+    def test_verified_result_does_not_require_or_invent_an_error_code(self):
+        self.assertEqual(self.output({'provider': 'CoinAPI Market Data', 'configured': True,
+                                      'verified': True, 'capability': 'private-message'}),
+                         'Provider validation: CoinAPI Market Data; configured=True; verified=True\n')
+
+
 class ExistingProviderSettingsTests(unittest.TestCase):
     def test_only_named_existing_crypto_settings_are_copied_and_current_values_win(self):
         settings=[{'name':'COINAPI_EMS_API_KEY','value':'fixture-ems'},
@@ -401,7 +459,9 @@ class FrontendReleaseIntegrityTests(unittest.TestCase):
         release = 'a' * 40
         portal = Path(__file__).resolve().parent.parent / 'portal'
         files = {'/': 'index.html', '/app.mjs': 'public/app.mjs',
+                 '/portfolio.mjs': 'public/portfolio.mjs',
                  '/crypto-workspace.mjs': 'public/crypto-workspace.mjs',
+                 '/treasury-source.mjs': 'public/treasury-source.mjs',
         '/wallet-trading-scroller.mjs': 'public/wallet-trading-scroller.mjs',
         '/wallet-trading-scroller.css': 'public/wallet-trading-scroller.css',
                  '/trading-panel.mjs': 'public/trading-panel.mjs',
@@ -436,5 +496,18 @@ class FrontendReleaseIntegrityTests(unittest.TestCase):
             def open(self, request, timeout):
                 return FrontendReleaseIntegrityTests.Response(b'data', release, cached=True)
         with self.assertRaisesRegex(RuntimeError, 'cache policy'):
+            deploy.verify_deployed_frontend(Opener(), 'https://example.azurecontainerapps.io', release)
+
+    def test_stale_treasury_source_module_is_rejected(self):
+        release = 'd' * 40
+        portal = Path(__file__).resolve().parent.parent / 'portal'
+        class Opener:
+            def open(self, request, timeout):
+                route = request.full_url.split('?')[0].split('.io')[-1]
+                relative = 'index.html' if route == '/' else 'public' + route
+                body = (b'previous treasury module' if route == '/treasury-source.mjs'
+                        else (portal / relative).read_bytes())
+                return FrontendReleaseIntegrityTests.Response(body, release)
+        with self.assertRaisesRegex(RuntimeError, 'source checksum mismatch: /treasury-source.mjs'):
             deploy.verify_deployed_frontend(Opener(), 'https://example.azurecontainerapps.io', release)
 
