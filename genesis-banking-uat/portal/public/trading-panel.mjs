@@ -1,3 +1,4 @@
+import {installApprovedRobot} from './approved-robot.mjs';
 import {mountIndexAdvice} from './index-advice.mjs';
 import {mountTradingTesting} from './trading-testing.mjs';
 import {mountTradingLive,mountRobotInstructions} from './trading-live.mjs';
@@ -14,7 +15,9 @@ export async function mountTradingPanel({api,host,form,refresh,isAdmin}){
  void mountTradingTesting({api,host:host.querySelector('[data-trading-testing]'),isCurrent:current,onMetadata:value=>{if(current()){testing=value;syncLive();}},onReviewed:async()=>{if(current())await refresh();}});
  const selectionScope=host.closest('#view')||host.parentElement;
  const instructions=mountRobotInstructions({api,host:host.querySelector('[data-robot-instructions]'),isCurrent:current,onSaved:async()=>{if(current())await refresh();}});
- void mountTradingLive({api,host:host.querySelector('[data-trading-live]'),isCurrent:current,selectedRobotId:liveSelections.get(selectionScope)||null,onSelection:profile=>{if(!current())return;if(profile)liveSelections.set(selectionScope,profile.robotId);else liveSelections.delete(selectionScope);void instructions?.select(profile);}});
+ const approved=installApprovedRobot({api,host:host.querySelector('[data-trading-live]'),isCurrent:current,onConfigure:()=>host.querySelector('[data-new-robot]')?.click()});
+ const liveController=mountTradingLive({api,host:host.querySelector('[data-trading-live]'),isCurrent:current,onSnapshot:data=>approved.update(data),selectedRobotId:liveSelections.get(selectionScope)||null,onSelection:profile=>{if(!current())return;if(profile)liveSelections.set(selectionScope,profile.robotId);else liveSelections.delete(selectionScope);void instructions?.select(profile);}});
+ approved.mount();void liveController;
  void mountIndexAdvice({api,host:host.querySelector('[data-index-advice]'),detailsHost:host.querySelector('[data-index-evidence]'),isCurrent:current});
  host.querySelector('[data-validate-providers]').onclick=async()=>{const b=host.querySelector('[data-validate-providers]'),out=host.querySelector('[data-provider-result]');b.disabled=true;try{const r=await api('crypto/trading/validate-providers',{});out.textContent=r.providers.map(p=>p.verified?p.provider+': verified'+(p.accounts?' · '+p.accounts.join(', '):' · Ethereum block '+p.blockNumber):p.configured?p.provider+': '+p.code:p.provider+': set '+p.setting+' in connector administration').join(' | ');}catch(e){out.textContent=e.message;}finally{b.disabled=false;}};
  host.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=async()=>{const id=b.dataset.toggle,enabled=b.dataset.enabled==='true';if(!current()||toggling.has(id)||enabled&&!liveAllowed(id))return;toggling.add(id);syncLive();try{await api('crypto/trading/toggle',{robotId:id,enabled});if(current())await refresh();}catch(e){if(current())b.closest('article').querySelector('.form-error').textContent=e.message;}finally{toggling.delete(id);syncLive();}});
