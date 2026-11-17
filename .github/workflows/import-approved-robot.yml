@@ -1,50 +1,50 @@
 name: Import approved AVISPay robot artwork
 on:
   pull_request:
-    paths: ['.github/workflows/import-approved-robot.yml']
+    paths: ['.github/workflows/import-approved-robot.yml', 'genesis-banking-uat/portal/scripts/install-approved-robot.py']
 permissions:
   contents: write
 jobs:
   import:
     if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'fix/portfolio-linked-crypto-wallets-20261117'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 8
+    concurrency:
+      group: avispay-approved-robot-source-integration
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 1
-      - name: Import exact approved artwork and register its static route
+      - name: Verify original approved artwork and integrate terminal
         run: |
           python3 - <<'PY'
-          import hashlib, pathlib, urllib.request
-          root=pathlib.Path('genesis-banking-uat/portal')
-          dest=root/'public/crypto-icons/robot-approved.jpg'
-          expected='085f7dee99acb6ee9b15f34f42642bc53f269b5aad03a8b09d854cf2af0b9fa1'
-          if not dest.exists():
-              req=urllib.request.Request('https://at.adobe.com/8A7E9fKOR7mQVJcN',headers={'User-Agent':'AVISPay-approved-artwork-import/1.0'})
-              with urllib.request.urlopen(req,timeout=30) as response:
-                  data=response.read(2000000)
-              if hashlib.sha256(data).hexdigest()!=expected:
-                  raise RuntimeError('ARTWORK_CHECKSUM_MISMATCH: received '+str(len(data))+' bytes; source image not substituted')
-              dest.write_bytes(data)
-          if hashlib.sha256(dest.read_bytes()).hexdigest()!=expected:
-              raise RuntimeError('Existing artwork differs from approved upload')
-          path=root/'server.mjs'
-          source=path.read_text()
-          if "'/crypto-icons/robot-approved.jpg'" not in source:
-              anchor="'/crypto-icons/avispay.webp']"
-              if source.count(anchor)!=1: raise RuntimeError('Static route anchor changed')
-              source=source.replace(anchor,"'/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg']")
-              source=source.replace("path.endsWith('.webp')?'image/webp':","path.endsWith('.jpg')?'image/jpeg':path.endsWith('.webp')?'image/webp':")
-              path.write_text(source)
-          print('Owner artwork verified:',expected)
+          import hashlib,pathlib
+          path=pathlib.Path('genesis-banking-uat/portal/public/crypto-icons/robot-approved.jpg')
+          assert hashlib.sha256(path.read_bytes()).hexdigest() == '085f7dee99acb6ee9b15f34f42642bc53f269b5aad03a8b09d854cf2af0b9fa1', 'Approved artwork checksum changed'
           PY
+          python3 genesis-banking-uat/portal/scripts/install-approved-robot.py
           node --check genesis-banking-uat/portal/server.mjs
+          node --check genesis-banking-uat/portal/public/trading-panel.mjs
+          node --check genesis-banking-uat/portal/public/trading-live.mjs
+          node --check genesis-banking-uat/portal/public/approved-robot.mjs
           git config user.name 'AVISPay release automation'
           git config user.email 'avispay-release@users.noreply.github.com'
-          git add genesis-banking-uat/portal/public/crypto-icons/robot-approved.jpg genesis-banking-uat/portal/server.mjs
+          git add genesis-banking-uat/portal/server.mjs genesis-banking-uat/portal/public/trading-panel.mjs genesis-banking-uat/portal/public/trading-live.mjs
           if ! git diff --cached --quiet; then
-            git commit -m 'Mount exact owner-approved chrome trading robot artwork'
+            git commit -m 'Integrate approved robot with existing live controller and reviewed exchange flow'
             git push origin HEAD:fix/portfolio-linked-crypto-wallets-20261117
           fi
+      - name: Export checked-out source for visual acceptance
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/approved-robot-source-sha.txt"
+          git archive --format=zip HEAD genesis-banking-uat/portal > "$RUNNER_TEMP/approved-robot-source.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: approved-robot-source
+          path: |
+            ${{ runner.temp }}/approved-robot-source.zip
+            ${{ runner.temp }}/approved-robot-source-sha.txt
+          retention-days: 3
+          if-no-files-found: error
