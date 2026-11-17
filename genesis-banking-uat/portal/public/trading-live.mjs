@@ -25,7 +25,62 @@ export function createExecutionActivity({maxSeen=2000,freshMs=30000}={}){
 
 function robotArtwork(){
  const id='trader-'+crypto.randomUUID();
- return `<svg class="trading-robot-art" viewBox="0 0 260 310" aria-hidden="true" focusable="false"><defs><linearGradient id="${id}-metal" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#fcfeff"/><stop offset=".32" stop-color="#b9c9d7"/><stop offset=".55" stop-color="#f1f6fa"/><stop offset="1" stop-color="#71879b"/></linearGradient><linearGradient id="${id}-dark" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#243b51"/><stop offset="1" stop-color="#0d1b2c"/></linearGradient></defs><ellipse cx="130" cy="292" rx="77" ry="8" fill="#061321" opacity=".45"/><g class="trading-robot-frame" fill="url(#${id}-metal)" stroke="#71899c" stroke-width="1.5"><path d="M99 244h25v35l-31 1z"/><path d="M136 244h25l6 36-31-1z"/><path d="M91 276h35v10H82q0-10 9-10M134 276h35q9 0 9 10h-44z"/><g data-robot-arm="BUY"><path d="M69 149 44 161 29 209l16 8 19-40 18-9z"/><circle cx="46" cy="165" r="11"/><path d="m29 207-8 27 10 13 15-5 4-19-8-11z"/><path d="m32 226 6 4"/></g><g data-robot-arm="SELL"><path d="m191 149 25 12 15 48-16 8-19-40-18-9z"/><circle cx="214" cy="165" r="11"/><path d="m231 207 8 27-10 13-15-5-4-19 8-11z"/><path d="m228 226-6 4"/></g><rect x="113" y="121" width="34" height="25" rx="10"/><path d="M77 143q53-16 106 0l-8 94q-45 20-90 0z"/><path d="M91 151q39-10 78 0l-7 75q-32 10-64 0z" fill="url(#${id}-dark)"/><rect x="62" y="47" width="136" height="82" rx="32"/><path d="M79 60q51-17 102 0v43q-51 19-102 0z" fill="url(#${id}-dark)"/><path d="M130 45V27" fill="none"/><circle cx="130" cy="23" r="5" fill="#b9f5e4"/><path d="M92 119q38 13 76 0" fill="none"/><path d="M68 76H57v22h10M192 76h11v22h-10"/></g><g class="trading-robot-eyes" fill="#a8f0e0"><rect x="91" y="78" width="25" height="7" rx="3.5"/><rect x="144" y="78" width="25" height="7" rx="3.5"/></g><path class="trading-robot-w" d="m103 178 13 29 14-19 14 19 13-29" fill="none" stroke="#a8f0e0" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><g fill="#96acbe"><circle cx="99" cy="162" r="2"/><circle cx="161" cy="162" r="2"/><circle cx="103" cy="219" r="2"/><circle cx="157" cy="219" r="2"/></g><path class="trading-robot-signal" d="M130 143v17m-29 80-4 26m62-26 4 26" fill="none" stroke="#67d7bf" stroke-width="2"/></svg>`;
+ return \`<svg class="trading-robot-art" viewBox="0 0 260 310" aria-hidden="true" focusable="false">
+ <defs>
+  <linearGradient id="\${id}-chrome" x1=".08" y1="0" x2=".9" y2="1"><stop stop-color="#fafffd"/><stop offset=".13" stop-color="#d5e7e1"/><stop offset=".33" stop-color="#ffffff"/><stop offset=".55" stop-color="#94aaa6"/><stop offset=".77" stop-color="#edf5f1"/><stop offset="1" stop-color="#677c78"/></linearGradient>
+  <linearGradient id="\${id}-black" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#132c29"/><stop offset=".56" stop-color="#203e39"/><stop offset="1" stop-color="#091d1c"/></linearGradient>
+  <linearGradient id="\${id}-glass" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#103d38"/><stop offset=".4" stop-color="#0a2726"/><stop offset="1" stop-color="#1d594c"/></linearGradient>
+  <linearGradient id="\${id}-mint" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#a1f5d9"/><stop offset=".5" stop-color="#f4fff4"/><stop offset="1" stop-color="#6abda6"/></linearGradient>
+  <linearGradient id="\${id}-gold" x1="0" y1="0" x2=".75" y2="1"><stop stop-color="#faeec2"/><stop offset=".55" stop-color="#aa9567"/><stop offset="1" stop-color="#e7dac0"/></linearGradient>
+  <filter id="\${id}-glow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+ </defs>
+ <ellipse cx="130" cy="293" rx="77" ry="10" fill="#274e4438"/>
+ <g class="trading-robot-frame" stroke="#65827b" stroke-linejoin="round">
+  <path d="M103 224 L99 267 L122 274 L129 232Z" fill="url(#\${id}-black)" stroke-width="2"/>
+  <path d="M133 232 L141 274 L161 267 L157 224Z" fill="url(#\${id}-black)" stroke-width="2"/>
+  <path d="M99 260 L122 265 L119 286 L85 287 Q82 277 90 271Z" fill="url(#\${id}-chrome)"/>
+  <path d="M140 265 L161 260 L169 271 Q177 277 174 287 L142 286Z" fill="url(#\${id}-chrome)"/>
+  <path d="M103 235 L119 240 M143 240 L156 235" stroke="#b1edcf" stroke-width="2"/>
+  <path d="M113 124 L149 124 L155 148 L108 148Z" fill="url(#\${id}-black)"/>
+  <path d="M67 152 L89 132 L169 132 L193 152 L181 222 Q129 245 80 222Z" fill="url(#\${id}-chrome)" stroke-width="2"/>
+  <path d="M87 149 Q130 134 172 149 L166 211 Q130 224 92 211Z" fill="url(#\${id}-black)" stroke-width="1.4"/>
+  <path d="M98 154 Q129 146 161 154 L155 197 Q129 207 103 197Z" fill="url(#\${id}-glass)" stroke="#659b89"/>
+  <path d="M105 217 Q131 225 156 217 L150 238 Q129 249 109 238Z" fill="url(#\${id}-chrome)"/>
+  <path d="M108 225 L151 225" stroke="#fff" stroke-opacity=".8"/>
+  <path d="M92 147 L102 148 L105 210 L96 207 M159 148 L168 147 L164 207 L156 210" fill="#d4f0e8" stroke-width="1"/>
+  <path d="M124 123 L124 134 M138 123 L138 134" stroke="url(#\${id}-gold)" stroke-width="2"/>
+  <g data-robot-arm="BUY">
+   <path d="M75 144 L58 147 L41 179 L51 194 L69 171 L82 166Z" fill="url(#\${id}-chrome)" stroke-width="2"/>
+   <circle cx="62" cy="153" r="11" fill="url(#\${id}-black)"/><circle cx="62" cy="153" r="5" fill="url(#\${id}-gold)"/>
+   <path d="M43 183 L31 213 L43 231 L58 224 L58 207 L54 188Z" fill="url(#\${id}-chrome)" stroke-width="2"/>
+   <path d="M40 220 L39 247 L50 254 L60 240 L56 225Z" fill="url(#\${id}-black)"/>
+   <path d="M34 213 L51 222 M41 235 L54 241" stroke="#b0f1d8" stroke-width="2"/>
+  </g>
+  <g data-robot-arm="SELL">
+   <path d="M184 144 L201 147 L219 179 L209 194 L191 171 L178 166Z" fill="url(#\${id}-chrome)" stroke-width="2"/>
+   <circle cx="198" cy="153" r="11" fill="url(#\${id}-black)"/><circle cx="198" cy="153" r="5" fill="url(#\${id}-gold)"/>
+   <path d="M217 183 L229 213 L217 231 L202 224 L202 207 L206 188Z" fill="url(#\${id}-chrome)" stroke-width="2"/>
+   <path d="M220 220 L221 247 L210 254 L200 240 L204 225Z" fill="url(#\${id}-black)"/>
+   <path d="M226 213 L209 222 M219 235 L206 241" stroke="#b0f1d8" stroke-width="2"/>
+  </g>
+  <path d="M79 62 L93 42 L169 42 L181 62 L187 95 L176 124 L149 135 L111 135 L84 124 L73 95Z" fill="url(#\${id}-chrome)" stroke-width="2.5"/>
+  <path d="M92 63 Q129 52 168 63 L175 91 L163 112 Q131 127 96 113 L85 91Z" fill="url(#\${id}-glass)" stroke="#4b8578" stroke-width="2"/>
+  <path d="M89 58 L103 50 L159 50 L172 58 M81 98 L98 121 L161 121 L180 98" fill="none" stroke="#f4fffa" stroke-width="2"/>
+  <path d="M110 119 L150 119 L143 127 L117 127Z" fill="url(#\${id}-gold)" stroke-width=".5"/>
+  <path d="M73 78 L66 84 L67 99 L79 108 M187 78 L194 84 L193 99 L181 108" fill="url(#\${id}-black)" stroke-width="2"/>
+  <path d="M130 42 L130 27" stroke="#b9ddce" stroke-width="3"/>
+  <circle cx="130" cy="24" r="6" fill="url(#\${id}-gold)" stroke="#e9fffa" stroke-width="1"/>
+ </g>
+ <g class="trading-robot-eyes" fill="url(#\${id}-mint)" filter="url(#\${id}-glow)">
+  <path d="M97 79 L118 80 L120 88 L98 88Z"/>
+  <path d="M142 80 L163 79 L162 88 L140 88Z"/>
+  <path d="M120 104 Q130 108 140 104" fill="none" stroke="#9bedd2" stroke-width="2"/>
+ </g>
+ <path class="trading-robot-w" d="M108 169 L118 194 L130 179 L143 194 L153 169" fill="none" stroke="url(#\${id}-mint)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" filter="url(#\${id}-glow)"/>
+ <path d="M110 158 L150 158 M111 201 L149 201" stroke="#b7c5b2" stroke-width=".7"/>
+ <g fill="url(#\${id}-gold)"><circle cx="93" cy="143" r="2"/><circle cx="167" cy="143" r="2"/><circle cx="110" cy="219" r="2"/><circle cx="152" cy="219" r="2"/></g>
+ <path class="trading-robot-signal" d="M129 142v10m-30 83-2 16m64-16 2 16" fill="none" stroke="#70c3a9" stroke-width="2"/>
+ </svg>\`;
 }
 
 const details=rows=>'<dl class="trading-live-details">'+rows.map(([label,value])=>'<div><dt>'+escape(label)+'</dt><dd>'+escape(value??'—')+'</dd></div>').join('')+'</dl>';
