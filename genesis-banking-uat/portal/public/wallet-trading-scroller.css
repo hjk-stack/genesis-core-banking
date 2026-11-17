@@ -1,0 +1,27 @@
+.wallet-trading-strip{min-width:0;width:100%;box-sizing:border-box;margin:0 0 12px;padding:8px 10px;color:#203c34;background:linear-gradient(115deg,#f7faf7f2,#e9f2ebe6);border:1px solid #bacbb9;border-radius:12px;box-shadow:inset 0 1px #fff,0 3px 9px #1734200a}
+.wallet-trading-strip-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;font-size:12px;letter-spacing:.02em}
+.wallet-trading-strip-heading>div{display:flex;gap:5px}
+.wallet-trading-strip-heading button{border:1px solid #b6c8b0;border-radius:7px;background:#ffffffa1;color:#375a36;min-width:30px;min-height:28px;cursor:pointer}
+.wallet-trading-coins{display:flex;gap:9px;min-width:0;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity;padding:2px 2px 6px;scrollbar-width:thin;scrollbar-color:#a2b99b #edf4eb}
+.wallet-trading-coin{flex:0 0 210px;min-width:0;box-sizing:border-box;scroll-snap-align:start;background:linear-gradient(140deg,#fff,#f1f6ed);border:1px solid #c6d3bb;border-radius:10px;padding:10px 12px;box-shadow:inset 0 1px #fff}
+.wallet-trading-coin.is-selected{border-color:#7a9f52;background:linear-gradient(140deg,#fafff2,#dfefc8);box-shadow:inset 0 1px #fff,0 0 0 1px #92b75b22}
+.wallet-trading-coin-title{display:flex;gap:8px;align-items:center;min-width:0}
+.wallet-trading-coin-title img{object-fit:contain;border-radius:50%;flex-shrink:0}
+.wallet-trading-coin-title>div{display:grid;gap:2px;min-width:0}
+.wallet-trading-coin-title strong{font-size:13px;color:#243c30}
+.wallet-trading-coin-title small{font-size:10px;color:#58664f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wallet-trading-monogram{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#dfebcf;color:#3a552b;font-size:9px;font-weight:700;flex-shrink:0}
+.wallet-trading-holder{display:block;font-size:9px;color:#60715c;margin:5px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wallet-trading-quantity{display:block;font-size:13px;font-weight:650;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.wallet-trading-choice{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:7px}
+.wallet-trading-choice>span{font-size:10px;color:#546a43}
+.wallet-trading-choice button{font-size:11px;font-weight:650;min-height:28px;padding:4px 11px;border:1px solid #9cb482;border-radius:7px;background:#f9fff0;color:#395c29;cursor:pointer}
+.wallet-trading-choice button[aria-checked=true]{background:#7f9f49;color:#fff;border-color:#738e43}
+.wallet-trading-choice button:disabled{cursor:progress;opacity:.65}
+.wallet-trading-strip button:focus-visible,.wallet-trading-coins:focus-visible{outline:2px solid #527e3a;outline-offset:2px}
+.wallet-trading-strip .form-error:empty{display:none}.wallet-trading-strip .form-error{font-size:11px;margin:5px 0 0;overflow-wrap:anywhere}
+.wallet-trading-empty{margin:8px;font-size:12px;color:#53674b}
+.approved-robot .ar-board>.ar-wallet-strip{grid-column:2/-1;grid-row:1;align-self:stretch;margin:0;min-width:0;max-width:100%}
+.approved-robot [data-ar-markets][hidden]{display:none!important}
+@media(max-width:760px){.wallet-trading-coin{flex-basis:190px}.wallet-trading-strip{padding:7px}.wallet-trading-strip-heading{font-size:11px}}
+@media(prefers-reduced-motion:reduce){.wallet-trading-coins{scroll-behavior:auto}}
