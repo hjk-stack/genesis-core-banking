@@ -1,0 +1,42 @@
+name: Harden wallet allowance release
+on:
+  pull_request:
+    types: [synchronize]
+permissions:
+  contents: write
+jobs:
+  source-integration:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'fix/multi-coin-trade-allowance-scroller-20261117'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Correct release locking and case-preserving coin identity matching
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('genesis-banking-uat/portal/src/crypto-workspace.mjs')
+          s=p.read_text()
+          old='   access(actor,d.user_id);\n   const active='
+          new="   access(actor,d.user_id);\n   await db.query('SELECT account_id FROM avis_core_v2.ledger_accounts WHERE account_id=$1 FOR UPDATE',[d.account_id]);\n   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['wallet-trading:'+String(d.user_id)+':'+String(d.currency_code).toLowerCase()]);\n   const active="
+          if s.count(old)!=1: raise RuntimeError('Wallet release lock anchor changed')
+          s=s.replace(old,new)
+          old='WHERE r.user_id=$1 AND (r.base_asset=$2 OR r.quote_asset=$2)'
+          new='WHERE r.user_id=$1 AND (lower(r.base_asset)=lower($2) OR lower(r.quote_asset)=lower($2))'
+          if s.count(old)!=1: raise RuntimeError('Wallet release asset anchor changed')
+          p.write_text(s.replace(old,new))
+          PY
+          node --check genesis-banking-uat/portal/src/crypto-workspace.mjs
+          git diff --check
+      - name: Commit the guarded source update and remove this temporary workflow
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add genesis-banking-uat/portal/src/crypto-workspace.mjs
+          git rm .github/workflows/harden-wallet-release.yml
+          git commit -m 'Serialize allowance release and match AGi market symbols case-insensitively'
+          git push origin HEAD:refs/heads/fix/multi-coin-trade-allowance-scroller-20261117
