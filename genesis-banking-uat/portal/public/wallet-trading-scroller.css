@@ -25,3 +25,5 @@
 .approved-robot [data-ar-markets][hidden]{display:none!important}
 @media(max-width:760px){.wallet-trading-coin{flex-basis:190px}.wallet-trading-strip{padding:7px}.wallet-trading-strip-heading{font-size:11px}}
 @media(prefers-reduced-motion:reduce){.wallet-trading-coins{scroll-behavior:auto}}
+
+.crypto-trading-desk .approved-robot .ar-board:has(.ar-wallet-strip){grid-template-rows:minmax(156px,auto) minmax(410px,auto) auto!important}

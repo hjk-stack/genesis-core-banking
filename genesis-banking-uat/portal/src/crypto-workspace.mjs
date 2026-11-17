@@ -1,4 +1,5 @@
 import {createHash,randomUUID} from 'node:crypto';
+import {walletTradingAllowances,setWalletTradingSelection,WALLET_SELECTION_MESSAGES} from './wallet-trading-selection.mjs';
 import {SecuritiesPortfolio,securityValue} from './securities-portfolio.mjs';
 import {fault,text,money,decimal} from './core.mjs';
 import {NETWORKS,PLATFORM_NETWORKS,ChainAPI,newWallet,encryptKey,networkInfo,validAddress} from './crypto/networks.mjs';
@@ -10,6 +11,7 @@ const access=(a,u)=>{if(!a?.admin||(a.customerUserId&&String(a.customerUserId)!=
 const uuid=v=>typeof v==='string'&&/^[0-9a-f-]{36}$/.test(v);
 const units=v=>/^0(?:\.0+)?$/.test(String(v))?0n:money(String(v));
 export const CRYPTO_MESSAGES={
+ ...WALLET_SELECTION_MESSAGES,
  CRYPTO_ACCOUNT_AMBIGUOUS:'Select the booked asset account in Portfolio Management.',
  CRYPTO_NETWORK:'Select a registered blockchain.',CRYPTO_CONNECTOR:'The blockchain request could not be completed. Retry this action.',
  CRYPTO_WRONG_CHAIN:'The selected endpoint returned a different blockchain. Check its connector setting.',
@@ -75,6 +77,7 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
    return {accountId:row.account_id,currency:row.currency_code,network:row.network,visible:input.visible};
   });
  }
+ async selectWalletTrading(actor,input,key){return setWalletTradingSelection(this,actor,input,key);}
  async delegateWalletTrading(actor,input,key){
   const amount=decimal(money(input.amount));
   if(input.consent!==true)fault('CRYPTO_TRADING_CONSENT','consent');
@@ -193,6 +196,7 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
  async createRollingChannel(actor,input,key){actualAdmin(actor);const amount=decimal(money(input.securityAmount)),gross=decimal(money(input.grossValue));if(!['AG','AGi'].includes(input.settlementAsset)||!/^\d{1,18}$/.test(String(input.channel)))fault('CRYPTO_CHANNEL','channel');return this.operation(actor,'ROLLING_CHANNEL',input,key,async db=>{const card=(await db.query('SELECT * FROM avis_core_v2.crypto_security_cards WHERE card_id=$1',[input.cardId])).rows[0];if(!card)fault('CRYPTO_SECURITY','cardId');const user=card.user_id||(await db.query("SELECT user_id FROM avis_core_v2.sovereign_users WHERE account_role='INSTITUTION' ORDER BY user_id LIMIT 1")).rows[0]?.user_id;if(!user)fault('CRYPTO_SOURCE_REQUIRED','userId');const id=randomUUID();await db.query('INSERT INTO avis_core_v2.crypto_rolling_channels(channel_id,card_id,user_id,chain_channel,settlement_asset,security_amount,gross_value) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,card.card_id,user,String(input.channel),input.settlementAsset,amount,gross]);return {id};});}
  async list(actor,view){
   if(!actor?.admin)fault('FORBIDDEN',null,403);
+  if(view==='tradingallowances')return walletTradingAllowances(this.pool,actor);
   if(view==='walletdelegations')return (await this.pool.query(`SELECT delegation_id,account_id,user_id,currency_code,network,quantity::text,consent_at,state
    FROM avis_core_v2.wallet_trading_delegations WHERE ($1::bigint IS NULL OR user_id=$1) ORDER BY consent_at DESC LIMIT 300`,[actor.customerUserId||null])).rows;
   if(view==='treasurypositions'){

@@ -92,6 +92,8 @@ def verify_deployed_frontend(opener, base, sha):
         '/': 'index.html',
         '/app.mjs': 'public/app.mjs',
         '/crypto-workspace.mjs': 'public/crypto-workspace.mjs',
+        '/wallet-trading-scroller.mjs': 'public/wallet-trading-scroller.mjs',
+        '/wallet-trading-scroller.css': 'public/wallet-trading-scroller.css',
         '/trading-panel.mjs': 'public/trading-panel.mjs',
         '/trading-live.mjs': 'public/trading-live.mjs',
         '/index-advice.mjs': 'public/index-advice.mjs',

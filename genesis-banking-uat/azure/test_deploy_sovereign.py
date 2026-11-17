@@ -402,6 +402,8 @@ class FrontendReleaseIntegrityTests(unittest.TestCase):
         portal = Path(__file__).resolve().parent.parent / 'portal'
         files = {'/': 'index.html', '/app.mjs': 'public/app.mjs',
                  '/crypto-workspace.mjs': 'public/crypto-workspace.mjs',
+        '/wallet-trading-scroller.mjs': 'public/wallet-trading-scroller.mjs',
+        '/wallet-trading-scroller.css': 'public/wallet-trading-scroller.css',
                  '/trading-panel.mjs': 'public/trading-panel.mjs',
                  '/trading-live.mjs': 'public/trading-live.mjs',
                  '/index-advice.mjs': 'public/index-advice.mjs',
