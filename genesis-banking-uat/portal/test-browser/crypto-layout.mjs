@@ -94,8 +94,8 @@ before(async()=>{
    }
    return json({id:'result'});
   }
-  if(['/crypto-workspace.mjs','/trading-panel.mjs','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp'].includes(req.url)){
-   res.setHeader('content-type',req.url.endsWith('.webp')?'image/webp':req.url.endsWith('.png')?'image/png':req.url.endsWith('.css')?'text/css':'text/javascript');
+  if(['/crypto-workspace.mjs','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(req.url)){
+   res.setHeader('content-type',req.url.endsWith('.jpg')?'image/jpeg':req.url.endsWith('.webp')?'image/webp':req.url.endsWith('.png')?'image/png':req.url.endsWith('.css')?'text/css':'text/javascript');
    return res.end(await readFile(new URL('../public'+req.url,import.meta.url)));
   }
   res.writeHead(404);res.end();
@@ -234,7 +234,7 @@ async function verifyLiveTrading(page,width){
  await page.waitForFunction(()=>document.querySelector('[data-live-quote]')?.textContent.includes('100.123456789012345678 CHF'));
  await page.waitForFunction(()=>document.querySelector('[data-robot-instruction-form] textarea')?.disabled===false);
  assert.equal(await live.locator('[data-robot-activity]').getAttribute('data-robot-activity'),'','reading existing fills must not animate a new trade');
- assert.equal(await live.locator('.trading-robot-art').count(),1);assert.equal(await instructions.locator('textarea').count(),2);
+ assert.equal(await live.locator('.ar-robot-image').count(),1);await page.waitForFunction(()=>document.querySelector('.ar-robot-image')?.naturalWidth===891);assert.equal(await instructions.locator('textarea').count(),2);
  assert.match(await live.locator('[data-live-audit]').textContent(),/1,234\.123456789012345678 aAVISP/);assert.match(await live.locator('[data-live-audit]').textContent(),/Net realised profit1\.123456789012345678 CHF/);assert.match(await live.locator('[data-live-audit]').textContent(),/Fees by currency0\.123456789012345678 CHF/);assert.doesNotMatch(await live.textContent(),/Virtual funds|Acceptance suite/);
  if(width===390)await page.emulateMedia({reducedMotion:'reduce'});
  liveFills.unshift(execution('new-sell-'+width,'SELL'));
@@ -254,7 +254,7 @@ async function verifyLiveTrading(page,width){
  });
  assert.ok(layout.page<=layout.viewport,'live execution tables and instruction columns must not widen the document');assert.ok(layout.liveScroll<=layout.liveWidth+1,'the live screen must contain its market and audit data');
  if(width>1000){assert.ok(layout.robot.right<=layout.screen.left,'the interactive robot belongs to the left of the market screen');assert.ok(layout.fields[0].right<=layout.fields[1].left,'INDEX and robot instruction fields must form two columns');}
- else{assert.ok(layout.robot.bottom<=layout.screen.top,'the live view must stack on smaller screens');assert.ok(layout.fields[0].bottom<=layout.fields[1].top,'instruction fields must stack without overlap');}
+ else{assert.ok(layout.robot.right<=layout.screen.left,'the approved trading board retains its left robot and right market panels');const viewport=await live.locator('.ar-viewport').evaluate(e=>({client:e.clientWidth,scroll:e.scrollWidth}));assert.ok(viewport.scroll>viewport.client,'tablet and phone scroll the terminal, not the whole page');assert.ok(layout.fields[0].bottom<=layout.fields[1].top,'instruction fields must stack without overlap');}
  await live.locator('.trading-live-workspace').screenshot({path:'test-results/crypto-live-trader-'+width+'.png'});
  await instructions.screenshot({path:'test-results/crypto-trader-instructions-'+width+'.png'});
  await live.locator('[data-live-liquidity]').screenshot({path:'test-results/crypto-security-backing-'+width+'.png'});assert.equal(backingReads,1,'background market refresh must not repeat the explicit chain audit');

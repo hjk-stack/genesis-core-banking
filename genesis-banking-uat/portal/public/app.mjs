@@ -85,7 +85,10 @@ html+=results.map((r,i)=>{
  if(view==='exchangebook')return securityBookTable(rows);
  return table(view,page.views[i][1],rows)+(view==='portfolio'&&!rows.length?'<p class="panel-empty">No investment holdings recorded yet.</p>':'');
 }).join('');$('#panels').innerHTML=html;$('#panels').setAttribute('aria-busy','false');accountStatements.bind($('#panels'));portfolioManager.bind($('#panels'));document.querySelectorAll('[data-request]').forEach(b=>b.onclick=()=>paymentWizard.view(b.dataset.request).catch(e=>notice(e.message)));document.querySelectorAll('[data-card-row]').forEach(row=>{const show=()=>cardManager.open(row.querySelector('select').value).catch(e=>notice(e.message));row.onclick=e=>{if(e.target.closest('select'))return;void show();};row.onkeydown=e=>{if(e.target===row&&e.key==='Enter'){e.preventDefault();void show();}};});}
-window.addEventListener('hashchange',render);
+window.addEventListener('hashchange',()=>{
+ try{const intent=readExchangeIntent(location.hash);if(intent){exchangeIntent=intent;if(csrf)void resumeExchange();else $('#login-form h2').textContent=intent.side?'Sign in to '+intent.side.toLowerCase()+' '+intent.symbol:'Sign in to your portfolio';return;}}catch(e){notice(e.message);return;}
+ void render();
+});
 const input=(name,title,type='text',extra='')=>`<label>${esc(title)}<input name="${name}" aria-label="${esc(title)}" type="${type}" ${extra} required></label>`;
 const select=(name,title,options)=>`<label>${esc(title)}<select name="${name}" aria-label="${esc(title)}" required><option value="">Select…</option>${options.map(([v,t])=>`<option value="${esc(v)}">${esc(t)}</option>`).join('')}</select></label>`;
 const accountOptions=()=> (cache.accounts||[]).map(a=>[a.abiq_iban,`${a.full_name} · ${a.currency_code} · ${displayAbiq(a.abiq_iban)}`]);

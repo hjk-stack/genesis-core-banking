@@ -2,7 +2,7 @@
 // remain owned by the authenticated banking/trading controllers.
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const numeric=v=>v!==null&&v!==undefined&&String(v).trim()!==''&&Number.isFinite(Number(v))?Number(v):null;
-const formatted=v=>numeric(v)===null?'—':new Intl.NumberFormat('en-US',{maximumFractionDigits:8}).format(Number(v));
+export const formatted=v=>{if(v===null||v===undefined)return '—';const s=String(v),m=/^([+-]?\d+)(?:\.(\d+))?$/.exec(s);if(!m)return numeric(v)===null?'—':s;const f=(m[2]||'').replace(/0+$/,'');return m[1].replace(/\B(?=(\d{3})+(?!\d))/g,',')+(f?'.'+f:'');};
 export const CANDLE_INTERVALS=Object.freeze({'1m':60000,'5m':300000,'15m':900000,'1h':3600000,'4h':14400000,'1D':86400000});
 export function tradeCandles(trades,interval='15m'){
  if(!Object.hasOwn(CANDLE_INTERVALS,interval))throw new TypeError('Unsupported candle interval');

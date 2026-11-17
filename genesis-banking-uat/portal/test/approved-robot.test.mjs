@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {JSDOM} from 'jsdom';
-import {tradeCandles,observedDepth,reviewedExchangeIntent,installApprovedRobot,CANDLE_INTERVALS} from '../public/approved-robot.mjs';
+import {tradeCandles,observedDepth,reviewedExchangeIntent,installApprovedRobot,CANDLE_INTERVALS,formatted} from '../public/approved-robot.mjs';
 import {mountTradingLive} from '../public/trading-live.mjs';
 const windows=[],controllers=[];
 afterEach(()=>{controllers.splice(0).forEach(c=>c?.close());windows.splice(0).forEach(w=>w.close());});
@@ -59,10 +59,11 @@ test('approved terminal moves existing trading controls without modifying wallet
  const toggle=host.querySelector('[data-trading-auto]');toggle.checked=true;await toggle.onchange({target:toggle});assert.equal(calls.find(x=>x.path==='crypto/trading/toggle').body.robotId,profile.robotId);
  assert.equal(host.querySelectorAll('.ar-ticker-copy:first-child .ar-market').length,6);
  host.querySelector('[data-ar-expand]').click();assert.ok(host.querySelector('.ar-expanded'));host.querySelector('[data-ar-collapse]').click();assert.equal(host.querySelector('.ar-expanded'),null);
- data.profiles=[];data.selectedRobotId=null;await controllers.at(-1).refresh();host.querySelector('[data-trading-buy]').click();assert.equal(configure,1);
+ controllers.at(-1).close();skin.close();data.profiles=[];data.selectedRobotId=null;const fresh=installApprovedRobot({host,api,onConfigure:()=>configure++});controllers.push(fresh);const opening=mountTradingLive({host,api,pollMs:0,onSnapshot:x=>fresh.update(x)});fresh.mount();controllers.push(await opening);host.querySelector('[data-trading-buy]').click();assert.equal(configure,1);
  assert.equal(host.querySelector('[data-trading-auto]').disabled,true);
 });
 test('layout is isolated to the trading terminal and preserves a usable horizontal tablet board',async()=>{
  const css=await readFile(new URL('../public/approved-robot.css',import.meta.url),'utf8');
+ assert.equal(formatted('10000000000.123456789012345678'),'10,000,000,000.123456789012345678');assert.equal(formatted('0.000000000000000001'),'0.000000000000000001');
  assert.match(css,/min-width:1010px/);assert.match(css,/overflow-x:auto/);assert.match(css,/prefers-reduced-motion/);assert.doesNotMatch(css,/\.crypto-wallet\s*\{/);
 });
