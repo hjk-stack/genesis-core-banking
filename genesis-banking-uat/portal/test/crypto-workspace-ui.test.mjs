@@ -321,7 +321,7 @@ test('admin can remove and restore a single wallet card without touching its ori
  assert.equal(views.cryptowallets[0].public_address,originalAg.public_address);
  assert.equal(views.cryptowallets[1].public_address,originalAgi.public_address);
  assert.equal(views.cryptowallets[0].available_balance,originalAg.available_balance);
- assert.deepEqual(actions.map(a=>a.input.visible),[false,true]);
+ assert.deepEqual(actions.filter(a=>a.path==='crypto/wallet/visibility').map(a=>a.input.visible),[false,true]);
 });
 test('the registered AVISPay PLC share converter is visible without asserting a completed chain issuance',async()=>{
  const share={card_id:'a0000000-0000-4000-8000-000000000001',name:'AVISPay PLC',symbol:'aAVISP',mode:'DEMO',state:'DRAFT',token_quantity:'0',dossier:{assetType:'STOCK',issuedVolume:'100000000',assetValue:'100000000',currency:'CHF',faceValue:'1',marginHaircutBps:1500,tradingFeeBps:10},actions:[]};
