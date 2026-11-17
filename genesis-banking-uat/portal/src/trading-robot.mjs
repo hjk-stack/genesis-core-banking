@@ -1,4 +1,5 @@
 import {engineStatus} from './trading/runtime.mjs';
+import {robotWalletAllowance,assertRobotWalletAllowance,ROBOT_WALLET_MESSAGES} from './robot-wallet-allowance.mjs';
 import {randomUUID} from 'node:crypto';
 import {TradingInstructionsCore} from './trading-instructions.mjs';
 import {fault,text,money,decimal} from './core.mjs';
@@ -6,9 +7,10 @@ import {securityValue} from './securities-portfolio.mjs';
 import {ChainAPI} from './crypto/networks.mjs';
 import {BinanceSpot} from './trading/binance.mjs';
 const S=10n**18n,U=x=>/^0(?:\.0+)?$/.test(String(x))?0n:money(String(x)),admin=a=>{if(!a?.admin||a.customerUserId)fault('FORBIDDEN',null,403);};
-export const ROBOT_MESSAGES={ROBOT_SYMBOL:'Select the exact market symbol on this venue.',ROBOT_API_KEY:'Enter the configured trading API secret reference.',ROBOT_ACCOUNT:'Select an institution trading account.',ROBOT_INDEX:'The selected security needs a fresh Press INDEX with supporting sources.',ROBOT_LIMIT:'Enter valid order, daily trading and loss limits.',ROBOT_VENUE_RESPONSE:'The venue request could not complete. Check this order in Trading diagnostics.',ROBOT_BUSY:'The previous order is being reconciled.',ROBOT_POSITION:'Close the robot’s position before changing its market settings.'};
+export const ROBOT_MESSAGES={...ROBOT_WALLET_MESSAGES,ROBOT_SYMBOL:'Select the exact market symbol on this venue.',ROBOT_API_KEY:'Enter the configured trading API secret reference.',ROBOT_ACCOUNT:'Select an institution trading account.',ROBOT_INDEX:'The selected security needs a fresh Press INDEX with supporting sources.',ROBOT_LIMIT:'Enter valid order, daily trading and loss limits.',ROBOT_VENUE_RESPONSE:'The venue request could not complete. Check this order in Trading diagnostics.',ROBOT_BUSY:'The previous order is being reconciled.',ROBOT_POSITION:'Close the robot’s position before changing its market settings.'};
 export class TradingRobotCore extends TradingInstructionsCore {
  constructor(pool,options={}){super(pool,options);this.venue=options.tradingVenue||new BinanceSpot({env:this.secretEnv});}
+ async robotWalletAllowance(robot){return robotWalletAllowance(this.pool,robot);}
  async validateRobotProviders(actor){admin(actor);const env=this.secretEnv;
   const market=async()=>{
    const key=env.COINAPI_MARKET_DATA_API_KEY||env.COINAPI_API_KEY||env.APIBRICKS_COINAPI_KEY;
@@ -45,12 +47,13 @@ export class TradingRobotCore extends TradingInstructionsCore {
    const existing=(await db.query('SELECT * FROM avis_core_v2.trading_robots WHERE venue=$1 AND symbol=$2 AND user_id=$3 FOR UPDATE',[venue,symbol,input.userId])).rows[0];if(existing&&(U(existing.position_quantity)>0n||(await db.query("SELECT 1 FROM avis_core_v2.trading_robot_orders WHERE robot_id=$1 AND status IN('CREATED','DISPATCHING','ACKNOWLEDGED')",[existing.robot_id])).rows.length))fault('ROBOT_POSITION');
    const id=existing?.robot_id||randomUUID();await db.query(`INSERT INTO avis_core_v2.trading_robots(robot_id,name,user_id,venue,symbol,index_id,security_id,account_id,key_ref,max_notional,daily_notional,max_loss,minimum_index,trailing_bps,quantity_step,price_tick,base_asset,quote_asset) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) ON CONFLICT(robot_id) DO UPDATE SET name=$2,index_id=$6,security_id=$7,account_id=$8,key_ref=$9,max_notional=$10,daily_notional=$11,max_loss=$12,minimum_index=$13,trailing_bps=$14,quantity_step=$15,price_tick=$16,base_asset=$17,quote_asset=$18,enabled=false,version=trading_robots.version+1`,[id,name,input.userId,venue,symbol,indexId,security?.security_id||null,input.accountId||null,input.keyRef||null,decimal(max),decimal(daily),decimal(loss),input.minimumIndex,input.trailingBps,market.quantityStep,market.priceTick,market.baseAsset,market.quoteAsset]);return {id};});
  }
- async toggleRobot(actor,input,key){admin(actor);if(typeof input.enabled!=='boolean')fault('INVALID_FIELD','enabled');return this.operation(actor,'TOGGLE_W_ROBOT',input,key,async db=>{const r=(await db.query('SELECT * FROM avis_core_v2.trading_robots WHERE robot_id=$1 FOR UPDATE',[input.robotId])).rows[0];if(!r)fault('ROBOT_SYMBOL');if(input.enabled)await this.assertTradingTestReviewed(db,r);await db.query('UPDATE avis_core_v2.trading_robots SET enabled=$2,version=version+1 WHERE robot_id=$1',[r.robot_id,input.enabled]);return {id:r.robot_id,enabled:input.enabled};});}
+ async toggleRobot(actor,input,key){admin(actor);if(typeof input.enabled!=='boolean')fault('INVALID_FIELD','enabled');return this.operation(actor,'TOGGLE_W_ROBOT',input,key,async db=>{const r=(await db.query('SELECT * FROM avis_core_v2.trading_robots WHERE robot_id=$1 FOR UPDATE',[input.robotId])).rows[0];if(!r)fault('ROBOT_SYMBOL');if(input.enabled){await this.assertTradingTestReviewed(db,r);await assertRobotWalletAllowance(db,r,'0');}await db.query('UPDATE avis_core_v2.trading_robots SET enabled=$2,version=version+1 WHERE robot_id=$1',[r.robot_id,input.enabled]);return {id:r.robot_id,enabled:input.enabled};});}
  async robotOrder(actor,input,key){admin(actor);return this.operation(actor,'W_ROBOT_ORDER',input,key,async db=>{
   const r=(await db.query('SELECT * FROM avis_core_v2.trading_robots WHERE robot_id=$1 FOR UPDATE',[input.robotId])).rows[0];if(!r||(!r.enabled&&input.side==='BUY'))fault('ROBOT_SYMBOL');if(!['BUY','SELL'].includes(input.side)||!/^[a-f0-9]{64}$/.test(input.signalId))fault('INVALID_FIELD','signalId');
   const q=money(input.quantity),p=money(input.price);let notional=q*p/S;if(r.venue==='AVIS'){const s=await this.security(db,r.security_id);notional=U(securityValue(input.quantity,s.denomination,input.price,s.quote_basis,s.currency_code));}if(!q||!p||q%U(r.quantity_step)||p%U(r.price_tick))fault('ROBOT_LIMIT');
   if(input.side==='BUY'){
    await this.assertTradingTestReviewed(db,r);
+   await assertRobotWalletAllowance(db,r,input.quantity);
    const idx=r.last_index,age=Date.now()-Date.parse(idx?.generatedAt);if(!idx||idx.sequence!==input.indexSequence||idx.instrumentId!==r.index_id||!Number.isFinite(idx.score)||idx.score<Number(r.minimum_index)||!Number.isFinite(idx.confidence)||idx.confidence<.2||!Number.isInteger(idx.sourceCount)||idx.sourceCount<2||!Number.isFinite(Date.parse(idx.validUntil))||!Number.isFinite(age)||age<0||age>180000||Date.parse(idx.validUntil)<=Date.now())fault('ROBOT_INDEX');
    if(U(r.position_quantity)>0n||notional>U(r.max_notional)||Number(r.realized_pnl)<=-Number(r.max_loss))fault('ROBOT_LIMIT');
    const spent=(await db.query("SELECT COALESCE(sum(notional),0)::text AS value FROM avis_core_v2.trading_robot_orders WHERE robot_id=$1 AND side='BUY' AND status<>'REJECTED' AND created_at>=date_trunc('day',now())",[r.robot_id])).rows[0].value;if(U(spent)+notional>U(r.daily_notional))fault('ROBOT_LIMIT');
@@ -63,6 +66,7 @@ export class TradingRobotCore extends TradingInstructionsCore {
  });}
  async entryDispatchRejection(db,robot,order){
   if(order.side!=='BUY')return null;
+  try{await assertRobotWalletAllowance(db,robot,order.quantity,order.id);}catch(error){if(['CRYPTO_TRADING_SELECTION_REQUIRED','CRYPTO_TRADING_ALLOWANCE_LIMIT'].includes(error.code))return error.code;throw error;}
   try{await this.assertTradingTestReviewed(db,robot);}catch(error){if(error.code==='TRADING_TEST_REVIEW_REQUIRED')return error.code;throw error;}
   const index=robot.last_index,age=Date.now()-Date.parse(order.created_at),indexAge=Date.now()-Date.parse(index?.generatedAt),expiry=Date.parse(index?.validUntil);
   return !robot.enabled||!Number.isFinite(age)||age<0||age>5000||!Number.isFinite(indexAge)||indexAge<0||indexAge>180000||!Number.isFinite(expiry)||expiry<=Date.now()||index?.sequence!==order.instruction.indexSequence?'ROBOT_ENTRY_EXPIRED':null;

@@ -109,10 +109,10 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
    access(actor,d.user_id);
    const active=(await db.query(`SELECT 1 FROM avis_core_v2.trading_robots r
      WHERE r.user_id=$1 AND (r.base_asset=$2 OR r.quote_asset=$2)
-     AND (r.enabled OR r.position_quantity>0 OR EXISTS
+     AND ((r.enabled AND COALESCE((SELECT s.enabled FROM avis_core_v2.wallet_trading_selections s WHERE s.account_id=$3),true)) OR r.position_quantity>0 OR EXISTS
        (SELECT 1 FROM avis_core_v2.trading_robot_orders o WHERE o.robot_id=r.robot_id
         AND o.status IN ('CREATED','DISPATCHING','ACKNOWLEDGED'))) LIMIT 1`,
-    [d.user_id,d.currency_code])).rows;
+    [d.user_id,d.currency_code,d.account_id])).rows;
    if(active.length)fault('CRYPTO_TRADING_POSITION','delegationId');
    const wallet=await db.query(`UPDATE avis_core_v2.ledger_accounts SET locked_balance=locked_balance-$2::numeric,updated_at=now()
      WHERE account_id=$1 AND locked_balance>=$2::numeric RETURNING available_balance::text,locked_balance::text`,[d.account_id,d.quantity]);

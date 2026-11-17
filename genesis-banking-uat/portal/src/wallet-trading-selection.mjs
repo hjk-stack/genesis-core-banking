@@ -56,6 +56,7 @@ export async function setWalletTradingSelection(core, actor, input, key) {
   if (account.owner_type !== 'USER' || account.wallet_scope !== 'FUNDING' ||
       account.account_category !== 'LIABILITY' || !account.network)
    fault('CRYPTO_WALLET_REQUIRED', 'accountId');
+  await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', ['wallet-trading:'+String(account.user_id)+':'+String(account.currency_code).toLowerCase()]);
   const current = (await db.query(`SELECT enabled,version FROM avis_core_v2.wallet_trading_selections
    WHERE account_id=$1 FOR UPDATE`, [intent.accountId])).rows[0];
   if ((current?.version || 0) !== intent.expectedVersion)

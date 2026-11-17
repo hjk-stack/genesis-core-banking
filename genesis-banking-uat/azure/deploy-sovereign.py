@@ -515,6 +515,13 @@ def main():
             result = api(opener, base, '/api/views/' + view)
             if not isinstance(result.get('rows'), list):
                 raise RuntimeError('Authenticated banking read failed')
+        stage = 'live accepted wallet allowance verification'
+        import importlib.util as allowance_import
+        from pathlib import Path as AllowancePath
+        allowance_spec = allowance_import.spec_from_file_location('live_wallet_allowances', AllowancePath(__file__).with_name('verify_wallet_allowances.py'))
+        allowance_module = allowance_import.module_from_spec(allowance_spec)
+        allowance_spec.loader.exec_module(allowance_module)
+        allowance_module.verify_wallet_allowances(lambda path: api(opener, base, path))
         stage = 'ABIQ issuer and account verification'
         catalogue = api(opener, base, '/api/views/cryptocatalogue')['rows']
         securities = api(opener, base, '/api/views/cryptosecurities')['rows']
