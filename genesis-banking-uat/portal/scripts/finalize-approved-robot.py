@@ -1,4 +1,4 @@
-"""Small, idempotent presentation corrections; never alter account data."""
+"""Idempotent presentation corrections; never alter account data."""
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 def replace(path,before,after):
@@ -11,6 +11,9 @@ replace('test-browser/crypto-layout.mjs',"name:'Refresh view',exact:true","name:
 replace('test-browser/crypto-layout.mjs',"live.locator('[data-robot-arm=SELL]').evaluate(element=>getComputedStyle(element).animationName)","live.locator('.ar-robot-image').evaluate(element=>getComputedStyle(element).animationName)")
 replace('public/approved-robot.mjs',"esc(formatted(price))","esc(formatted(Number(price.toPrecision(8))))")
 replace('public/approved-robot.mjs',"  // Fee currency does not prove fee type:","  for(const cell of host.querySelectorAll('.terminal-scroll-tape td'))cell.title=cell.textContent;\n  // Fee currency does not prove fee type:")
+replace('public/approved-robot.mjs',"  q('[data-ar-markets]').innerHTML=top.map(r=>card(r)).join('');const items=rows.slice(0,100).map(r=>card(r,true)).join(''),track=q('[data-ar-ticker]');", "  const m=snapshot?.market,quote=m?.quote,observedQuote=quote&&numeric(quote.bid)>0&&numeric(quote.ask)>0;\n  const liveCard=compact=>observedQuote?`<div class=\"ar-market ${compact?'ar-market-small':''}\" data-active-market-quote title=\"${esc(quote.receivedAt||'')}\"><span class=\"ar-coin\">${esc(m.baseAsset)}</span><div><strong>${esc(m.baseAsset)} / ${esc(m.quoteAsset)}</strong><span>Bid ${esc(formatted(quote.bid))} · Ask ${esc(formatted(quote.ask))}</span></div></div>`:'';\n  const references=observedQuote?top.filter(r=>String(r.currency_code).toUpperCase()!==String(m.baseAsset).toUpperCase()).slice(0,3):top;\n  q('[data-ar-markets]').innerHTML=liveCard(false)+references.map(r=>card(r)).join('');const items=liveCard(true)+rows.slice(0,100).map(r=>card(r,true)).join(''),track=q('[data-ar-ticker]');")
+replace('public/approved-robot.mjs',"+'</dl>';renderChart();\n }\n return {mount,update", "+'</dl>';renderMarkets();renderChart();\n }\n return {mount,update")
+replace('test/approved-robot.test.mjs',"assert.equal(host.querySelectorAll('.ar-ticker-copy:first-child .ar-market').length,6);", "assert.equal(host.querySelectorAll('.ar-ticker-copy:first-child .ar-market').length,7);assert.match(host.querySelector('[data-active-market-quote]').textContent,/aAVISP \\/ CHF/);")
 replace('../azure/deploy-sovereign.py',"        '/crypto.css': 'public/crypto.css',", "        '/crypto.css': 'public/crypto.css',\n        '/approved-robot.mjs': 'public/approved-robot.mjs',\n        '/approved-robot.css': 'public/approved-robot.css',\n        '/crypto-icons/robot-approved.jpg': 'public/crypto-icons/robot-approved.jpg',")
 replace('../azure/test_deploy_sovereign.py',"'/crypto.css': 'public/crypto.css'}", "'/crypto.css': 'public/crypto.css',\n                 '/approved-robot.mjs': 'public/approved-robot.mjs',\n                 '/approved-robot.css': 'public/approved-robot.css',\n                 '/crypto-icons/robot-approved.jpg': 'public/crypto-icons/robot-approved.jpg'}")
 p=ROOT/'public/approved-robot.css';css=p.read_text()
@@ -26,4 +29,4 @@ if marker not in css:
 .approved-robot .terminal-auto input{padding:0;box-sizing:border-box;min-height:0;height:20px;min-width:34px;flex:0 0 34px}
 '''
  p.write_text(css)
-print('Full-width layout, tape, switch, deployment asset hashes and browser checks updated; exact amount strings retained.')
+print('Full-width layout, live quote ticker, exact amounts and deployment asset verification integrated.')
