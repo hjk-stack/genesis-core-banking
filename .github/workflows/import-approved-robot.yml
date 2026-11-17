@@ -17,6 +17,9 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
       - name: Verify original approved artwork and integrate terminal
         run: |
           python3 - <<'PY'
@@ -26,14 +29,22 @@ jobs:
           PY
           python3 genesis-banking-uat/portal/scripts/install-approved-robot.py
           node --check genesis-banking-uat/portal/server.mjs
+          node --check genesis-banking-uat/portal/public/app.mjs
           node --check genesis-banking-uat/portal/public/trading-panel.mjs
           node --check genesis-banking-uat/portal/public/trading-live.mjs
           node --check genesis-banking-uat/portal/public/approved-robot.mjs
+      - name: Test real live controller and approved interface together
+        working-directory: genesis-banking-uat/portal
+        run: |
+          npm ci --no-audit --no-fund
+          node --test test/approved-robot.test.mjs test/trading-live-ui.test.mjs test/index-advice-ui.test.mjs test/trading-testing-ui.test.mjs test/exchange-intent.test.mjs
+      - name: Commit exact inspected integration paths
+        run: |
           git config user.name 'AVISPay release automation'
           git config user.email 'avispay-release@users.noreply.github.com'
-          git add genesis-banking-uat/portal/server.mjs genesis-banking-uat/portal/public/trading-panel.mjs genesis-banking-uat/portal/public/trading-live.mjs
+          git add genesis-banking-uat/portal/server.mjs genesis-banking-uat/portal/public/trading-panel.mjs genesis-banking-uat/portal/public/trading-live.mjs genesis-banking-uat/portal/public/approved-robot.mjs genesis-banking-uat/portal/public/app.mjs genesis-banking-uat/portal/test/approved-robot.test.mjs genesis-banking-uat/portal/test-browser/crypto-layout.mjs
           if ! git diff --cached --quiet; then
-            git commit -m 'Integrate approved robot with existing live controller and reviewed exchange flow'
+            git commit -m 'Verify approved robot chart, wallet preservation and reviewed order navigation'
             git push origin HEAD:fix/portfolio-linked-crypto-wallets-20261117
           fi
       - name: Export checked-out source for visual acceptance
