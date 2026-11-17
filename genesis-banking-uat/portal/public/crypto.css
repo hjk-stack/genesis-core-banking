@@ -1,164 +1,87 @@
-#main:has(> #view > .crypto-section){max-width:none}
-.crypto-receive [data-deposit-form]{width:100%;max-width:100%;min-width:0}
-.crypto-receive [data-deposit-form] label,.crypto-receive [data-deposit-form] input{min-width:0;max-width:100%}
-.crypto-receive [data-deposit-result]{max-width:100%;overflow-wrap:anywhere}
+/* Wallet, converter and trading presentation. Financial actions remain in their modules. */
+#main:has(> #view > .crypto-section){max-width:none;min-width:0}
+.crypto-section{margin:0 0 30px;min-width:0;max-width:100%}
+.crypto-section-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:14px 0}
+.crypto-section-heading>div:first-child{display:flex;align-items:center;gap:12px}
+.crypto-section-heading h2,.crypto-section-heading h3{margin:0}
+.crypto-section-heading>span{color:#586579;font-size:13px}
+.crypto-section-number{font-size:12px;background:#e8edf3;border-radius:7px;padding:7px 10px;color:#455570;font-weight:700}
+.crypto-scroller{display:flex;flex-wrap:nowrap;gap:12px;overflow-x:auto;max-width:100%;padding:4px 2px 15px;scroll-snap-type:x proximity;overscroll-behavior-x:contain;min-width:0;align-items:stretch}
+.crypto-wallet,.security-wallet{box-sizing:border-box;flex:0 0 245px;min-width:245px;max-width:245px;scroll-snap-align:start;border-radius:12px;padding:18px;color:#f3f7ff;border:1px solid #34415d;background:linear-gradient(125deg,#18243a,#10182a);text-align:left;white-space:normal;overflow-wrap:anywhere}
+.crypto-wallet-title{display:flex;gap:11px;align-items:center}
+.crypto-wallet-title>div{min-width:0}
+.crypto-wallet-title strong{display:block;font-size:15px}
+.crypto-wallet-title span,.crypto-holder{font-size:11px;color:#b9c4d9}
+.coin-icon{width:32px;height:32px;object-fit:contain;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+.coin-monogram{border-radius:50%;border:1px solid #b8c4d5;background:#e9edf2;color:#24334c;font-size:10px;font-weight:700}
 .crypto-wallet-network{display:flex;flex-direction:column;gap:5px;margin:14px 0 0;color:#b9c4d9;font-size:11px;min-width:0}
 .crypto-wallet-network select{width:100%;min-width:0;max-width:100%;padding:7px 9px;border:1px solid #64718b;border-radius:6px;background:#17243a;color:#f3f7ff;font-size:12px}
-.crypto-wallet [data-wallet-error]{font-size:11px;color:#ffbfc4;overflow-wrap:anywhere}
+.crypto-wallet dl{display:grid;grid-template-columns:1fr auto;font-size:12px;margin:18px 0 10px;gap:7px}
+.crypto-wallet dt{color:#b9c4d9}
+.crypto-wallet dd{margin:0;text-align:right}
+.crypto-wallet-actions{display:flex;justify-content:flex-end;gap:8px}
+.crypto-wallet-actions button{flex:0 0 34px;background:#ffffff0c;color:#edf4ff;border:1px solid #64718b;font-size:23px;width:34px;height:36px;padding:0}
 .crypto-wallet-actions button:disabled{opacity:.45;cursor:wait}
-.crypto-receive-content{display:flex;align-items:center;flex-direction:column;gap:16px;width:100%;min-width:0}
-.crypto-receive [data-receive-network]{width:100%;min-width:0}
-.crypto-included-networks{grid-column:1/-1;min-width:0;font-size:12px;color:#586579}
-.crypto-included-networks p{margin:7px 0 0;overflow-wrap:anywhere;color:#17243a}
-.crypto-section{margin:0 0 30px;min-width:0}.crypto-section-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:14px 0}.crypto-section-heading>div:first-child{display:flex;align-items:center;gap:12px}.crypto-section-heading h2,.crypto-section-heading h3{margin:0}.crypto-section-heading>span{color:#586579;font-size:13px}.crypto-section-number{font-size:12px;background:#e8edf3;border-radius:7px;padding:7px 10px;color:#455570;font-weight:700}.crypto-scroller{display:flex;gap:12px;overflow-x:auto;padding:4px 2px 15px;scroll-snap-type:x proximity;overscroll-behavior-x:contain;min-width:0}.crypto-wallet,.security-wallet{flex:0 0 245px;scroll-snap-align:start;border-radius:12px;padding:18px;color:#f3f7ff;border:1px solid #34415d;background:linear-gradient(125deg,#18243a,#10182a);text-align:left}.crypto-wallet-title{display:flex;gap:11px;align-items:center}.crypto-wallet-title strong{display:block;font-size:15px}.crypto-wallet-title span,.crypto-holder{font-size:11px;color:#b9c4d9}.coin-icon{width:32px;height:32px;object-fit:contain;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}.coin-monogram{border-radius:50%;border:1px solid #b8c4d5;background:#e9edf2;color:#24334c;font-size:10px;font-weight:700}.crypto-wallet dl{display:grid;grid-template-columns:1fr auto;font-size:12px;margin:18px 0 10px;gap:7px}.crypto-wallet dt{color:#b9c4d9}.crypto-wallet dd{margin:0;text-align:right}.crypto-wallet-actions{display:flex;justify-content:flex-end;gap:8px}.crypto-wallet-actions button{background:#ffffff0c;color:#edf4ff;border:1px solid #64718b;font-size:23px;width:38px;height:36px;padding:0}.crypto-inline-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.crypto-add-card{min-width:240px;min-height:160px;border:1px dashed #94a3b8;color:#3a4e70}.security-wallet{display:flex;flex-direction:column;gap:6px;cursor:pointer;min-height:190px}.security-wallet.selected{outline:2px solid #31ac9b;outline-offset:-2px;background:linear-gradient(125deg,#25394b,#152c36)}.security-wallet-top{display:flex;align-items:center;justify-content:space-between}.security-symbol{font-size:29px;color:#c9d4e8}.crypto-badge{border:1px solid #a6b5c7;border-radius:20px;padding:2px 8px;font-size:10px;letter-spacing:.06em;text-transform:uppercase}.security-wallet>strong{font-size:16px}.security-wallet>span:not(.security-wallet-top){font-size:11px;color:#c2cddd}.security-wallet .security-volume{font-size:16px!important;color:#fff!important;padding-top:8px}.security-detail{background:#fff;border:1px solid #dbe2eb;border-radius:14px;padding:22px;margin-top:7px}.security-conversion{display:grid;grid-template-columns:minmax(0,1fr) 50px minmax(0,1fr);gap:20px;align-items:start}.conversion-arrow{font-size:42px;color:#53667a;align-self:center;text-align:center}.crypto-details{display:grid;grid-template-columns:minmax(100px,.8fr) minmax(0,1.2fr);gap:9px 15px;font-size:12px;margin:14px 0}.crypto-details dt{color:#65738a}.crypto-details dd{margin:0;font-weight:500;overflow-wrap:anywhere}.crypto-source{font-size:11px;color:#67768b;margin-top:14px}.crypto-action-history code{display:block;font-size:10px;overflow-wrap:anywhere}.crypto-dialog{width:min(680px,94vw);max-height:90vh;overflow:auto;border-radius:14px;padding:24px}.crypto-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.crypto-form-grid>label{min-width:0}.crypto-form-grid select,.crypto-form-grid input{width:100%}.crypto-form-grid .crypto-check{grid-column:1/-1;display:flex;flex-direction:row;align-items:center;font-size:12px}.crypto-check input{width:auto}.crypto-receive{display:flex;align-items:center;flex-direction:column;gap:16px}.crypto-receive>label{width:100%}.crypto-receive code{overflow-wrap:anywhere;max-width:100%;font-size:13px}.crypto-qr{width:240px;height:240px}.crypto-robot{display:grid;grid-template-columns:250px minmax(0,1fr);gap:24px;background:#f0f4f8;border:1px solid #dce4ef;padding:24px;border-radius:14px}.crypto-robot-intro p{color:#607089;font-size:12px}.robot-mark{font-size:60px;color:#43617c}.crypto-robot-channels{display:flex;gap:14px;overflow-x:auto}.crypto-robot-channels>article{min-width:300px;background:#fff;padding:16px;border-radius:10px;border:1px solid #d7e1ea}.crypto-robot-channels p{font-size:12px}.crypto-market{flex:0 0 190px;border:1px solid #dce3eb;background:#fff;border-radius:10px;padding:15px}.crypto-market>div{display:flex;align-items:center;gap:9px}.crypto-market .crypto-details{grid-template-columns:35px 1fr;gap:4px;font-size:11px}.market-arrow{margin-left:auto;font-size:34px;line-height:1}.up{color:#168466}.down{color:#ba3f45}.flat{color:#607089}.market-change{display:block;font-size:11px}.crypto-market small{font-size:9px;color:#6b778a}.crypto-admin-filter{display:flex;gap:18px;align-items:center;margin-bottom:15px}.crypto-admin-filter input{width:250px}.crypto-admin-filter>span{font-size:12px;color:#607089}.crypto-catalogue{max-height:590px;overflow:auto;border:1px solid #dce3eb;border-radius:12px;background:white}.crypto-currency-row{padding:10px 16px;border-bottom:1px solid #edf0f5;display:grid;grid-template-columns:220px 1fr;gap:12px}.crypto-currency-row>div:first-child{display:flex;gap:10px;align-items:center}.crypto-currency-row strong{font-size:12px}.crypto-currency-row>div>span:not(.coin-icon){font-size:10px;color:#6b778a}.crypto-network-switches{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.crypto-switch{display:flex;align-items:center;gap:6px;font-size:10px;padding:5px 9px;border-radius:20px}.crypto-switch>span{width:18px;height:11px;border-radius:9px;background:#9da8b6;position:relative}.crypto-switch>span:after{content:'';display:block;border-radius:50%;width:7px;height:7px;background:white;position:absolute;left:2px;top:2px}.crypto-switch.enabled{border-color:#209a74;color:#14734d;background:#eef9f4}.crypto-switch.enabled>span{background:#209a74}.crypto-switch.enabled>span:after{left:9px}.crypto-currency-row>.form-error{grid-column:1/-1;margin:0;font-size:11px}.crypto-connectors{margin-top:18px;font-size:12px}.crypto-connectors p{padding:6px 0}.crypto-connectors button{margin-left:12px;font-size:11px}.crypto-section .form-error:empty{display:none}
-@media(max-width:1000px){.crypto-robot{grid-template-columns:1fr}.crypto-robot-intro{display:flex;align-items:center;gap:15px}.crypto-robot-intro p{max-width:250px}.crypto-currency-row{grid-template-columns:180px 1fr}}
-@media(max-width:600px){.crypto-section-heading{align-items:flex-start;flex-wrap:wrap}.crypto-section-heading h2{font-size:16px}.crypto-section-heading>span{display:none}.crypto-wallet,.security-wallet{flex-basis:220px}.security-conversion{grid-template-columns:1fr;gap:6px}.conversion-arrow{transform:rotate(90deg);font-size:30px}.security-detail{padding:16px}.crypto-form-grid{grid-template-columns:1fr}.crypto-admin-filter{align-items:flex-start;flex-direction:column;gap:8px}.crypto-admin-filter input{width:100%}.crypto-currency-row{grid-template-columns:1fr}.crypto-details{font-size:11px;gap:8px}.crypto-dialog{padding:18px}.crypto-robot{padding:16px}.crypto-market{flex-basis:170px}.crypto-robot-intro{flex-wrap:wrap}.crypto-robot-intro p{margin-top:0}.crypto-robot-channels>article{min-width:270px}}
-
-.index-advice{margin:18px 0 26px;padding:20px;border:1px solid #dce3eb;border-radius:12px;background:#fff}.index-advice textarea{display:block;box-sizing:border-box;width:100%;resize:vertical;min-height:200px;margin:9px 0;padding:12px;border:1px solid #bdc9d8;border-radius:8px;font:inherit;font-size:13px;line-height:1.55}.index-advice form>label{font-weight:600;font-size:12px}.index-advice [data-index-saved]{font-size:12px;color:#237753;align-self:center}.index-taxonomy{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;margin-top:12px}.index-candidates{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px;margin-top:14px}.index-candidates article{padding:14px;border:1px solid #e0e6ee;border-radius:8px;min-width:0}.index-candidates p{overflow-wrap:anywhere}.index-candidates .crypto-section-heading{font-size:12px;align-items:flex-start}.index-candidates .crypto-section-heading>span{font-size:10px}.index-candidates a{font-size:11px}.index-advice .crypto-section-heading>h3{font-size:16px}.index-advice .crypto-inline-actions{align-items:center}
-.trading-testing{margin:18px 0 26px;padding:20px;border:1px solid #dce3eb;border-radius:12px;background:#fff;min-width:0}.trading-testing h3{font-size:16px}.trading-testing h4{font-size:13px;margin:16px 0 10px}.trading-test-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:14px;border:0;margin:18px 0 0;padding:0;min-width:0}.trading-test-fields label{display:flex;flex-direction:column;gap:7px;min-width:0;font-size:12px}.trading-test-fields input,.trading-test-fields select{width:100%;max-width:100%;min-width:0;box-sizing:border-box}.trading-test-fields [hidden]{display:none}.trading-testing .crypto-inline-actions{align-items:center}.trading-testing [data-test-progress],.trading-testing [data-replay-file]{font-size:12px;overflow-wrap:anywhere}.trading-test-report{margin-top:20px;padding:16px;border:1px solid #e0e6ee;border-radius:9px;min-width:0}.trading-test-report>.crypto-section-heading{align-items:flex-start}.trading-test-result{font-size:12px;color:#34465d}.trading-test-checks{padding-left:20px;font-size:12px}.trading-test-checks li{margin:10px 0}.trading-test-checks p{margin:4px 0;color:#586579;white-space:pre-wrap;overflow-wrap:anywhere}.trading-test-records{display:grid;gap:10px;font-size:12px;min-width:0}.trading-testing pre{max-height:350px;max-width:100%;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;background:#f5f7fa;border-radius:6px;font-size:11px}.trading-test-history{margin-top:18px;font-size:12px}.trading-test-history [data-test-history]{display:grid;gap:7px;max-height:320px;overflow:auto;margin-top:10px}.trading-test-history button{display:flex;flex-direction:column;gap:5px;text-align:left;white-space:normal;overflow-wrap:anywhere}.trading-test-history button[aria-pressed=true]{border-color:#237753}.trading-test-history span{color:#65738a;font-size:11px}.trading-testing [data-test-engine] .crypto-details{max-width:650px}.trading-testing .crypto-source{line-height:1.55}.trading-testing .form-error{overflow-wrap:anywhere}@media(max-width:600px){.trading-testing{padding:14px}.trading-test-report{padding:12px}.trading-testing>.crypto-section-heading{gap:10px}.trading-testing .crypto-section-heading>span{display:block}}
-.trading-test-records>details{min-width:0}.trading-test-table{max-width:100%;overflow-x:auto;margin-top:10px}.trading-test-table table{width:100%;border-collapse:collapse;font-size:11px}.trading-test-table th,.trading-test-table td{text-align:left;vertical-align:top;padding:8px;border-bottom:1px solid #e0e6ee;white-space:nowrap}.trading-test-table th{font-weight:600;color:#586579}
-.trading-live{border:1px solid #d8e3ed;border-radius:15px;background:#fff;margin:18px 0 22px;padding:22px;min-width:0}.trading-live-heading,.trading-market-heading,.trading-execution-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;min-width:0}.trading-live-heading h3{margin:5px 0 0;font-size:19px}.trading-live-heading .eyebrow{font-size:10px;color:#557486;letter-spacing:.14em;margin:0}.trading-live-heading>button{flex-shrink:0}.trading-live-select{display:flex;flex-direction:column;gap:7px;max-width:620px;margin:20px 0;font-size:12px;font-weight:600}.trading-live-select select{width:100%;min-width:0}.trading-live-workspace{display:grid;grid-template-columns:minmax(220px,280px) minmax(0,1fr);gap:24px;min-width:0}.trading-live-robot{position:relative;display:flex;flex-direction:column;align-items:center;background:radial-gradient(ellipse at 50% 33%,#284357 0,#17283c 42%,#101d2f 100%);border:1px solid #30485f;border-radius:13px;padding:20px 14px;color:#e9f3fb;min-width:0}.trading-robot-name{text-align:center;display:grid;gap:7px;font-size:14px;overflow-wrap:anywhere}.trading-robot-name span{font-size:11px;color:#b0c4d4}.trading-robot-focus{display:block;border:0;background:none!important;padding:0;width:100%;max-width:250px;box-shadow:none;color:inherit}.trading-robot-focus:disabled{opacity:1;cursor:default}.trading-robot-focus:not(:disabled):hover{filter:drop-shadow(0 0 12px #72d3c13b)}.trading-robot-focus:focus-visible{outline:2px solid #91ead6;outline-offset:0;border-radius:14px}.trading-robot-art{display:block;width:100%;height:auto;overflow:visible}.trading-robot-latest{display:grid;gap:7px;text-align:center;font-size:12px;min-height:47px;overflow-wrap:anywhere}.trading-robot-latest span{font-size:10px;color:#acbfd0}.trading-robot-filters{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;margin-top:16px}.trading-robot-filters button{padding:6px 8px;border:1px solid #496177;border-radius:6px;background:#20364b;color:#dbe9f4;font-size:10px}.trading-robot-filters button[aria-pressed=true]{color:#d8fff4;background:#255348;border-color:#75c7b4}.trading-live-robot[data-robot-activity=BUY] [data-robot-arm=BUY],.trading-live-robot[data-robot-activity=SELL] [data-robot-arm=SELL]{stroke:#9bffe0;filter:drop-shadow(0 0 7px #69efcd);animation:trading-execution-glow 1.8s ease-out 1}.trading-live-robot[data-robot-activity]:not([data-robot-activity=""]) .trading-robot-w{stroke:#c2ffec;filter:drop-shadow(0 0 7px #69efcd)}@keyframes trading-execution-glow{0%{filter:drop-shadow(0 0 3px #69efcd)}35%{filter:drop-shadow(0 0 12px #69efcd)}100%{filter:drop-shadow(0 0 3px #69efcd)}}
-.trading-live-screen{min-width:0}.trading-market-heading{align-items:flex-start;font-size:14px;padding:3px 0 10px;border-bottom:1px solid #e3eaf1}.trading-market-heading strong{overflow-wrap:anywhere}.trading-market-heading>span{font-size:10px;color:#64798c;text-align:right;overflow-wrap:anywhere;max-width:65%}.trading-live-details{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px 20px;margin:17px 0;font-size:12px;min-width:0}.trading-live-details>div{min-width:0}.trading-live-details dt{color:#63778b;font-size:10px;line-height:1.4;margin-bottom:5px}.trading-live-details dd{margin:0;font-weight:600;overflow-wrap:anywhere;line-height:1.45}.trading-live [data-live-quote] dd{font-size:17px;color:#17394b}.trading-live-chart{margin:16px 0 0;background:linear-gradient(#f3f7fa,#fafcfd);border:1px solid #e2ebf1;border-radius:8px;min-width:0}.trading-live-chart svg{display:block;width:100%;height:136px}.trading-live-chart text{font:12px sans-serif;fill:#76899a}.trading-live-chart polyline{fill:none;stroke-width:2;vector-effect:non-scaling-stroke;stroke-linejoin:round}.trading-live-chart .quote-bid{stroke:#229984}.trading-live-chart .quote-ask{stroke:#5b85b6}.trading-live-chart circle.quote-bid{fill:#229984}.trading-live-chart circle.quote-ask{fill:#5b85b6}.trading-chart-caption{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;font-size:10px;color:#62788d;margin:8px 0}.trading-chart-caption i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:3px}.quote-bid-key{background:#229984}.quote-ask-key{background:#5b85b6;margin-left:12px}.trading-chart-caption .quote-bid-key{margin-left:0}.trading-live-audit{border-top:1px solid #e3eaf1;margin-top:15px}.trading-live-audit .trading-live-details{grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr))}.trading-live .crypto-source{line-height:1.5;overflow-wrap:anywhere}.trading-live-orders{margin-top:18px;font-size:12px;min-width:0}.trading-live-table{max-width:100%;overflow-x:auto;margin-top:12px}.trading-live-table table{width:100%;border-collapse:collapse;font-size:11px}.trading-live-table th,.trading-live-table td{text-align:left;padding:10px 9px;white-space:nowrap;border-bottom:1px solid #e1e8ef}.trading-live-table th{font-size:10px;color:#60758a;font-weight:600}.trading-live-table tbody tr.is-focused{background:#e7f6f1;outline:1px solid #83cbb7;outline-offset:-1px}.trading-live-table tbody tr:focus{outline:2px solid #41a88e;outline-offset:-2px}.trading-execution-heading{margin:22px 0 0}.trading-execution-heading h4{margin:0;font-size:13px}.trading-execution-heading span{font-size:10px;color:#62788d}.trading-live .form-error{overflow-wrap:anywhere}.trading-instructions-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;margin:20px 0}.trading-instructions-grid>div{min-width:0}.trading-instructions-grid .index-advice,.robot-instructions{box-sizing:border-box;height:100%;margin:0;padding:20px;border:1px solid #dce3eb;border-radius:12px;background:#fff;min-width:0}.robot-instructions h3{font-size:16px}.robot-instructions textarea{display:block;box-sizing:border-box;width:100%;resize:vertical;min-height:244px;margin:9px 0;padding:12px;border:1px solid #bdc9d8;border-radius:8px;font:12px ui-monospace,SFMono-Regular,monospace;line-height:1.6}.robot-instructions form>label{font-weight:600;font-size:12px}.robot-instructions .crypto-inline-actions{align-items:center}.robot-instructions [data-robot-instruction-saved]{color:#237753;font-size:11px}.robot-instructions .crypto-source,.robot-instructions .form-error{line-height:1.5;overflow-wrap:anywhere}.trading-instructions-grid .index-advice textarea{min-height:244px}.index-evidence{margin-top:0}
-@media(min-width:1800px){.trading-live-workspace{grid-template-columns:310px minmax(0,1fr)}.trading-live-audit .trading-live-details{grid-template-columns:repeat(5,minmax(0,1fr))}}@media(max-width:1000px){.trading-live-workspace{grid-template-columns:1fr;gap:16px}.trading-live{padding:17px}.trading-live [data-live-quote] dd{font-size:14px}.trading-instructions-grid{grid-template-columns:1fr}.trading-live-audit .trading-live-details{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:720px){.trading-live-workspace{grid-template-columns:1fr}.trading-live-robot{padding:17px 14px}.trading-robot-focus{max-width:210px}.trading-live-heading{align-items:flex-start;flex-wrap:wrap}.trading-live-heading h3{font-size:17px}.trading-market-heading{gap:9px}.trading-market-heading>span{max-width:60%}.trading-instructions-grid .index-advice,.robot-instructions{padding:14px}.trading-live-table{font-size:10px}.trading-live-details{gap:13px}.trading-execution-heading{flex-wrap:wrap;gap:7px}}@media(prefers-reduced-motion:reduce){.trading-live-robot [data-robot-arm]{animation:none!important}}
-.trading-live-liquidity{margin:18px 0;padding:16px;border:1px solid #e1e8ef;border-radius:8px;font-size:12px;min-width:0}.trading-live-liquidity h4{font-size:12px;margin:14px 0 8px}.trading-live-liquidity h5{font-size:11px;margin:12px 0 4px}.trading-book-levels{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-bottom:16px}.trading-book-levels>section{min-width:0}.trading-security-proof{border-top:1px solid #e1e8ef;margin-top:16px;padding-top:6px;min-width:0}.trading-security-proof .trading-live-details{grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr))}.trading-live-liquidity [data-backing-progress]{font-size:11px;color:#63778b}.trading-live-liquidity details{min-width:0}@media(max-width:1000px){.trading-book-levels{grid-template-columns:1fr}.trading-live-liquidity{padding:12px}}
-
-/* AVISPay crypto suite: wallets first, mounted trading robot and INDEX directly below. */
-.crypto-suite-navigation{display:flex;gap:9px;overflow-x:auto;scrollbar-width:thin;padding:9px 1px 15px;position:relative;max-width:100%}
-.crypto-suite-navigation button{flex:0 0 auto;border-radius:9px;border:1px solid rgba(125,150,170,.28);background:linear-gradient(145deg,rgba(255,255,255,.84),rgba(205,225,234,.38));backdrop-filter:blur(16px) saturate(1.25);box-shadow:inset 0 1px rgba(255,255,255,.91),0 2px 9px rgba(18,43,67,.07);color:#243749;font-weight:650;min-height:43px;padding:10px 15px}
-.crypto-suite-navigation button:focus-visible{outline:2px solid #527f9a;outline-offset:2px}
-.crypto-trading-desk{scroll-margin-top:18px;border:1px solid rgba(133,162,177,.35);background:linear-gradient(135deg,rgba(238,247,249,.72),rgba(255,255,255,.87) 40%,rgba(227,237,242,.57));border-radius:14px;box-shadow:inset 0 1px rgba(255,255,255,.94),0 14px 38px rgba(32,55,72,.085);padding:clamp(14px,2vw,27px);min-width:0}
-.crypto-trading-console{min-width:0;max-width:100%;overflow-wrap:anywhere}
-.crypto-trading-console .trading-live-workspace{max-width:100%}
-#crypto-wallet-desk,#crypto-security-desk,#crypto-market-desk{scroll-margin-top:18px}
-@media(max-width:660px){.crypto-suite-navigation{gap:7px}.crypto-suite-navigation button{font-size:12px;padding:10px 12px}.crypto-trading-desk{padding:12px;border-radius:11px}.crypto-trading-desk .crypto-section-heading{flex-wrap:wrap;gap:8px}}
-
-/* AVISPay 2026 multi-asset high-speed trading: actual data, glass/chrome surfaces. */
-.crypto-suite-navigation{display:none}
-.crypto-trading-desk{background:linear-gradient(136deg,#f0f7f1 0%,#fbfffc 31%,#eaf1ed 100%);border:1px solid #d9e7dc;padding:clamp(10px,1.8vw,23px);border-radius:18px;box-shadow:inset 0 2px #fff,0 15px 34px #1c63301a;scroll-margin-top:18px}
-.crypto-trading-desk>.crypto-section-heading{margin-bottom:14px}
-.crypto-trading-desk .crypto-section-number{background:#d8e9d9;color:#375940}
-.crypto-trading-desk .crypto-section-heading h2{font-size:clamp(16px,2vw,22px);letter-spacing:-.03em}
-.crypto-trading-console{width:100%;min-width:0;overflow-wrap:anywhere}
-.trading-live{background:transparent;box-shadow:none;border:0;padding:0}
-.trading-live-heading{background:linear-gradient(90deg,#f9fff9,#e6f2e9);padding:12px 15px;border:1px solid #dce9dd;border-radius:13px}
-.trading-live-heading .eyebrow{color:#347a46}
-.trading-live-heading h3{color:#234a30;font-weight:800}
-.trading-live-select{display:flex;align-items:center;gap:13px;flex-wrap:wrap;margin:15px 0 12px;color:#315040;font-weight:650}
-.trading-live-select select{flex:1;min-width:180px;max-width:560px;border:1px solid #b8d6be;background:linear-gradient(#fff,#f4f8f5);border-radius:10px}
-.trading-live-workspace{grid-template-columns:minmax(180px,240px) minmax(150px,1fr) minmax(150px,1fr) minmax(300px,2.3fr);gap:10px;align-items:stretch}
-.trading-live-robot{background:radial-gradient(ellipse at 70% 0%,#315a47 0%,#102d25 38%,#0b1f23 100%);border:1px solid #547f68;border-radius:17px;color:#f0fff7;box-shadow:inset 0 1px #ffffff6c,0 10px 20px #135a3333;min-height:390px;padding:15px 9px}
-.trading-robot-focus{max-width:220px;filter:drop-shadow(0 8px 12px #021d1ba8)}
-.trading-robot-art .trading-robot-eyes,.trading-robot-art .trading-robot-w{filter:drop-shadow(0 0 8px #a5ffc2)}
-.terminal-live-trades,.terminal-live-book,.terminal-price-screen{min-width:0;background:linear-gradient(145deg,#fffefddd,#f4fbf7eb);border:1px solid #dce8dd;border-radius:16px;padding:13px 9px;box-shadow:inset 0 2px #fff,0 9px 18px #19442618}
-.terminal-live-trades h4,.terminal-live-book h4{font-size:13px;margin:0 0 10px;color:#203b2c;white-space:nowrap}
-.terminal-live-trades h4 span{font-size:10px;color:#2b9854}
-.terminal-scroll-tape{overflow:auto;max-height:430px;min-height:275px}
-.terminal-scroll-tape table{width:100%;border-collapse:collapse;font-size:11px;font-variant-numeric:tabular-nums}
-.terminal-scroll-tape th{text-align:right;color:#667b6d;font-size:10px;font-weight:550;border-bottom:1px solid #dce6dd;padding:8px 4px}
-.terminal-scroll-tape td{text-align:right;padding:7px 4px;white-space:nowrap;border-bottom:1px solid #e7efe8}
-.terminal-scroll-tape th:first-child,.terminal-scroll-tape td:first-child{text-align:left}
-.terminal-scroll-tape p{font-size:12px;color:#697b71;text-align:center;margin:35px 5px}
-.terminal-up td:nth-child(2){color:#17833b;font-weight:800}
-.terminal-down td:nth-child(2){color:#cf3c3c;font-weight:800}
-.terminal-price-screen .trading-live-chart{min-height:178px;background:linear-gradient(#fff,#f7fbf8);border:1px solid #e2eee5;border-radius:11px;padding:8px}
-.terminal-price-screen .trading-live-chart svg{min-height:178px}
-.terminal-price-screen .trading-live-audit{font-variant-numeric:tabular-nums}
-.terminal-trading-actions{display:flex;align-items:center;justify-content:flex-end;gap:11px;flex-wrap:wrap;padding:12px 4px 5px}
-.terminal-trading-actions>button{border:1px solid #ffffff88;border-radius:12px;color:white;min-height:50px;padding:12px 20px;font-weight:800;min-width:150px;text-shadow:0 1px #0002;box-shadow:inset 0 2px #ffffff88,0 5px 12px #10321b32}
-.terminal-trading-actions>.terminal-buy{background:linear-gradient(160deg,#67ca59,#1e932e 48%,#146d26)}
-.terminal-trading-actions>.terminal-sell{background:linear-gradient(160deg,#f77572,#d32d2d 48%,#9b1725)}
-.terminal-auto{display:flex;gap:9px;align-items:center;font-size:12px;font-weight:750;color:#25432d;cursor:pointer;white-space:nowrap;padding:0 10px}
-.terminal-auto input{width:18px;height:18px;accent-color:#258838}
-.terminal-switch{display:none}
-.terminal-action-feedback{font-size:12px;text-align:right;padding:0 4px;color:#3b6d4c;min-height:15px}
-.terminal-live-metrics{background:linear-gradient(140deg,#e8f2e7,#fff,#ecf5e9);padding:10px;border:1px solid #cfe3d0;border-radius:16px;margin-top:8px}
-.terminal-live-metrics .trading-live-details{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0}
-.terminal-live-metrics .trading-live-details>div{padding:15px 12px;background:#ffffffd6;border:1px solid #dae5da;border-radius:12px;text-align:center;box-shadow:inset 0 1px #fff,0 2px 7px #2c6b3310}
-.terminal-live-metrics .trading-live-details dt{font-weight:700;color:#526e55}
-.terminal-live-metrics .trading-live-details dd{font-size:clamp(12px,1.8vw,19px);font-weight:800;color:#1d6431}
-.crypto-trading-console .trading-instructions-grid{margin-top:18px}
-.crypto-trading-console .trading-advanced{margin-top:18px;border:1px solid #d4e6d9;border-radius:15px;padding:14px;background:#ffffffb8}
-.crypto-trading-console .trading-advanced>summary{cursor:pointer;color:#255035;font-weight:750}
-.crypto-trading-console .trading-advanced>div{margin-top:15px}
-.wallet-trading-popup{position:fixed;z-index:4000;max-height:min(86dvh,650px);overflow-y:auto;background:linear-gradient(155deg,#fdfefd,#e9f6ee 85%,#fff);border:1px solid #94bca0;border-radius:13px;padding:16px;box-shadow:0 14px 40px #071b2566,inset 0 2px #fff;color:#172b21;overscroll-behavior:contain}
-.wallet-trading-popup header,.wallet-trading-popup footer{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.wallet-trading-popup header strong{font-size:16px}
-.wallet-trading-popup header button{padding:2px 9px;background:transparent;border:0;font-size:24px}
-.wallet-trading-disclosure{font-size:12px;line-height:1.55;max-height:155px;overflow:auto;background:#fffdf4;color:#344336;border-left:3px solid #b89b42;border-radius:5px;padding:11px;margin:14px 0}
-.wallet-trading-amount{font-size:12px;display:grid;gap:6px;font-weight:750}
-.wallet-trading-amount input{display:block;width:100%;border:1px solid #a0bea5;border-radius:8px;padding:11px;font-size:15px;font-variant-numeric:tabular-nums}
-.wallet-trading-line{display:flex;justify-content:space-between;align-items:center;margin:6px 0 14px}
-.wallet-trading-line button{padding:5px 11px}
-.wallet-trading-approval{display:flex;align-items:flex-start;gap:8px;font-size:12px;line-height:1.45;font-weight:600}
-.wallet-trading-approval input{flex:0 0 18px;width:18px;height:18px;accent-color:#328d4d}
-.wallet-trading-popup footer{justify-content:flex-end;margin-top:13px}
-.wallet-trading-popup footer button{font-size:12px;padding:9px}
+.crypto-wallet [data-wallet-error]{font-size:11px;color:#ffbfc4;overflow-wrap:anywhere}
 .crypto-wallet [data-delegate]{color:#aeefb5;border-color:#457358}
-@media(max-width:1400px){.trading-live-workspace{grid-template-columns:minmax(175px,210px) minmax(140px,1fr) minmax(140px,1fr);gap:8px}.terminal-price-screen{grid-column:2/4}.trading-live-robot{grid-row:span 2}}
-@media(max-width:880px){.trading-live-workspace{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.trading-live-robot{grid-row:auto;grid-column:1}.terminal-price-screen{grid-column:1/3}.terminal-trading-actions{justify-content:stretch}.terminal-trading-actions>button{flex:1;min-width:0}.terminal-live-metrics .trading-live-details{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:540px){.trading-live-workspace{grid-template-columns:1fr}.trading-live-robot{grid-column:1;min-height:260px}.terminal-live-trades,.terminal-live-book,.terminal-price-screen{grid-column:1}.terminal-scroll-tape{min-height:180px;max-height:260px}.trading-robot-focus{max-width:145px}.terminal-trading-actions>button{min-width:125px;font-size:12px}.terminal-trading-actions{gap:7px}.terminal-live-metrics .trading-live-details>div{padding:10px 8px}}
-
-.terminal-identity{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:17px 20px;border-radius:15px;margin:9px 0 14px;color:#254b2d;background:radial-gradient(ellipse at 90% 0,#d8edda,#fff 62%,#eaf4ea);border:1px solid #d3e5d3;box-shadow:inset 0 2px #fff,0 5px 16px #145b3015}
-.terminal-identity h3{font-size:clamp(19px,2.8vw,28px);letter-spacing:-.03em;line-height:1.25;margin:0 0 5px}
-.terminal-identity p{font-size:12px;color:#57705c;margin:0}
-.terminal-identity strong{color:#248934}
-.trading-advanced-content{display:grid;gap:14px}
-.crypto-trading-desk>.crypto-section-heading{display:none}
-.crypto-trading-desk .crypto-robot{background:#f6fcf8}
-@media(max-width:650px){.terminal-identity{padding:13px}.terminal-identity h3{font-size:19px}}
-
-.wallet-delegation-active{margin:11px 0;background:#f6fbf7;border:1px solid #c5ddca;border-radius:10px;padding:9px;font-size:12px}
-.wallet-delegation-active summary{cursor:pointer;font-weight:750}
-.wallet-delegation-active>div{display:flex;align-items:center;justify-content:space-between;gap:7px;padding:8px 3px;border-top:1px solid #e1ece2}
-.wallet-delegation-active button{font-size:11px;padding:5px 10px;color:#285c37;background:#fff}
-
-
-/* AVISPay trading terminal: liquid-metal depth and readable workstation density. */
+.crypto-wallet [data-archive-wallet]{border-color:#718093;color:#f5f8fd;font-weight:600}
+.crypto-wallet [data-archive-wallet]:hover{background:#8b364844;border-color:#e6afaf}
+.wallet-robot-frozen{font-size:12px;line-height:1.5}
+.crypto-inline-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.crypto-add-card{min-width:240px;min-height:160px;border:1px dashed #94a3b8;color:#3a4e70}
 .crypto-wallet-archive{margin:12px 0 16px;padding:10px 14px;border:1px solid #d6dfe6;border-radius:8px;background:#f8fafb}
 .crypto-wallet-archive>summary{cursor:pointer;font-weight:650;font-size:12px;color:#31495f}
 .crypto-wallet-archive [data-archived-wallets]{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .crypto-wallet-archive [data-archived-wallets] button{border:1px solid #8cabb8;background:#fff;color:#1b4150;border-radius:7px;font-size:12px;padding:9px 12px}
-.crypto-wallet [data-archive-wallet]{border-color:#718093;color:#f5f8fd;font-weight:600}
-.crypto-wallet [data-archive-wallet]:hover{background:#8b364844;border-color:#e6afaf}
-.crypto-stock-register{display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;padding:18px 22px;margin:10px 0 17px;border-radius:12px;border:1px solid #b9cbd5;background:linear-gradient(115deg,#10283b 0%,#274353 48%,#536c6a 100%);color:#f5f9fa;box-shadow:inset 0 1px #ffffff49,0 14px 24px #152c4117}
-.crypto-stock-register>div{display:grid;gap:6px}.crypto-stock-register small{color:#bfcfd7;letter-spacing:.09em;text-transform:uppercase}.crypto-stock-register strong{font-size:19px}.crypto-stock-register span{color:#d4e2e7;font-size:12px}
-.crypto-stock-register button{padding:11px 16px;color:#f4fafb;background:#ffffff1e;border:1px solid #ffffff90;border-radius:7px;box-shadow:inset 0 1px #ffffff6b}
-.crypto-trading-desk .crypto-trading-console{background:linear-gradient(152deg,#0d1a2b 0%,#162d3e 58%,#0d1a2b 100%);border:1px solid #476477;border-radius:14px;padding:16px;box-shadow:0 19px 40px #0b21352c,inset 0 1px #ffffff43}
-.crypto-trading-desk .terminal-identity{color:#eff8f8;padding:8px 12px 4px}
-.crypto-trading-desk .terminal-identity h3{color:#effbfa;font-size:20px;letter-spacing:.025em}
-.crypto-trading-desk .terminal-identity p{color:#b3d0d2}
-.crypto-trading-desk .trading-live{background:linear-gradient(120deg,#eaf0f1,#fcfefe);border:1px solid #89a6ae;box-shadow:inset 0 1px #ffffff,0 18px 40px #001b2630;padding:18px;border-radius:12px}
-.crypto-trading-desk .trading-live-workspace{gap:10px;grid-template-columns:minmax(192px,1.2fr) minmax(135px,.8fr) minmax(135px,.8fr) minmax(320px,2fr)}
-.crypto-trading-desk .trading-live-robot{background:radial-gradient(circle at 50% 20%,#52797b,#193e46 45%,#091d2b 96%);border:1px solid #86bfc0;box-shadow:inset 0 2px 1px #c6f5ef42,inset 0 -28px 55px #051b2a95,0 12px 30px #0024363d}
-.crypto-trading-desk .trading-robot-art{filter:drop-shadow(0 9px 10px #0007) drop-shadow(0 0 13px #a3e6dd42)}
-.crypto-trading-desk .terminal-live-trades,.crypto-trading-desk .terminal-live-book{border:1px solid #c4d3d5;border-radius:10px;background:linear-gradient(180deg,#fff,#e9f0f2);min-height:445px}
-.crypto-trading-desk .terminal-price-screen{border:1px solid #c4d3d5;border-radius:10px;background:linear-gradient(180deg,#fff,#edf4f6);padding:12px}
-.crypto-trading-desk .trading-live-heading h3{font-weight:700;letter-spacing:.02em}
-.crypto-trading-desk .trading-live-select{max-width:100%;margin:10px 0 18px}
-.crypto-trading-desk .trading-live-select select{border:1px solid #93a9ad;border-radius:7px;background:#f7fbfc}
-.crypto-trading-desk .terminal-trading-actions button{border-radius:7px;font-weight:700}
-@media(max-width:1220px){.crypto-trading-desk .trading-live-workspace{grid-template-columns:minmax(160px,1fr) minmax(140px,1fr) minmax(140px,1fr)}.crypto-trading-desk .terminal-price-screen{grid-column:1/-1}}
-@media(max-width:760px){.crypto-trading-desk .trading-live-workspace{grid-template-columns:repeat(2,minmax(0,1fr))}.crypto-trading-desk .trading-live-robot{grid-column:1/-1}.crypto-trading-desk .terminal-price-screen{grid-column:1/-1}.crypto-trading-desk .terminal-live-trades,.crypto-trading-desk .terminal-live-book{min-height:290px}.crypto-trading-desk .crypto-trading-console{padding:7px}}
-
 .crypto-token-identity{display:grid;gap:4px;min-width:0;margin:10px 0 2px;font-size:10px;color:#bfd6dc}
 .crypto-token-identity a,.crypto-token-identity code{font-size:10px;line-height:1.35;color:#eafcff;text-decoration:none;overflow-wrap:anywhere;white-space:normal}
 .crypto-token-identity a:hover{text-decoration:underline}
 .crypto-token-identity code{font-family:ui-monospace,SFMono-Regular,monospace}
-
-/* Owner-approved institutional palette: white liquid chrome, glass, AVIS green and minimal gold. */
-.crypto-trading-desk .crypto-trading-console{background:linear-gradient(135deg,#f7faf9 0%,#dbe7e4 50%,#e9f0ee 100%);border:1px solid #abc5bb;box-shadow:inset 0 2px #ffffffba,0 14px 34px #1b3a3030}
-.crypto-trading-desk .terminal-identity,.crypto-trading-desk .terminal-identity h3{color:#203932}
-.crypto-trading-desk .terminal-identity p{color:#44685b}
-.crypto-trading-desk .terminal-identity strong{color:#0e7160}
-.crypto-trading-desk .trading-live{background:linear-gradient(120deg,#fbfdfc,#eef4f1);border:1px solid #b4c6bd}
-.crypto-trading-desk .trading-live-robot{color:#193a32;background:radial-gradient(ellipse at 50% 20%,#ffffff 0%,#e1eeeb 45%,#b6ccc5 92%);border:1px solid #a1bbb2;box-shadow:inset 0 2px #fff,inset 0 -20px 45px #29584a22,0 12px 23px #345c4b1f}
-.crypto-trading-desk .trading-robot-name span,.crypto-trading-desk .trading-robot-latest span{color:#496c60}
-.crypto-trading-desk .trading-robot-art{filter:drop-shadow(0 8px 8px #15271c41) drop-shadow(0 0 11px #a9dcc74b)}
-.crypto-trading-desk .trading-robot-filters button{background:#f6fafa;color:#245346;border:1px solid #9db7ab}
-.crypto-trading-desk .trading-robot-filters button[aria-pressed=true]{background:#d3efe2;color:#165742;border-color:#58a082}
-.crypto-trading-desk .terminal-live-trades,.crypto-trading-desk .terminal-live-book,.crypto-trading-desk .terminal-price-screen{background:linear-gradient(#fff,#f4f8f5);border-color:#c3d1c9}
-
+.security-wallet{display:flex;flex-direction:column;gap:6px;cursor:pointer;min-height:190px}
+.security-wallet.selected{outline:2px solid #31ac9b;outline-offset:-2px;background:linear-gradient(125deg,#25394b,#152c36)}
+.security-wallet:focus-visible{outline:2px solid #91ead6;outline-offset:-2px}
+.security-wallet-top{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+.security-symbol{font-size:29px;color:#c9d4e8}
+.crypto-badge{border:1px solid #a6b5c7;border-radius:20px;padding:2px 8px;font-size:10px;letter-spacing:.06em;text-transform:uppercase}
+.security-wallet>strong{font-size:16px}
+.security-wallet>span:not(.security-wallet-top){font-size:11px;color:#c2cddd}
+.security-wallet .security-volume{font-size:16px!important;color:#fff!important;padding-top:8px}
+.security-brand-logo{width:125px;height:38px;object-fit:contain;object-position:left center}
+.security-wallet-address{font:10px/1.4 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere;white-space:normal;color:#d3eee3;min-height:28px}
+.security-detail{background:#fff;border:1px solid #dbe2eb;border-radius:14px;padding:22px;margin-top:7px;min-width:0}
+.security-conversion{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,.55fr) minmax(0,1fr);gap:20px;align-items:start}
+.conversion-arrow{font-size:42px;color:#53667a;align-self:center;text-align:center}
+.conversion-code-column{display:flex;flex-direction:column;align-items:center;gap:12px;justify-content:center;min-width:0;align-self:stretch;padding:18px 10px;border-inline:1px solid #e0e7e3}
+.conversion-code-column strong{font-size:11px;letter-spacing:.1em;color:#326953}
+.conversion-code-column code{font:11px/1.5 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere;text-align:center;max-width:100%}
+.crypto-details{display:grid;grid-template-columns:minmax(100px,.8fr) minmax(0,1.2fr);gap:9px 15px;font-size:12px;margin:14px 0}
+.crypto-details dt{color:#65738a}
+.crypto-details dd{margin:0;font-weight:500;overflow-wrap:anywhere}
+.crypto-source{font-size:11px;color:#67768b;margin-top:14px}
+.crypto-action-history code{display:block;font-size:10px;overflow-wrap:anywhere}
+.crypto-stock-register{display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;padding:18px 22px;margin:10px 0 17px;border-radius:12px;border:1px solid #b9cbd5;background:linear-gradient(115deg,#10283b 0%,#274353 48%,#536c6a 100%);color:#f5f9fa;box-shadow:inset 0 1px #ffffff49,0 14px 24px #152c4117}
+.crypto-stock-register>div{display:grid;gap:6px;min-width:0}
+.crypto-stock-register small{color:#bfcfd7;letter-spacing:.09em;text-transform:uppercase}
+.crypto-stock-register strong{font-size:19px}
+.crypto-stock-register span{color:#d4e2e7;font-size:12px;overflow-wrap:anywhere}
+.crypto-stock-register button{padding:11px 16px;color:#f4fafb;background:#ffffff1e;border:1px solid #ffffff90;border-radius:7px;box-shadow:inset 0 1px #ffffff6b}
 .portfolio-chain-proof{display:block;font:11px/1.45 ui-monospace,SFMono-Regular,monospace;max-width:26em;overflow-wrap:anywhere;color:#176455}
+.crypto-dialog{width:min(680px,94vw);max-height:90vh;overflow:auto;border-radius:14px;padding:24px}
+.crypto-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.crypto-form-grid>label{min-width:0}
+.crypto-form-grid select,.crypto-form-grid input{width:100%}
+.crypto-form-grid .crypto-check{grid-column:1/-1;display:flex;flex-direction:row;align-items:center;font-size:12px}
+.crypto-check input{width:auto}
+.crypto-receive{display:flex;align-items:center;flex-direction:column;gap:16px}
+.crypto-receive>label,.crypto-receive [data-receive-network]{width:100%;min-width:0}
+.crypto-receive code{overflow-wrap:anywhere;max-width:100%;font-size:13px}
+.crypto-receive-content{display:flex;align-items:center;flex-direction:column;gap:16px;width:100%;min-width:0}
+.crypto-receive [data-deposit-form]{width:100%;max-width:100%;min-width:0}
+.crypto-receive [data-deposit-form] label,.crypto-receive [data-deposit-form] input{min-width:0;max-width:100%}
+.crypto-receive [data-deposit-result]{max-width:100%;overflow-wrap:anywhere}
+.crypto-qr{width:240px;height:240px;max-width:100%;object-fit:contain}
+.crypto-included-networks{grid-column:1/-1;min-width:0;font-size:12px;color:#586579}
+.crypto-included-networks p{margin:7px 0 0;overflow-wrap:anywhere;color:#17243a}
 .currency-native-control{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip-path:inset(50%);white-space:nowrap}
 .currency-icon-picker{position:relative;min-width:0;border:1px solid #afc1b8;border-radius:8px;background:#fff;align-self:start}
 .currency-icon-picker>summary{list-style:none;cursor:pointer;padding:13px;min-height:25px;font-size:13px}
@@ -170,10 +93,114 @@
 .currency-icon-options [role=option][hidden]{display:none}
 .currency-icon-options [role=option]>span{display:grid;gap:3px}
 .currency-icon-options [role=option]:hover,.currency-icon-options [aria-selected=true]{background:#e8f4ed;border-color:#a8c9b8}
-.security-brand-logo{width:125px;height:38px;object-fit:contain;object-position:left center}
-.security-wallet-address{font:10px/1.4 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere;white-space:normal;color:#d3eee3;min-height:28px}
-.security-conversion{grid-template-columns:minmax(0,1fr) minmax(150px,.55fr) minmax(0,1fr)}
-.conversion-code-column{display:flex;flex-direction:column;align-items:center;gap:12px;justify-content:center;min-width:0;align-self:stretch;padding:18px 10px;border-inline:1px solid #e0e7e3}
-.conversion-code-column strong{font-size:11px;letter-spacing:.1em;color:#326953}
-.conversion-code-column code{font:11px/1.5 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere;text-align:center;max-width:100%}
-@media(max-width:720px){.security-conversion{grid-template-columns:1fr}.conversion-code-column{border-inline:0;border-block:1px solid #e0e7e3}.currency-icon-picker{grid-column:1/-1}}
+.crypto-robot{display:grid;grid-template-columns:250px minmax(0,1fr);gap:24px;background:#f0f4f8;border:1px solid #dce4ef;padding:24px;border-radius:14px}
+.crypto-robot-intro p{color:#607089;font-size:12px}
+.robot-mark{font-size:60px;color:#43617c}
+.crypto-robot-channels{display:flex;gap:14px;overflow-x:auto}
+.crypto-robot-channels>article{min-width:300px;background:#fff;padding:16px;border-radius:10px;border:1px solid #d7e1ea}
+.crypto-robot-channels p{font-size:12px}
+.crypto-market{flex:0 0 190px;border:1px solid #dce3eb;background:#fff;border-radius:10px;padding:15px}
+.crypto-market>div{display:flex;align-items:center;gap:9px}
+.crypto-market .crypto-details{grid-template-columns:35px 1fr;gap:4px;font-size:11px}
+.market-arrow{margin-left:auto;font-size:34px;line-height:1}
+.up{color:#168466}.down{color:#ba3f45}.flat{color:#607089}
+.market-change{display:block;font-size:11px}.crypto-market small{font-size:9px;color:#6b778a}
+.crypto-admin-filter{display:flex;gap:18px;align-items:center;margin-bottom:15px}
+.crypto-admin-filter input{width:250px}
+.crypto-admin-filter>span{font-size:12px;color:#607089}
+.crypto-catalogue{max-height:590px;overflow:auto;border:1px solid #dce3eb;border-radius:12px;background:white}
+.crypto-currency-row{padding:10px 16px;border-bottom:1px solid #edf0f5;display:grid;grid-template-columns:220px 1fr;gap:12px}
+.crypto-currency-row>div:first-child{display:flex;gap:10px;align-items:center}
+.crypto-currency-row strong{font-size:12px}
+.crypto-currency-row>div>span:not(.coin-icon){font-size:10px;color:#6b778a}
+.crypto-network-switches{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.crypto-switch{display:flex;align-items:center;gap:6px;font-size:10px;padding:5px 9px;border-radius:20px}
+.crypto-switch>span{width:18px;height:11px;border-radius:9px;background:#9da8b6;position:relative}
+.crypto-switch>span:after{content:'';display:block;border-radius:50%;width:7px;height:7px;background:white;position:absolute;left:2px;top:2px}
+.crypto-switch.enabled{border-color:#209a74;color:#14734d;background:#eef9f4}
+.crypto-switch.enabled>span{background:#209a74}.crypto-switch.enabled>span:after{left:9px}
+.crypto-currency-row>.form-error{grid-column:1/-1;margin:0;font-size:11px}
+.crypto-connectors{margin-top:18px;font-size:12px}.crypto-connectors p{padding:6px 0}.crypto-connectors button{margin-left:12px;font-size:11px}
+.crypto-section .form-error:empty{display:none}
+.index-advice{margin:18px 0 26px;padding:20px;border:1px solid #dce3eb;border-radius:12px;background:#fff}
+.index-advice textarea{display:block;box-sizing:border-box;width:100%;resize:vertical;min-height:200px;margin:9px 0;padding:12px;border:1px solid #bdc9d8;border-radius:8px;font:inherit;font-size:13px;line-height:1.55}
+.index-advice form>label{font-weight:600;font-size:12px}
+.index-advice [data-index-saved]{font-size:12px;color:#237753;align-self:center}
+.index-taxonomy{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;margin-top:12px}
+.index-candidates{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px;margin-top:14px}
+.index-candidates article{padding:14px;border:1px solid #e0e6ee;border-radius:8px;min-width:0}
+.index-candidates p{overflow-wrap:anywhere}
+.index-candidates .crypto-section-heading{font-size:12px;align-items:flex-start}
+.index-candidates .crypto-section-heading>span{font-size:10px}.index-candidates a{font-size:11px}
+.index-advice .crypto-section-heading>h3{font-size:16px}.index-advice .crypto-inline-actions{align-items:center}
+.trading-testing{margin:18px 0 26px;padding:20px;border:1px solid #dce3eb;border-radius:12px;background:#fff;min-width:0}
+.trading-testing h3{font-size:16px}.trading-testing h4{font-size:13px;margin:16px 0 10px}
+.trading-test-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:14px;border:0;margin:18px 0 0;padding:0;min-width:0}
+.trading-test-fields label{display:flex;flex-direction:column;gap:7px;min-width:0;font-size:12px}
+.trading-test-fields input,.trading-test-fields select{width:100%;max-width:100%;min-width:0;box-sizing:border-box}
+.trading-test-fields [hidden]{display:none}.trading-testing .crypto-inline-actions{align-items:center}
+.trading-testing [data-test-progress],.trading-testing [data-replay-file]{font-size:12px;overflow-wrap:anywhere}
+.trading-test-report{margin-top:20px;padding:16px;border:1px solid #e0e6ee;border-radius:9px;min-width:0}
+.trading-test-report>.crypto-section-heading{align-items:flex-start}.trading-test-result{font-size:12px;color:#34465d}
+.trading-test-checks{padding-left:20px;font-size:12px}.trading-test-checks li{margin:10px 0}.trading-test-checks p{margin:4px 0;color:#586579;white-space:pre-wrap;overflow-wrap:anywhere}
+.trading-test-records{display:grid;gap:10px;font-size:12px;min-width:0}.trading-test-records>details{min-width:0}
+.trading-testing pre{max-height:350px;max-width:100%;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;background:#f5f7fa;border-radius:6px;font-size:11px}
+.trading-test-history{margin-top:18px;font-size:12px}.trading-test-history [data-test-history]{display:grid;gap:7px;max-height:320px;overflow:auto;margin-top:10px}
+.trading-test-history button{display:flex;flex-direction:column;gap:5px;text-align:left;white-space:normal;overflow-wrap:anywhere}.trading-test-history button[aria-pressed=true]{border-color:#237753}.trading-test-history span{color:#65738a;font-size:11px}
+.trading-testing [data-test-engine] .crypto-details{max-width:650px}.trading-testing .crypto-source{line-height:1.55}.trading-testing .form-error{overflow-wrap:anywhere}
+.trading-test-table{max-width:100%;overflow-x:auto;margin-top:10px}.trading-test-table table{width:100%;border-collapse:collapse;font-size:11px}
+.trading-test-table th,.trading-test-table td{text-align:left;vertical-align:top;padding:8px;border-bottom:1px solid #e0e6ee;white-space:nowrap}.trading-test-table th{font-weight:600;color:#586579}
+/* One layout definition per breakpoint: no inherited spanning robot or empty fourth column. */
+.crypto-suite-navigation{display:none}
+#crypto-wallet-desk,#crypto-security-desk,#crypto-market-desk{scroll-margin-top:18px}
+.crypto-trading-desk{scroll-margin-top:18px;min-width:0;border:1px solid #d9e7dc;background:linear-gradient(136deg,#f0f7f1 0%,#fbfffc 31%,#eaf1ed 100%);border-radius:14px;padding:12px;box-shadow:inset 0 1px #fff,0 12px 24px #1c633018}
+.crypto-trading-desk>.crypto-section-heading{display:none}
+.crypto-trading-desk .crypto-robot{background:#f6fcf8}
+.crypto-trading-console{width:100%;min-width:0;max-width:100%;overflow-wrap:anywhere}
+.terminal-identity{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 16px;border-radius:12px;margin:9px 0 14px;color:#254b2d;background:radial-gradient(ellipse at 90% 0,#d8edda,#fff 62%,#eaf4ea);border:1px solid #d3e5d3;box-shadow:inset 0 2px #fff,0 5px 16px #145b3015}
+.terminal-identity h3{font-size:clamp(19px,2.5vw,28px);letter-spacing:-.03em;line-height:1.25;margin:0 0 5px}.terminal-identity p{font-size:12px;color:#57705c;margin:0}.terminal-identity strong{color:#248934}
+.trading-live{container-type:inline-size;container-name:trading-view;background:transparent;border:0;margin:18px 0 22px;padding:0;min-width:0;max-width:100%}
+.trading-live-heading,.trading-market-heading,.trading-execution-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;min-width:0}
+.trading-live-heading{background:linear-gradient(90deg,#f9fff9,#e6f2e9);padding:12px 15px;border:1px solid #dce9dd;border-radius:13px}
+.trading-live-heading h3{margin:5px 0 0;font-size:19px;color:#234a30;font-weight:800}.trading-live-heading .eyebrow{font-size:10px;color:#347a46;letter-spacing:.14em;margin:0}.trading-live-heading>button{flex-shrink:0}
+.trading-live-select{display:flex;flex-direction:column;gap:7px;max-width:620px;margin:16px 0;font-size:12px;font-weight:600;color:#315040}
+.trading-live-select select{width:100%;min-width:0;border:1px solid #b8d6be;background:linear-gradient(#fff,#f4f8f5);border-radius:8px}
+.trading-live-workspace{display:grid;grid-template-columns:minmax(150px,.9fr) minmax(150px,.9fr) minmax(130px,.75fr) minmax(240px,1.45fr);grid-template-areas:'robot trades book price';gap:10px;min-width:0;max-width:100%;align-items:start}
+.trading-live-robot{grid-area:robot;position:relative;display:flex;flex-direction:column;align-items:center;align-self:start;min-width:0;border-radius:13px;padding:18px 10px;color:#193a32;background:radial-gradient(ellipse at 50% 20%,#ffffff 0%,#e1eeeb 45%,#b6ccc5 92%);border:1px solid #a1bbb2;box-shadow:inset 0 2px #fff,inset 0 -20px 45px #29584a22,0 12px 23px #345c4b1f}
+.trading-robot-name{text-align:center;display:grid;gap:7px;font-size:14px;overflow-wrap:anywhere}.trading-robot-name span{font-size:11px;color:#496c60}
+.trading-robot-focus{display:block;border:0;background:none!important;padding:0;width:100%;max-width:220px;box-shadow:none;color:inherit;filter:drop-shadow(0 8px 8px #15271c41)}
+.trading-robot-focus:disabled{opacity:1;cursor:default}.trading-robot-focus:not(:disabled):hover{filter:drop-shadow(0 0 12px #72d3c13b)}.trading-robot-focus:focus-visible{outline:2px solid #91ead6;outline-offset:0;border-radius:14px}
+.trading-robot-art{display:block;width:100%;height:auto;overflow:visible}.trading-robot-art .trading-robot-eyes,.trading-robot-art .trading-robot-w{filter:drop-shadow(0 0 8px #a5ffc2)}
+.trading-robot-latest{display:grid;gap:7px;text-align:center;font-size:12px;min-height:47px;overflow-wrap:anywhere}.trading-robot-latest span{font-size:10px;color:#496c60}
+.trading-robot-filters{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;margin-top:16px}.trading-robot-filters button{padding:6px 8px;border:1px solid #9db7ab;border-radius:6px;background:#f6fafa;color:#245346;font-size:10px}.trading-robot-filters button[aria-pressed=true]{color:#165742;background:#d3efe2;border-color:#58a082}
+.trading-live-robot[data-robot-activity=BUY] [data-robot-arm=BUY],.trading-live-robot[data-robot-activity=SELL] [data-robot-arm=SELL]{stroke:#9bffe0;filter:drop-shadow(0 0 7px #69efcd);animation:trading-execution-glow 1.8s ease-out 1}
+.trading-live-robot[data-robot-activity]:not([data-robot-activity=""]) .trading-robot-w{stroke:#c2ffec;filter:drop-shadow(0 0 7px #69efcd)}
+@keyframes trading-execution-glow{0%{filter:drop-shadow(0 0 3px #69efcd)}35%{filter:drop-shadow(0 0 12px #69efcd)}100%{filter:drop-shadow(0 0 3px #69efcd)}}
+.terminal-live-trades{grid-area:trades}.terminal-live-book{grid-area:book}.terminal-price-screen{grid-area:price}
+.terminal-live-trades,.terminal-live-book,.terminal-price-screen{min-width:0;background:linear-gradient(#fff,#f4f8f5);border:1px solid #c3d1c9;border-radius:12px;padding:13px 9px;box-shadow:inset 0 2px #fff,0 9px 18px #19442618}
+.terminal-live-trades h4,.terminal-live-book h4{font-size:13px;margin:0 0 10px;color:#203b2c;white-space:nowrap}.terminal-live-trades h4 span{font-size:10px;color:#2b9854}
+.terminal-scroll-tape{overflow:auto;max-height:430px;min-height:275px}.terminal-scroll-tape table{width:100%;border-collapse:collapse;font-size:11px;font-variant-numeric:tabular-nums}
+.terminal-scroll-tape th{text-align:right;color:#667b6d;font-size:10px;font-weight:550;border-bottom:1px solid #dce6dd;padding:8px 4px}.terminal-scroll-tape td{text-align:right;padding:7px 4px;white-space:nowrap;border-bottom:1px solid #e7efe8}.terminal-scroll-tape th:first-child,.terminal-scroll-tape td:first-child{text-align:left}.terminal-scroll-tape p{font-size:12px;color:#697b71;text-align:center;margin:35px 5px}
+.terminal-up td:nth-child(2){color:#17833b;font-weight:800}.terminal-down td:nth-child(2){color:#cf3c3c;font-weight:800}
+.trading-live-screen{min-width:0}.trading-market-heading{align-items:flex-start;font-size:14px;padding:3px 0 10px;border-bottom:1px solid #e3eaf1}.trading-market-heading strong{overflow-wrap:anywhere}.trading-market-heading>span{font-size:10px;color:#64798c;text-align:right;overflow-wrap:anywhere;max-width:65%}
+.trading-live-details{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px 20px;margin:17px 0;font-size:12px;min-width:0}.trading-live-details>div{min-width:0}.trading-live-details dt{color:#63778b;font-size:10px;line-height:1.4;margin-bottom:5px}.trading-live-details dd{margin:0;font-weight:600;overflow-wrap:anywhere;line-height:1.45}.trading-live [data-live-quote] dd{font-size:17px;color:#17394b}
+.trading-live-chart{margin:16px 0 0;background:linear-gradient(#fff,#f7fbf8);border:1px solid #e2eee5;border-radius:8px;min-width:0;padding:8px}.trading-live-chart svg{display:block;width:100%;height:178px}.trading-live-chart text{font:12px sans-serif;fill:#76899a}.trading-live-chart polyline{fill:none;stroke-width:2;vector-effect:non-scaling-stroke;stroke-linejoin:round}.trading-live-chart .quote-bid{stroke:#229984}.trading-live-chart .quote-ask{stroke:#5b85b6}.trading-live-chart circle.quote-bid{fill:#229984}.trading-live-chart circle.quote-ask{fill:#5b85b6}
+.trading-chart-caption{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;font-size:10px;color:#62788d;margin:8px 0}.trading-chart-caption i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:3px}.quote-bid-key{background:#229984}.quote-ask-key{background:#5b85b6;margin-left:12px}.trading-chart-caption .quote-bid-key{margin-left:0}
+.trading-live-audit{border-top:1px solid #e3eaf1;margin-top:15px;font-variant-numeric:tabular-nums}.trading-live-audit .trading-live-details{grid-template-columns:repeat(2,minmax(0,1fr))}
+.trading-live .crypto-source{line-height:1.5;overflow-wrap:anywhere}.trading-live-orders{margin-top:18px;font-size:12px;min-width:0}.trading-live-table{max-width:100%;overflow-x:auto;margin-top:12px}.trading-live-table table{width:100%;border-collapse:collapse;font-size:11px}.trading-live-table th,.trading-live-table td{text-align:left;padding:10px 9px;white-space:nowrap;border-bottom:1px solid #e1e8ef}.trading-live-table th{font-size:10px;color:#60758a;font-weight:600}.trading-live-table tbody tr.is-focused{background:#e7f6f1;outline:1px solid #83cbb7;outline-offset:-1px}.trading-live-table tbody tr:focus{outline:2px solid #41a88e;outline-offset:-2px}
+.trading-execution-heading{margin:22px 0 0}.trading-execution-heading h4{margin:0;font-size:13px}.trading-execution-heading span{font-size:10px;color:#62788d}.trading-live .form-error{overflow-wrap:anywhere}
+.terminal-trading-actions{display:flex;align-items:center;justify-content:flex-end;gap:11px;flex-wrap:wrap;padding:12px 4px 5px}.terminal-trading-actions>button{border:1px solid #ffffff88;border-radius:8px;color:white;min-height:50px;padding:12px 20px;font-weight:800;min-width:140px;text-shadow:0 1px #0002;box-shadow:inset 0 2px #ffffff88,0 5px 12px #10321b32}.terminal-trading-actions>.terminal-buy{background:linear-gradient(160deg,#67ca59,#1e932e 48%,#146d26)}.terminal-trading-actions>.terminal-sell{background:linear-gradient(160deg,#f77572,#d32d2d 48%,#9b1725)}
+.terminal-auto{display:flex;gap:9px;align-items:center;font-size:12px;font-weight:750;color:#25432d;cursor:pointer;white-space:nowrap;padding:0 10px}.terminal-auto input{width:18px;height:18px;accent-color:#258838}.terminal-switch{display:none}.terminal-action-feedback{font-size:12px;text-align:right;padding:0 4px;color:#3b6d4c;min-height:15px}
+.terminal-live-metrics{background:linear-gradient(140deg,#e8f2e7,#fff,#ecf5e9);padding:10px;border:1px solid #cfe3d0;border-radius:12px;margin-top:8px}.terminal-live-metrics .trading-live-details{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0}.terminal-live-metrics .trading-live-details>div{padding:15px 12px;background:#ffffffd6;border:1px solid #dae5da;border-radius:8px;text-align:center;box-shadow:inset 0 1px #fff,0 2px 7px #2c6b3310}.terminal-live-metrics .trading-live-details dt{font-weight:700;color:#526e55}.terminal-live-metrics .trading-live-details dd{font-size:clamp(12px,1.8vw,19px);font-weight:800;color:#1d6431}
+.trading-instructions-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;margin:20px 0}.trading-instructions-grid>div{min-width:0}.trading-instructions-grid .index-advice,.robot-instructions{box-sizing:border-box;height:100%;margin:0;padding:20px;border:1px solid #dce3eb;border-radius:12px;background:#fff;min-width:0}.robot-instructions h3{font-size:16px}.robot-instructions textarea{display:block;box-sizing:border-box;width:100%;resize:vertical;min-height:244px;margin:9px 0;padding:12px;border:1px solid #bdc9d8;border-radius:8px;font:12px ui-monospace,SFMono-Regular,monospace;line-height:1.6}.robot-instructions form>label{font-weight:600;font-size:12px}.robot-instructions .crypto-inline-actions{align-items:center}.robot-instructions [data-robot-instruction-saved]{color:#237753;font-size:11px}.robot-instructions .crypto-source,.robot-instructions .form-error{line-height:1.5;overflow-wrap:anywhere}.trading-instructions-grid .index-advice textarea{min-height:244px}.index-evidence{margin-top:0}
+.crypto-trading-console .trading-instructions-grid{margin-top:18px}.crypto-trading-console .trading-advanced{margin-top:18px;border:1px solid #d4e6d9;border-radius:12px;padding:14px;background:#ffffffb8}.crypto-trading-console .trading-advanced>summary{cursor:pointer;color:#255035;font-weight:750}.crypto-trading-console .trading-advanced>div{margin-top:15px}.trading-advanced-content{display:grid;gap:14px}
+.trading-live-liquidity{margin:18px 0;padding:16px;border:1px solid #e1e8ef;border-radius:8px;font-size:12px;min-width:0}.trading-live-liquidity h4{font-size:12px;margin:14px 0 8px}.trading-live-liquidity h5{font-size:11px;margin:12px 0 4px}.trading-book-levels{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-bottom:16px}.trading-book-levels>section{min-width:0}.trading-security-proof{border-top:1px solid #e1e8ef;margin-top:16px;padding-top:6px;min-width:0}.trading-security-proof .trading-live-details{grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr))}.trading-live-liquidity [data-backing-progress]{font-size:11px;color:#63778b}.trading-live-liquidity details{min-width:0}
+.wallet-trading-popup{position:fixed;z-index:4000;max-height:min(86dvh,650px);overflow-y:auto;background:linear-gradient(155deg,#fdfefd,#e9f6ee 85%,#fff);border:1px solid #94bca0;border-radius:13px;padding:16px;box-shadow:0 14px 40px #071b2566,inset 0 2px #fff;color:#172b21;overscroll-behavior:contain}.wallet-trading-popup header,.wallet-trading-popup footer{display:flex;align-items:center;justify-content:space-between;gap:10px}.wallet-trading-popup header strong{font-size:16px}.wallet-trading-popup header button{padding:2px 9px;background:transparent;border:0;font-size:24px}.wallet-trading-disclosure{font-size:12px;line-height:1.55;max-height:155px;overflow:auto;background:#fffdf4;color:#344336;border-left:3px solid #b89b42;border-radius:5px;padding:11px;margin:14px 0}.wallet-trading-amount{font-size:12px;display:grid;gap:6px;font-weight:750}.wallet-trading-amount input{display:block;width:100%;border:1px solid #a0bea5;border-radius:8px;padding:11px;font-size:15px;font-variant-numeric:tabular-nums}.wallet-trading-line{display:flex;justify-content:space-between;align-items:center;margin:6px 0 14px}.wallet-trading-line button{padding:5px 11px}.wallet-trading-approval{display:flex;align-items:flex-start;gap:8px;font-size:12px;line-height:1.45;font-weight:600}.wallet-trading-approval input{flex:0 0 18px;width:18px;height:18px;accent-color:#328d4d}.wallet-trading-popup footer{justify-content:flex-end;margin-top:13px}.wallet-trading-popup footer button{font-size:12px;padding:9px}
+.wallet-delegation-active{margin:11px 0;background:#f6fbf7;border:1px solid #c5ddca;border-radius:10px;padding:9px;font-size:12px}.wallet-delegation-active summary{cursor:pointer;font-weight:750}.wallet-delegation-active>div{display:flex;align-items:center;justify-content:space-between;gap:7px;padding:8px 3px;border-top:1px solid #e1ece2}.wallet-delegation-active button{font-size:11px;padding:5px 10px;color:#285c37;background:#fff}
+/* The available terminal width, not the outer browser width, controls placement. */
+@container trading-view (max-width:780px){.trading-live-workspace{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:'robot price' 'trades book'}.trading-live [data-live-quote] dd{font-size:14px}.terminal-scroll-tape{min-height:180px;max-height:320px}.terminal-live-metrics .trading-live-details{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@container trading-view (max-width:460px){.trading-live-workspace{grid-template-columns:minmax(0,1fr);grid-template-areas:'robot' 'trades' 'book' 'price'}.trading-robot-focus{max-width:145px}.trading-live-heading{align-items:flex-start;flex-wrap:wrap}.trading-live-heading h3{font-size:17px}.terminal-scroll-tape{max-height:260px}.terminal-trading-actions{justify-content:stretch;gap:7px}.terminal-trading-actions>button{flex:1;min-width:100px;font-size:12px}.terminal-live-metrics .trading-live-details>div{padding:10px 8px}}
+@media(max-width:1000px){.crypto-robot{grid-template-columns:1fr}.crypto-robot-intro{display:flex;align-items:center;gap:15px}.crypto-robot-intro p{max-width:250px}.crypto-currency-row{grid-template-columns:180px 1fr}.trading-instructions-grid{grid-template-columns:1fr}.trading-book-levels{grid-template-columns:1fr}.trading-live-liquidity{padding:12px}}
+@media(max-width:720px){.security-conversion{grid-template-columns:1fr;gap:6px}.conversion-code-column{border-inline:0;border-block:1px solid #e0e7e3}.currency-icon-picker{grid-column:1/-1}.conversion-arrow{font-size:30px}.trading-market-heading{gap:9px}.trading-market-heading>span{max-width:60%}.trading-instructions-grid .index-advice,.robot-instructions{padding:14px}.trading-live-details{gap:13px}.trading-execution-heading{flex-wrap:wrap;gap:7px}.trading-live-table{font-size:10px}}
+@media(max-width:600px){.crypto-section-heading{align-items:flex-start;flex-wrap:wrap}.crypto-section-heading h2{font-size:16px}.crypto-section-heading>span{display:none}.crypto-wallet,.security-wallet{flex-basis:220px;min-width:220px;max-width:220px;padding:14px}.crypto-wallet-actions{gap:5px}.crypto-wallet-actions button{flex-basis:33px;width:33px}.security-detail{padding:16px}.crypto-form-grid{grid-template-columns:1fr}.crypto-admin-filter{align-items:flex-start;flex-direction:column;gap:8px}.crypto-admin-filter input{width:100%}.crypto-currency-row{grid-template-columns:1fr}.crypto-details{font-size:11px;gap:8px}.crypto-dialog{padding:18px}.crypto-robot{padding:16px}.crypto-market{flex-basis:170px}.crypto-robot-intro{flex-wrap:wrap}.crypto-robot-intro p{margin-top:0}.crypto-robot-channels>article{min-width:270px}.crypto-trading-desk{padding:8px}.terminal-identity{padding:13px}.terminal-identity h3{font-size:19px}.trading-testing{padding:14px}.trading-test-report{padding:12px}.trading-testing>.crypto-section-heading{gap:10px}.trading-testing .crypto-section-heading>span{display:block}}
+@media(prefers-reduced-motion:reduce){.trading-live-robot [data-robot-arm]{animation:none!important}}
