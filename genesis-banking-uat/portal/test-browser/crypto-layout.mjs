@@ -281,7 +281,8 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   assert.equal(await page.locator('[data-index-policy] textarea[name=instructions]').count(),1);assert.equal(await page.locator('[data-robot-instruction-form] textarea[name=instructions]').count(),1);
   assert.equal(await page.locator('[data-security]').count(),10,'the AVISPay security and nine requested demo wallets remain in the row');
   assert.equal(await page.locator('[data-security] strong').first().textContent(),'AVISPay PLC');
-  assert.equal(await page.locator('[data-stock-convert]').count(),1);
+  assert.equal(await page.locator('[data-stock-convert],.crypto-stock-register').count(),0,'the removed Treasury strip stays absent');
+  assert.equal(await page.locator('[data-real-prepare]').count(),1,'the selected security keeps its conversion action');
   assert.equal(await page.locator('[data-markets] .crypto-market').count(),100);
   assert.equal(await page.locator('.crypto-currency-row').count(),200);
   const layout=await page.evaluate(()=>{

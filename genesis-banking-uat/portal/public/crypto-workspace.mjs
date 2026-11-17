@@ -270,7 +270,7 @@ export function createCryptoWorkspace({api,identity,purchase,sell,send,notice}){
   const available=p=>p.available_quantity??p.quantity;
   const f=await form('Prepare '+securityTitle(s)+' conversion',
    select('positionId','Registered security holding',positions.map(p=>[p.position_id,p.name+' · '+fmt(available(p))+' available units']),'required')+
-   (securitySlot(s)?field('tokenSymbol','Token symbol','text','required maxlength="25" pattern="[A-Za-z][A-Za-z0-9._-]{0,24}" autocapitalize="off"'):'' )+
+   (securitySlot(s)?field('tokenSymbol','Token symbol','text','required maxlength="25" pattern="[A-Za-z][A-Za-z0-9._\\-]{0,24}" autocapitalize="off"'):'' )+
    field('quantity','Source security quantity','text','required inputmode="decimal"')+
    field('tokenQuantity','Tokens to issue','text','required inputmode="decimal"')+
    field('custodyReference','Collateral House custody reference','text','required maxlength="128"')+
