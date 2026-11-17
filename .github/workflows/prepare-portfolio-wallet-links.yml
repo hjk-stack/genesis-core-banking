@@ -32,7 +32,15 @@ jobs:
         with:
           node-version: '22.x'
       - name: Apply exact source patch
-        run: python3 tools/apply_portfolio_wallet_links.py
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tools/apply_portfolio_wallet_links.py')
+          source=p.read_text()
+          source=source.replace('https://raw.githubusercontent.com/hjk-stack/genesis-outlook-automation/749d1862b030069ef9b95baba8a7988c604f37c1/src/bank-assets/avispay-logo.webp','https://avis.land/bank-assets/avispay-logo.webp')
+          p.write_text(source)
+          PY
+          python3 tools/apply_portfolio_wallet_links.py
       - name: Check all modified JavaScript syntax
         run: |
           node --check genesis-banking-uat/portal/src/crypto-workspace.mjs
