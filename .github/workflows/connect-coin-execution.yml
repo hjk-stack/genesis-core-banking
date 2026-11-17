@@ -1,0 +1,38 @@
+name: Connect multi-coin execution permissions
+on:
+  pull_request:
+    types: [synchronize]
+permissions:
+  contents: write
+jobs:
+  connect:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'fix/multi-coin-trade-allowance-scroller-20261117'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Apply source guards and check syntax
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/connect-coin-execution.py
+          node --check genesis-banking-uat/portal/src/trading-robot.mjs
+          node --check genesis-banking-uat/portal/src/trading/runtime.mjs
+          node --check genesis-banking-uat/portal/src/robot-wallet-allowance.mjs
+          node --check genesis-banking-uat/portal/src/wallet-trading-selection.mjs
+          node --check genesis-banking-uat/portal/src/crypto-workspace.mjs
+          python3 -m py_compile genesis-banking-uat/azure/deploy-sovereign.py genesis-banking-uat/azure/verify_wallet_allowances.py
+          git diff --check
+      - name: Commit integration and remove this one-time workflow
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add genesis-banking-uat
+          git rm .github/scripts/connect-coin-execution.py .github/workflows/connect-coin-execution.yml
+          git commit -m 'Honor selected wallet coin budgets in robot entries and deployment acceptance'
+          git push origin HEAD:refs/heads/fix/multi-coin-trade-allowance-scroller-20261117
