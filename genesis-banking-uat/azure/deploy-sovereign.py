@@ -96,6 +96,9 @@ def verify_deployed_frontend(opener, base, sha):
         '/trading-live.mjs': 'public/trading-live.mjs',
         '/index-advice.mjs': 'public/index-advice.mjs',
         '/crypto.css': 'public/crypto.css',
+        '/approved-robot.mjs': 'public/approved-robot.mjs',
+        '/approved-robot.css': 'public/approved-robot.css',
+        '/crypto-icons/robot-approved.jpg': 'public/crypto-icons/robot-approved.jpg',
     }
     for route, relative in assets.items():
         request = urllib.request.Request(

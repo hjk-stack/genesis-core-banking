@@ -238,9 +238,9 @@ async function verifyLiveTrading(page,width){
  assert.match(await live.locator('[data-live-audit]').textContent(),/1,234\.123456789012345678 aAVISP/);assert.match(await live.locator('[data-live-audit]').textContent(),/Net realised profit1\.123456789012345678 CHF/);assert.match(await live.locator('[data-live-audit]').textContent(),/Fees by currency0\.123456789012345678 CHF/);assert.doesNotMatch(await live.textContent(),/Virtual funds|Acceptance suite/);
  if(width===390)await page.emulateMedia({reducedMotion:'reduce'});
  liveFills.unshift(execution('new-sell-'+width,'SELL'));
- await live.getByRole('button',{name:'Refresh view',exact:true}).click();
+ await live.getByRole('button',{name:'Refresh trading data',exact:true}).click();
  await page.waitForFunction(()=>document.querySelector('[data-robot-activity]')?.dataset.robotActivity==='SELL');
- if(width===390)assert.equal(await live.locator('[data-robot-arm=SELL]').evaluate(element=>getComputedStyle(element).animationName),'none','reduced motion keeps a static real-event indication');
+ if(width===390)assert.equal(await live.locator('.ar-robot-image').evaluate(element=>getComputedStyle(element).animationName),'none','reduced motion keeps a static real-event indication');
  await live.getByRole('button',{name:'Sell executions',exact:true}).click();
  assert.equal(await live.locator('[data-live-executions] tbody tr').count(),1);assert.match(await live.locator('[data-live-executions] tbody').textContent(),/SELL/);
  await live.getByRole('button',{name:'Focus latest execution',exact:true}).click();assert.equal(await live.locator('[data-live-executions] tbody tr').count(),2);assert.equal(await live.locator('[data-live-executions] tr.is-focused').getAttribute('data-execution-id'),'new-sell-'+width);

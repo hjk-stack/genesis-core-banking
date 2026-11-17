@@ -57,7 +57,7 @@ test('approved terminal moves existing trading controls without modifying wallet
  host.querySelector('[data-trading-buy]').click();host.querySelector('[data-trading-sell]').click();assert.deepEqual(intents.map(x=>x.side),['BUY','SELL']);
  assert.equal(calls.some(x=>x.body&&/order|transfer|activate/.test(x.path)),false);
  const toggle=host.querySelector('[data-trading-auto]');toggle.checked=true;await toggle.onchange({target:toggle});assert.equal(calls.find(x=>x.path==='crypto/trading/toggle').body.robotId,profile.robotId);
- assert.equal(host.querySelectorAll('.ar-ticker-copy:first-child .ar-market').length,6);
+ assert.equal(host.querySelectorAll('.ar-ticker-copy:first-child .ar-market').length,7);assert.match(host.querySelector('[data-active-market-quote]').textContent,/aAVISP \/ CHF/);
  host.querySelector('[data-ar-expand]').click();assert.ok(host.querySelector('.ar-expanded'));host.querySelector('[data-ar-collapse]').click();assert.equal(host.querySelector('.ar-expanded'),null);
  controllers.at(-1).close();skin.close();data.profiles=[];data.selectedRobotId=null;const fresh=installApprovedRobot({host,api,onConfigure:()=>configure++});controllers.push(fresh);const opening=mountTradingLive({host,api,pollMs:0,onSnapshot:x=>fresh.update(x)});fresh.mount();controllers.push(await opening);host.querySelector('[data-trading-buy]').click();assert.equal(configure,1);
  assert.equal(host.querySelector('[data-trading-auto]').disabled,true);

@@ -32,3 +32,12 @@
 @media(min-width:1600px){.crypto-trading-desk .approved-robot .ar-board{grid-template-columns:220px 235px 245px minmax(430px,1fr)!important}}
 @media(max-width:650px){.approved-robot .ar-viewport{padding:8px}.approved-robot .ar-ticker{margin:0 8px 8px}.approved-robot .ar-market-small>div{font-size:10px}.approved-robot .ar-ticker-track.ar-running{animation-duration:90s}}
 @media(prefers-reduced-motion:reduce){.approved-robot .ar-running{animation:none!important}}
+
+/* Preserve all three tape columns and a horizontal auto-trading switch. */
+.approved-robot .terminal-scroll-tape table{table-layout:fixed}
+.approved-robot .terminal-scroll-tape th,.approved-robot .terminal-scroll-tape td{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.approved-robot .terminal-scroll-tape th:first-child,.approved-robot .terminal-scroll-tape td:first-child{width:36%}
+.approved-robot .terminal-scroll-tape th:nth-child(2),.approved-robot .terminal-scroll-tape td:nth-child(2){width:38%}
+.approved-robot .terminal-scroll-tape th:nth-child(3),.approved-robot .terminal-scroll-tape td:nth-child(3){width:26%}
+.approved-robot .terminal-auto{display:flex;flex-direction:row;align-items:center;gap:5px}
+.approved-robot .terminal-auto input{padding:0;box-sizing:border-box;min-height:0;height:20px;min-width:34px;flex:0 0 34px}

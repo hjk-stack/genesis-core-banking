@@ -1,5 +1,5 @@
 /* Wallet, converter and trading presentation. Financial actions remain in their modules. */
-#main:has(> #view > .crypto-section){max-width:1700px;min-width:0}
+#main:has(> #view > .crypto-section){max-width:none;min-width:0}
 .crypto-section{margin:0 0 30px;min-width:0;max-width:100%}
 .crypto-section-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:14px 0}
 .crypto-section-heading>div:first-child{display:flex;align-items:center;gap:12px}
