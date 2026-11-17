@@ -279,7 +279,9 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   await page.getByRole('textbox',{name:'Analysis instructions',exact:true}).waitFor();
   await page.waitForFunction(()=>document.querySelector('[data-run-test]')?.disabled===false);
   assert.equal(await page.locator('[data-index-policy] textarea[name=instructions]').count(),1);assert.equal(await page.locator('[data-robot-instruction-form] textarea[name=instructions]').count(),1);
-  assert.equal(await page.locator('[data-security]').count(),0,'no demo security cards in operational crypto workspace');
+  assert.equal(await page.locator('[data-security]').count(),1,'only the registered AVISPay PLC stock converter card is retained in the live scroller');
+  assert.equal(await page.locator('[data-security] strong').first().textContent(),'AVISPay PLC');
+  assert.equal(await page.locator('[data-stock-convert]').count(),1);
   assert.equal(await page.locator('[data-markets] .crypto-market').count(),100);
   assert.equal(await page.locator('.crypto-currency-row').count(),200);
   const layout=await page.evaluate(()=>{
@@ -347,7 +349,8 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   await verifyCurrencyActivation(page,width);
   await verifyTradingTests(page,width);
   await verifyLiveTrading(page,width);
-  assert.equal(await page.locator('[data-security]').count(),0,'live securities gallery does not mount sample conversion cards');
+  assert.equal(await page.locator('[data-security]').count(),1,'the PLC shares converter is restored without publishing other demo security cards');
+  assert.equal(await page.locator('[data-security] strong').first().textContent(),'AVISPay PLC');
   await mkdir('test-results',{recursive:true});
   await page.screenshot({path:'test-results/crypto-'+width+'.png',fullPage:false});
   if(width===2560){

@@ -58,6 +58,21 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
    return allNetworks?{userId,assetId:input.assetId,currency:assets[0].currency_code,wallets}:wallets[0];
   });
  }
+ async setCryptoWalletVisibility(actor,input,key){
+  actualAdmin(actor);
+  if(!uuid(input.accountId)||typeof input.visible!=='boolean')fault('INVALID_FIELD','accountId');
+  return this.operation(actor,'CRYPTO_WALLET_VISIBILITY',input,key,async db=>{
+   const row=(await db.query(`SELECT l.account_id,l.user_id,l.currency_code,l.network,l.wallet_scope,l.wallet_visible
+     FROM avis_core_v2.ledger_accounts l
+     WHERE l.account_id=$1 AND l.owner_type='USER' AND l.network IS NOT NULL
+       AND l.wallet_scope IN ('FUNDING','CUSTODY') AND l.account_category='LIABILITY'
+     FOR UPDATE`,[input.accountId])).rows[0];
+   if(!row)fault('CRYPTO_WALLET_REQUIRED','accountId');
+   if(row.wallet_visible!==input.visible)
+    await db.query('UPDATE avis_core_v2.ledger_accounts SET wallet_visible=$2,updated_at=now() WHERE account_id=$1',[row.account_id,input.visible]);
+   return {accountId:row.account_id,currency:row.currency_code,network:row.network,visible:input.visible};
+  });
+ }
  async delegateWalletTrading(actor,input,key){
   const amount=decimal(money(input.amount));
   if(input.consent!==true)fault('CRYPTO_TRADING_CONSENT','consent');
@@ -144,7 +159,7 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
   }
   if(view==='cryptomarkets')return (await this.pool.query('SELECT * FROM avis_core_v2.crypto_assets WHERE market_rank IS NOT NULL ORDER BY market_rank LIMIT 200')).rows;
   if(view==='cryptocatalogue')return (await this.pool.query(`SELECT a.*,COALESCE(jsonb_agg(jsonb_build_object('network',n.network,'contractAddress',n.contract_address,'decimals',n.decimals,'approved',n.approved,'verifiedAt',n.verified_at) ORDER BY n.network) FILTER(WHERE n.network IS NOT NULL),'[]'::jsonb) AS networks FROM avis_core_v2.crypto_assets a LEFT JOIN avis_core_v2.crypto_asset_networks n ON n.asset_id=a.asset_id AND ($1::boolean OR n.approved) WHERE $1::boolean OR n.approved GROUP BY a.asset_id ORDER BY a.market_rank NULLS LAST,a.name`,[!actor.customerUserId])).rows;
-  if(view==='cryptowallets')return (await this.pool.query(`SELECT l.account_id,l.user_id,u.full_name,u.account_role,l.currency_code,l.network,l.wallet_scope,l.available_balance::text,l.locked_balance::text,a.asset_id,a.name,a.icon_url,n.contract_address,n.decimals,d.address_id,d.public_address,d.destination_tag FROM avis_core_v2.ledger_accounts l JOIN avis_core_v2.sovereign_users u USING(user_id) LEFT JOIN avis_core_v2.crypto_assets a ON a.currency_code=l.currency_code LEFT JOIN avis_core_v2.crypto_asset_networks n ON n.asset_id=a.asset_id AND n.network=l.network LEFT JOIN avis_core_v2.user_deposit_addresses d ON d.user_id=l.user_id AND d.network=l.network WHERE l.owner_type='USER' AND l.network IS NOT NULL AND l.wallet_scope IN ('FUNDING','CUSTODY') AND l.account_category='LIABILITY' AND ($1::bigint IS NULL OR l.user_id=$1) ORDER BY l.user_id,a.market_rank NULLS LAST,l.currency_code,l.network`,[actor.customerUserId||null])).rows;
+  if(view==='cryptowallets')return (await this.pool.query(`SELECT l.account_id,l.user_id,u.full_name,u.account_role,l.currency_code,l.network,l.wallet_scope,l.wallet_visible,l.available_balance::text,l.locked_balance::text,a.asset_id,a.name,a.icon_url,n.contract_address,n.decimals,d.address_id,d.public_address,d.destination_tag FROM avis_core_v2.ledger_accounts l JOIN avis_core_v2.sovereign_users u USING(user_id) LEFT JOIN avis_core_v2.crypto_assets a ON a.currency_code=l.currency_code LEFT JOIN avis_core_v2.crypto_asset_networks n ON n.asset_id=a.asset_id AND n.network=l.network LEFT JOIN avis_core_v2.user_deposit_addresses d ON d.user_id=l.user_id AND d.network=l.network WHERE l.owner_type='USER' AND l.network IS NOT NULL AND l.wallet_scope IN ('FUNDING','CUSTODY') AND l.account_category='LIABILITY' AND ($1::bigint IS NULL OR l.user_id=$1) ORDER BY l.user_id,a.market_rank NULLS LAST,l.currency_code,l.network`,[actor.customerUserId||null])).rows;
   if(view==='cryptosecurities')return (await this.pool.query("SELECT * FROM avis_core_v2.crypto_security_cards WHERE ($1::bigint IS NULL OR mode='DEMO' OR user_id=$1) ORDER BY sort_order",[actor.customerUserId||null])).rows;
   if(view==='cryptonetworks')return this.cryptoNetworks(actor);
   if(view==='cryptorobots'){if(actor.customerUserId)return [];return (await this.pool.query('SELECT r.*,c.name,c.mode,c.contract_address FROM avis_core_v2.crypto_rolling_channels r JOIN avis_core_v2.crypto_security_cards c USING(card_id) ORDER BY r.updated_at DESC')).rows;}

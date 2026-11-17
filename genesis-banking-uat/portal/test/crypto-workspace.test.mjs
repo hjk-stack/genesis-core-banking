@@ -45,6 +45,28 @@ test('real conversion reserves actual institution inventory and takes valuation 
  await assert.rejects(core.prepareRealSecurity(admin,{...input,quantity:'101'},key()),/CRYPTO_SOURCE_REQUIRED/);const r=await core.prepareRealSecurity(admin,input,key());assert.equal(r.dossier.faceValue,'1.000000000000000000');assert.equal(r.dossier.assetValue,'100.000000000000000000');assert.equal(r.dossier.sourceQuantity,'50.000000000000000000');assert.equal(Number((await core.list(admin,'securitypositions')).find(p=>p.security_id===s.id).reserved_quantity),50);await assert.rejects(core.prepareRealSecurity(admin,input,key()),/CRYPTO_DOSSIER_CHANGED/);assert.equal((await core.list(admin,'transactions')).length,0);
  await assert.rejects(new CustomerAccess(core).invoke(customer,'cryptoSecurityDetails',{cardId:card.card_id}),/FORBIDDEN/);
 });
+test('wallet card removal and restoration changes visibility only, without changing financial accounts or original keys',async()=>{
+ const before=(await core.list(admin,'cryptowallets')).find(w=>String(w.user_id)==='1'&&w.network==='ETHEREUM');
+ assert.ok(before?.account_id);
+ const transactionsBefore=(await core.list(admin,'transactions')).length;
+ const keysBefore=(await pool.query('SELECT address_id,encrypted_key FROM avis_core_v2.crypto_wallet_keys ORDER BY address_id')).rows;
+ const assetBefore=(await pool.query('SELECT asset_id,network,contract_address FROM avis_core_v2.crypto_asset_networks WHERE asset_id IN ($1,$2) ORDER BY asset_id,network',['avis-green','avis-green-investment'])).rows;
+ const result=await core.setCryptoWalletVisibility(admin,{accountId:before.account_id,visible:false},key());
+ assert.equal(result.visible,false);
+ const hidden=(await core.list(admin,'cryptowallets')).find(w=>w.account_id===before.account_id);
+ assert.equal(hidden.wallet_visible,false);
+ assert.equal(hidden.available_balance,before.available_balance);
+ assert.equal(hidden.locked_balance,before.locked_balance);
+ assert.equal(hidden.address_id,before.address_id);
+ assert.equal(hidden.public_address,before.public_address);
+ await assert.rejects(core.setCryptoWalletVisibility(customer,{accountId:before.account_id,visible:true},key()),/FORBIDDEN/);
+ const restored=await core.setCryptoWalletVisibility(admin,{accountId:before.account_id,visible:true},key());
+ assert.equal(restored.visible,true);
+ assert.equal((await core.list(admin,'cryptowallets')).find(w=>w.account_id===before.account_id).wallet_visible,true);
+ assert.deepEqual((await pool.query('SELECT address_id,encrypted_key FROM avis_core_v2.crypto_wallet_keys ORDER BY address_id')).rows,keysBefore);
+ assert.deepEqual((await pool.query('SELECT asset_id,network,contract_address FROM avis_core_v2.crypto_asset_networks WHERE asset_id IN ($1,$2) ORDER BY asset_id,network',['avis-green','avis-green-investment'])).rows,assetBefore);
+ assert.equal((await core.list(admin,'transactions')).length,transactionsBefore);
+});
 test('HTTP enforces customer scope and customer cannot enumerate admin catalogue or read key material',async()=>{
  await core.bindCustomerLogin(admin,{fineractUserId:'203',userId:'2'},key());server=createBankServer({pool,secureCookies:false,transferOptions:{secretEnv:env},authenticate:async()=>({id:'fineract:203',username:'crypto-fixture',admin:false})});await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port;
  const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:'fixture',password:'fixture'})}),session=await login.json(),headers={origin:base,cookie:login.headers.get('set-cookie').split(';')[0],'content-type':'application/json','x-csrf-token':session.csrf,'idempotency-key':key()};

@@ -50,7 +50,7 @@ before(async()=>{
 after(async()=>{if(server){server.closeAllConnections();await new Promise(r=>server.close(r));}if(db)await db.close();else await pool.end();});
 
 test('issuer migration keeps existing balances, ledger IDs, journals, bank routes and connectors',async()=>{
- for(const account of snapshot.accounts)assert.deepEqual((await rows('SELECT * FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[account.account_id]))[0],{...account,display_name:null});
+ for(const account of snapshot.accounts)assert.deepEqual((await rows('SELECT * FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[account.account_id]))[0],{...account,display_name:null,wallet_visible:true});
  assert.deepEqual(await rows('SELECT * FROM avis_core_v2.abiq_bank_routes ORDER BY bridge_id'),snapshot.routes);
  assert.deepEqual(await rows('SELECT * FROM avis_core_v2.ledger_entries ORDER BY entry_id'),snapshot.entries);
  assert.deepEqual(await rows('SELECT * FROM avis_core_v2.platform_connectors ORDER BY connector_code'),snapshot.connectors);
