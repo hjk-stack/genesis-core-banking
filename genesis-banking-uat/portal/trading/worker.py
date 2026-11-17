@@ -4,6 +4,7 @@ import sys
 import time
 import nautilus_trader
 from w_effect import WEffectStrategy
+from runtime_settings import configure_runtime_robots
 robots={}
 def emit(value):
     print(json.dumps(value,separators=(',',':')),flush=True)
@@ -13,11 +14,7 @@ for line in sys.stdin:
         if len(line)>1_000_000:continue
         data=json.loads(line);kind=data.get('type');robot=robots.get(data.get('robotId'))
         if kind=='CONFIG':
-            keep={r['id'] for r in data['robots']}
-            for rid in set(robots)-keep:del robots[rid]
-            for settings in data['robots']:
-                old=robots.get(settings['id'])
-                if not old or old.settings.get('version')!=settings.get('version'):robots[settings['id']]=WEffectStrategy(settings)
+            configure_runtime_robots(robots, data['robots'], WEffectStrategy)
         elif kind=='INDEX' and robot:robot.index=data['index']
         elif kind=='EVENT_ADVICE' and robot:robot.event_advice=data['candidates']
         elif kind=='ACK' and robot:robot.acknowledge(data['state'])

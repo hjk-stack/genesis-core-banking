@@ -17,7 +17,7 @@ export class CustomerAccess {
  }
  async invoke(actor,method,input,key,...extra){
   const operator=this.operator(actor);
-  if(method==='delegateWalletTrading')await this.owns(actor,'ledger_accounts',input.accountId);
+  if(['delegateWalletTrading','selectWalletTrading'].includes(method))await this.owns(actor,'ledger_accounts',input.accountId);
   else if(method==='revokeWalletTrading')await this.owns(actor,'wallet_trading_delegations',input.delegationId,'user_id','delegation_id');
   else if(method==='activateCrypto'){if(String(input.userId)!==String(actor.customerUserId))fault('FORBIDDEN','userId',403);}
   else if(['cryptoWallet','cryptoChainBalance','cryptoSecurityDetails'].includes(method)){}
@@ -42,7 +42,7 @@ export class CustomerAccess {
  async paymentRequest(actor,id){await this.ownsRequest(actor,id);return this.core.paymentRequest(this.operator(actor),id);}
  async list(actor,view){
   const operator=this.operator(actor),id=actor.customerUserId;
-  if(['walletdelegations','cryptocatalogue','cryptomarkets','cryptowallets','cryptosecurities','cryptonetworks','cryptorobots','cryptoactions','cards','transfercards','cardaccounts','cryptooffers','fxrates','currencies','issuer','portfolio','accountsummaries','securities','securitypositions','securityorders','exchangebook'].includes(view))return this.core.list(operator,view);
+  if(['walletdelegations','tradingallowances','cryptocatalogue','cryptomarkets','cryptowallets','cryptosecurities','cryptonetworks','cryptorobots','cryptoactions','cards','transfercards','cardaccounts','cryptooffers','fxrates','currencies','issuer','portfolio','accountsummaries','securities','securitypositions','securityorders','exchangebook'].includes(view))return this.core.list(operator,view);
   const queries={
    accounts:`SELECT b.abiq_iban,b.currency_code,b.user_id,u.full_name,u.account_type,u.account_role,b.status,p.abiq_bic,a.available_balance::text,a.locked_balance::text FROM avis_core_v2.abiq_routing_bridge b JOIN avis_core_v2.sovereign_users u USING(user_id) JOIN avis_core_v2.abiq_network_participants p USING(participant_code) JOIN avis_core_v2.ledger_accounts a ON a.account_id=b.ledger_account_id WHERE b.user_id=$1 ORDER BY b.account_series LIMIT 300`,
    customers:`SELECT user_id,full_name,account_type,account_role,postal_address FROM avis_core_v2.sovereign_users WHERE user_id=$1`,
