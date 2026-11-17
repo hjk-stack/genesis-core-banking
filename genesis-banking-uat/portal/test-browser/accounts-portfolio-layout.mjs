@@ -50,7 +50,7 @@ for(const width of [1440,390])test('collapsible accounts show credit/debit/refer
   const row=page.locator('[data-account-row="'+business.account_id+'"]'),group=page.locator('.account-group').filter({has:row});
   await group.locator('summary').click();assert.equal(await group.getAttribute('open'),null);await group.locator('summary').click();
   await row.getByRole('button',{name:'View details',exact:true}).click();await page.getByRole('heading',{name:'Account details',exact:true}).waitFor();
-  const dialog=page.locator('.account-statement-dialog'),bounds=await dialog.boundingBox();assert.ok(bounds.x>=0&&bounds.x+b.width<=width);
+  const dialog=page.locator('.account-statement-dialog'),bounds=await dialog.boundingBox();assert.ok(bounds.x>=0&&bounds.x+bounds.width<=width);
   await dialog.getByRole('button',{name:'View movement',exact:true}).click();await page.getByRole('heading',{name:'Movement details',exact:true}).waitFor();await page.getByText('fixture-journal',{exact:true}).waitFor();assert.equal(await page.locator('dialog[open]').count(),1);
   await page.getByRole('button',{name:'Back to account',exact:true}).click();await page.getByRole('heading',{name:'Account details',exact:true}).waitFor();await page.getByRole('button',{name:'Close account statement'}).click();
   await row.getByRole('button',{name:'Show movements for '+business.account_reference,exact:true}).click();
