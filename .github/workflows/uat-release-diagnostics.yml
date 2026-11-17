@@ -6,11 +6,17 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
   remote-evidence:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Inspect previous sovereign UAT releases and deployment job conclusions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow sovereign-uat.yml --branch main --limit 8 --json databaseId,headSha,status,conclusion,event,createdAt --jq '.[] | {run: .databaseId, commit: .headSha, status, conclusion, event, createdAt}'
       - name: Inspect current UAT DNS, TLS, readiness and deployed revision
         shell: bash
         run: |
