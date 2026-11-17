@@ -14,7 +14,7 @@ test('AVISPay creates valid wallet addresses for five blockchain families withou
 });
 test('Ethereum private key produces the registered receiving account without HSM',()=>{
  const {address,key}=newWallet('ETHEREUM');
- assert.equal(Wallet.fromPrivateKey(key.privateKey).address.toLowerCase(),address.toLowerCase());
+ assert.equal(new Wallet(key.privateKey).address.toLowerCase(),address.toLowerCase());
  assert.equal(validAddress('ETHEREUM',address),true);
 });
 test('software wallet secrets are AES-GCM sealed with account and network associated data',()=>{
