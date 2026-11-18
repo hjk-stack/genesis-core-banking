@@ -68,6 +68,24 @@ class ExistingWalletReleaseTests(unittest.TestCase):
         mutations = [path for path, body, _ in fixture.calls if body is not None]
         self.assertEqual(mutations, ['/api/crypto/activate', '/api/crypto/wallet'] * 2)
 
+    def test_empty_existing_wallet_receives_without_adding_funds_or_an_account(self):
+        fixture = Fixture()
+        for row in fixture.wallets:
+            row['available_balance'] = '0.000000000000000000'
+        evidence = verify.verify_existing_wallets(fixture.request, SHA)
+        self.assertEqual([w['accountId'] for w in evidence['wallets']], [r['account_id'] for r in fixture.wallets])
+        self.assertTrue(all(w['receivingQrVerified'] and w['available'] == '0.000000000000000000'
+                            for w in evidence['wallets']))
+
+    def test_conflicting_empty_routes_are_not_selected_by_list_order(self):
+        fixture = Fixture()
+        first = fixture.wallets[0]
+        first.update(available_balance='0', wallet_visible=True)
+        fixture.wallets.append({**first, 'account_id': 'different-empty-account'})
+        with self.assertRaisesRegex(RuntimeError, 'EXISTING_ACCOUNT_NOT_UNIQUE'):
+            verify.verify_existing_wallets(fixture.request, SHA)
+        self.assertFalse(any(path == '/api/crypto/activate' for path, _, _ in fixture.calls))
+
     def test_replay_uses_stable_operation_keys_and_no_new_accounts(self):
         fixture = Fixture()
         verify.verify_existing_wallets(fixture.request, SHA)

@@ -2,7 +2,7 @@ import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {PGlite} from '@electric-sql/pglite';
 import {migrate} from '../src/migrate.mjs';
-import {bookTreasuryOpening,readTreasuryOpening,consolidateTreasuryCrypto,TREASURY_POSITIONS} from '../src/treasury-opening.mjs';
+import {bookTreasuryOpening,readTreasuryOpening,consolidateTreasuryCrypto,verifyTreasuryOpening,TREASURY_POSITIONS} from '../src/treasury-opening.mjs';
 import {CryptoWorkspace} from '../src/crypto-workspace.mjs';
 
 let db,pool;
@@ -74,5 +74,24 @@ test('AG and AGi initial positions are moved once from duplicate Treasury balanc
   const entries=(await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.ledger_entries WHERE journal_id=$1',[target.journalId])).rows[0];
   assert.equal(entries.n,4);
   assert.equal((await readTreasuryOpening(pool)).find(p=>p.asset_code===code).quantity,'10000000000.000000000000000000');
+ }
+});
+
+test('releases verify the Treasury journal after a later wallet debit without reposting or replenishing inventory',async()=>{
+ const core=new CryptoWorkspace(pool),opening=await bookTreasuryOpening(pool,env),move=await consolidateTreasuryCrypto(pool,env);
+ const ag=move.positions.find(p=>p.asset==='AG');
+ const customer=await core.networkAccount(pool,'USER','AG','ETHEREUM','CRYPTO','2');
+ const balance=async()=>(await pool.query('SELECT available_balance::text AS amount FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[ag.accountId])).rows[0].amount;
+ await core.post(pool,{id:'regression'},'test:wallet-debit-after-opening','WALLET_TRANSFER','Regression payment',[
+  {accountId:ag.accountId,direction:'DEBIT',amount:'1.000000000000000001'},
+  {accountId:customer,direction:'CREDIT',amount:'1.000000000000000001'}
+ ]);
+ const journals=async()=>(await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.ledger_journals')).rows[0].n;
+ const count=await journals();
+ await verifyTreasuryOpening(pool,await bookTreasuryOpening(pool,env),await consolidateTreasuryCrypto(pool,env));
+ assert.equal(await balance(),'9999999998.999999999999999999');assert.equal(await journals(),count);
+ for(const altered of [{accountId:customer},{journalId:opening.positions.find(p=>p.asset==='AG').journalId},{quantity:'10000000000.000000000000000001'}]){
+  const other=structuredClone(move);Object.assign(other.positions.find(p=>p.asset==='AG'),altered);
+  await assert.rejects(verifyTreasuryOpening(pool,opening,other),{code:'TREASURY_WALLET_MOVE_READBACK'});
  }
 });
