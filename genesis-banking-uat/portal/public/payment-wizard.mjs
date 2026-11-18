@@ -216,6 +216,7 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
  }
  async function view(id){
   const serial=++generation,r=await api('payment-requests/'+id);if(serial!==generation)return;open();reviewDisplay({instruction:r.instruction,mode:r.delivery_mode,format:r.message_format,message:r.message_content});show(4);
+  const owner=q('form'),current=()=>opened&&q('form')===owner;
   q('#payment-title').textContent='Transfer request';q('.step-caption').textContent=resultLabel(r);q('.payment-progress').hidden=true;
   if(r.delivery_mode==='BLOCKCHAIN'){
    const detail=(name,value)=>{if(value==null)return;const label=document.createElement('dt'),text=document.createElement('dd');label.textContent=name;text.textContent=String(value);q('.payment-summary').append(label,text);};
@@ -226,18 +227,18 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
   download.onclick=()=>{const url=URL.createObjectURL(new Blob([r.message_content],{type:r.message_format==='AVIS_TRANSFER_V1'?'application/json':r.message_format==='FIN_MT103'?'text/plain':'application/xml'}));const a=document.createElement('a');a.href=url;a.download='AVISPay-'+r.request_id+(r.message_format==='AVIS_TRANSFER_V1'?'.json':r.message_format==='FIN_MT103'?'.fin':'.xml');a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
   if(r.delivery_mode==='BLOCKCHAIN'&&!['COMPLETED','CANCELLED','FAILED'].includes(r.current_status)){
    const check=document.createElement('button');check.type='button';check.textContent='Refresh status';q('.payment-footer').append(check);
-   check.onclick=async()=>{if(busy)return;setBusy(true);try{await view(id);await refresh();}catch(e){error(e);}finally{setBusy(false);}};
+   check.onclick=async()=>{if(busy)return;setBusy(true);try{await view(id);if(opened)await refresh();}catch(e){if(current())error(e);}finally{if(current())setBusy(false);}};
   }
-  if(r.hasDelivery){const showCard=document.createElement('button');showCard.type='button';showCard.textContent='Card delivery & code';q('.payment-footer').append(showCard);showCard.onclick=()=>showDelivery(r).catch(error);}
+  if(r.hasDelivery){const showCard=document.createElement('button');showCard.type='button';showCard.textContent='Card delivery & code';q('.payment-footer').append(showCard);showCard.onclick=()=>showDelivery(r).catch(e=>{if(current())error(e);});}
   if(isAdmin()&&r.delivery_mode!=='BLOCKCHAIN'&&(r.status==='OUTGOING'||r.current_status==='PROCESSING')){
-   const pick=document.createElement('button');pick.type='button';pick.textContent='Pick up request';q('.payment-footer').append(pick);pick.onclick=async()=>{setBusy(true);try{await api('payments/pickup',{requestId:id},crypto.randomUUID());pick.textContent='Picked up';await refresh();}catch(e){error(e);}finally{setBusy(false);}};
+   const pick=document.createElement('button');pick.type='button';pick.textContent='Pick up request';q('.payment-footer').append(pick);pick.onclick=async()=>{setBusy(true);try{await api('payments/pickup',{requestId:id},crypto.randomUUID());if(!current())return;pick.textContent='Picked up';await refresh();}catch(e){if(current())error(e);}finally{if(current())setBusy(false);}};
   }
   if(isAdmin()&&r.delivery_mode==='MANUAL'&&r.status==='OUTGOING'){
    const complete=document.createElement('button');complete.type='button';complete.textContent='Record completed transfer';q('.payment-footer').append(complete);complete.onclick=()=>{close();settle(r);};
-   if(r.external_card_id){const details=document.createElement('button');details.type='button';details.textContent='Card processing details';q('.payment-footer').append(details);details.onclick=async()=>{try{const c=await api('cards/pickup-details',{requestId:id},crypto.randomUUID());if(!details.isConnected)return;q('[data-message]').textContent=c.holder+'\n'+c.pan+'\n'+c.expiry;}catch(e){error(e);}};}
+   if(r.external_card_id){const details=document.createElement('button');details.type='button';details.textContent='Card processing details';q('.payment-footer').append(details);details.onclick=async()=>{try{const c=await api('cards/pickup-details',{requestId:id},crypto.randomUUID());if(!details.isConnected)return;q('[data-message]').textContent=c.holder+'\n'+c.pan+'\n'+c.expiry;}catch(e){if(current())error(e);}};}
 
    const cancel=document.createElement('button');cancel.type='button';cancel.textContent='Cancel request and release funds';q('.payment-footer').append(cancel);
-   const key=crypto.randomUUID();cancel.onclick=async()=>{if(busy)return;setBusy(true);try{await api('payments/cancel',{requestId:id},key);close();notice('Transfer request cancelled · funds released');await refresh();}catch(e){error(e);}finally{setBusy(false);}};
+   const key=crypto.randomUUID();cancel.onclick=async()=>{if(busy)return;setBusy(true);try{await api('payments/cancel',{requestId:id},key);if(!current())return;close();notice('Transfer request cancelled · funds released');await refresh();}catch(e){if(current())error(e);}finally{if(current())setBusy(false);}};
   }
   // Viewing an existing instruction is read-only; Enter cannot submit it again.
   q('form').onsubmit=e=>e.preventDefault();

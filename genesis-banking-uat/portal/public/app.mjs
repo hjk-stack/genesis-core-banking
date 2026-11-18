@@ -136,7 +136,7 @@ html+=results.map((r,i)=>{
  if(view==='securityorders')return securityOrdersTable(rows);
  if(view==='exchangebook')return securityBookTable(rows);
  return table(view,page.views[i][1],rows)+(view==='portfolio'&&!rows.length?'<p class="panel-empty">No investment holdings recorded yet.</p>':'');
-}).join('');$('#panels').innerHTML=html;$('#panels').setAttribute('aria-busy','false');accountStatements.bind($('#panels'));portfolioManager.bind($('#panels'));document.querySelectorAll('[data-request]').forEach(b=>b.onclick=()=>paymentWizard.view(b.dataset.request).catch(e=>{if(b.isConnected)pageError(e);}));document.querySelectorAll('[data-card-row]').forEach(row=>{const show=()=>cardManager.open(row.querySelector('select').value).catch(e=>{if(row.isConnected)pageError(e);});row.onclick=e=>{if(e.target.closest('select'))return;void show();};row.onkeydown=e=>{if(e.target===row&&e.key==='Enter'){e.preventDefault();void show();}};});}
+}).join('');$('#panels').innerHTML=html;$('#panels').setAttribute('aria-busy','false');accountStatements.bind($('#panels'));portfolioManager.bind($('#panels'));document.querySelectorAll('[data-request]').forEach(b=>b.onclick=()=>paymentWizard.view(b.dataset.request).catch(e=>pageError(e,b)));document.querySelectorAll('[data-card-row]').forEach(row=>{const show=()=>cardManager.open(row.querySelector('select').value).catch(e=>pageError(e,row));row.onclick=e=>{if(e.target.closest('select'))return;void show();};row.onkeydown=e=>{if(e.target===row&&e.key==='Enter'){e.preventDefault();void show();}};});}
 window.addEventListener('hashchange',()=>{
  clearNotice();clearForm();paymentWizard.close();accountStatements.close();cardManager.close();portfolioManager.close();
 
@@ -211,7 +211,17 @@ async function openForm(id){
   return false;
  }
 }
-function pageError(err){
+function pageError(err,origin){
+ if(origin&&!origin.isConnected)return;
+ const panel=origin?.closest('.panel');
+ if(panel){
+  let issue=panel.querySelector('[data-panel-action-error]');
+  if(!issue){
+   issue=document.createElement('p');issue.className='form-error';issue.dataset.panelActionError='';
+   issue.setAttribute('role','alert');(panel.querySelector('.panel-header')||panel.firstElementChild)?.after(issue);
+  }
+  issue.textContent=err.message;return;
+ }
  const target=$('#account-page-error')||$('#crypto-wallet-desk [data-crypto-error]')||$('#login-form .form-error');
  if(target)target.textContent=err.message;
 }
@@ -251,5 +261,5 @@ const cryptoManager=createCryptoWorkspace({api,identity:()=>identity,purchase:()
 const paymentWizard=createPaymentWizard({api,accounts:()=>cache.accounts||[],refresh:render,notice,data:view=>cache[view]||[],purchase:()=>openForm('buycrypto'),sell:()=>openForm('sellcrypto'),isAdmin:()=>identity.admin,userId:()=>identity.customerUserId,settle:async r=>{if(!await openForm('settletransfer'))return;$('#action-form').elements.requestId.value=r.request_id;$('#action-form').elements.requestId.readOnly=true;}});
 const cardManager=createCardManager({api,refresh:render,notice});
 const accountStatements=createAccountStatements({api});
-const portfolioManager=createPortfolio({api,getRows,data:view=>cache[view]||[],refresh:render,notice,isAdmin:()=>identity.admin});
+const portfolioManager=createPortfolio({api,getRows,data:view=>cache[view]||[],refresh:render,notice,actionError:pageError,isAdmin:()=>identity.admin});
 api('session').then(signedIn).catch(()=>signedOut());

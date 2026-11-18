@@ -121,6 +121,7 @@ def verify_deployed_frontend(opener, base, sha):
         '/': 'index.html',
         '/app.mjs': 'public/app.mjs',
         '/payment-wizard.mjs': 'public/payment-wizard.mjs',
+        '/cards.mjs': 'public/cards.mjs',
         '/accounts.mjs': 'public/accounts.mjs',
         '/portfolio.mjs': 'public/portfolio.mjs',
         '/crypto-workspace.mjs': 'public/crypto-workspace.mjs',
