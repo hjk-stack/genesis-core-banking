@@ -120,6 +120,7 @@ def verify_deployed_frontend(opener, base, sha):
     assets = {
         '/': 'index.html',
         '/app.mjs': 'public/app.mjs',
+        '/payment-wizard.mjs': 'public/payment-wizard.mjs',
         '/accounts.mjs': 'public/accounts.mjs',
         '/portfolio.mjs': 'public/portfolio.mjs',
         '/crypto-workspace.mjs': 'public/crypto-workspace.mjs',

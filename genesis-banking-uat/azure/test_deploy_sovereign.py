@@ -727,6 +727,7 @@ class FrontendReleaseIntegrityTests(unittest.TestCase):
         release = 'a' * 40
         portal = Path(__file__).resolve().parent.parent / 'portal'
         files = {'/': 'index.html', '/app.mjs': 'public/app.mjs',
+                 '/payment-wizard.mjs': 'public/payment-wizard.mjs',
                  '/accounts.mjs': 'public/accounts.mjs',
                  '/portfolio.mjs': 'public/portfolio.mjs',
                  '/crypto-workspace.mjs': 'public/crypto-workspace.mjs',

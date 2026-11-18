@@ -38,7 +38,7 @@ export function createAccountStatements({api}){
  function bindMovements(container){container.querySelectorAll('[data-movement]').forEach(row=>{
   const open=()=>movement(row.dataset.account,row.dataset.movement).catch(e=>showError(container,e));row.onclick=()=>void open();row.onkeydown=e=>{if(e.target===row&&e.key==='Enter'){e.preventDefault();void open();}};
  });}
- function showError(container,error){const el=container.querySelector('.form-error')||document.querySelector('#account-page-error');if(el)el.textContent=error.message;}
+ function showError(container,error){if(!container.isConnected)return;const el=container.querySelector('.form-error')||document.querySelector('#account-page-error');if(el)el.textContent=error.message;}
  function older(container,id,next,valid){
   const button=container.querySelector('[data-older]');button.hidden=!next;
   button.onclick=async()=>{if(!next||button.disabled)return;button.disabled=true;
