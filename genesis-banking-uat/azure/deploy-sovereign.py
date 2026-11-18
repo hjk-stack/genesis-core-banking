@@ -35,6 +35,7 @@ AZURE_ERROR_CODES = frozenset({
     'InvalidSubscriptionId', 'MissingSubscriptionRegistration', 'NoRegisteredProviderFound',
     'RequestDisallowedByPolicy', 'OperationNotAllowed', 'TooManyRequests',
     'ServiceUnavailable', 'InternalServerError', 'GatewayTimeout',
+    'InvalidParameterValueInContainerTemplate', 'WebhookInvalidParameterValue',
 })
 
 
@@ -47,6 +48,9 @@ class AzureOperationError(RuntimeError):
             r'|^\s*Code:\s*([A-Za-z][A-Za-z0-9]+)\s*$', stderr or '', re.MULTILINE)
         self.azure_code = next((code for match in candidates for code in match
                                 if code in AZURE_ERROR_CODES), 'AZURE_CLI_ERROR')
+        if (self.azure_code in {'InvalidParameterValueInContainerTemplate', 'WebhookInvalidParameterValue'}
+                and re.search(r'\brevision with suffix [a-z0-9][a-z0-9-]{0,63} already exists\b', stderr or '')):
+            self.azure_code = 'REVISION_SUFFIX_CONFLICT'
         operation = []
         for arg in args:
             if not re.fullmatch(r'[a-z][a-z0-9-]*', arg) or len(operation) == 4:
@@ -408,24 +412,46 @@ def verify_live_trading(opener, base):
           + '; saved profiles=' + str(len(profiles)) + '; real security registrations=' + str(len(real_cards))
           + '; registered contract pairs=' + str(registered_contracts) + '; no trading activation')
 
-def apply_authorized_opening(revision, container):
-    """Run the fixed, idempotent UAT request inside the existing application."""
-    replicas = az('containerapp', 'replica', 'list', '-g', RG, '-n', APP, '--revision', revision)
-    if not replicas:
-        raise RuntimeError('No running UAT replica for opening entries')
-    args = ['az', 'containerapp', 'exec', '-g', RG, '-n', APP, '--revision', revision,
-            '--replica', replicas[0]['name'], '--container', container,
-            '--command', 'node /app/src/uat-opening.mjs', '--only-show-errors']
-    # Azure CLI's console requires a terminal. No credential is placed in the
-    # command or copied out of the container; output is limited to its receipt.
-    master, slave = pty.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 120, 0, 0))
-    process = subprocess.Popen(args, stdin=slave, stdout=slave, stderr=slave,
-                               env={**os.environ, 'TERM': 'xterm'}, start_new_session=True)
-    os.close(slave)
-    output = ''
-    receipt = None
+def parse_console_receipt(output, marker, failure_label, invalid_label, final=False):
+    """Parse only known receipts; terminal formatting and transcripts stay private."""
+    clean = re.sub(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-_])', '', output)
+    failure_end = r'(?=\s|$)' if final else r'(?=\s)'
+    failure = re.search(re.escape(marker) + r'_FAILED[ \t]+([A-Z0-9_]+)' + failure_end, clean)
+    if failure:
+        raise RuntimeError(failure_label + ': ' + failure[1])
+    # Remote consoles can hard-wrap inside a JSON string or even its marker.
+    flat = clean.replace('\r', '').replace('\n', '')
+    match = re.search(re.escape(marker) + r'_OK[ \t]+', flat)
+    if not match:
+        return None
+    payload = flat[match.end():].lstrip()
+    if not payload:
+        return None
+    if not payload.startswith('{'):
+        raise RuntimeError(invalid_label)
     try:
+        receipt, _ = json.JSONDecoder().raw_decode(payload)
+    except json.JSONDecodeError:
+        if '}' in payload:
+            raise RuntimeError(invalid_label) from None
+        return None  # An interrupted console may deliver only part of the receipt.
+    if not isinstance(receipt, dict):
+        raise RuntimeError(invalid_label)
+    return receipt
+
+
+def opening_console_attempt(args, marker, failure_label, invalid_label):
+    """Read one PTY connection and return only a receipt or safe transport metadata."""
+    master, slave = pty.openpty()
+    process = None
+    try:
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 512, 0, 0))
+        try:
+            process = subprocess.Popen(args, stdin=slave, stdout=slave, stderr=slave,
+                                       env={**os.environ, 'TERM': 'xterm'}, start_new_session=True)
+        finally:
+            os.close(slave)
+        output, byte_count, outcome = '', 0, 'TIMEOUT'
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             ready = select.select([master], [], [], 1)[0]
@@ -433,25 +459,23 @@ def apply_authorized_opening(revision, container):
                 try:
                     chunk = os.read(master, 8192)
                 except OSError:
+                    outcome = 'EOF'
                     break
                 if not chunk:
+                    outcome = 'EOF'
                     break
+                byte_count += len(chunk)
                 output = (output + chunk.decode('utf-8', errors='replace'))[-65536:]
-                match = re.search(r'AVIS_UAT_OPENING_OK (\{[^\r\n]+\})', output)
-                if match:
-                    receipt = json.loads(match.group(1))
-                    break
+                receipt = parse_console_receipt(output, marker, failure_label, invalid_label)
+                if receipt is not None:
+                    return receipt, None
             if not ready and process.poll() is not None:
+                outcome = 'EXIT'
                 break
-        if not receipt or receipt.get('creditedAccounts') != 7 or receipt.get('requestId') != 'uat-opening-2026-11-14-seven-accounts':
-            code = re.search(r'AVIS_UAT_OPENING_FAILED ([A-Z0-9_]+)', output)
-            raise RuntimeError('UAT opening entries not confirmed' + (': ' + code.group(1) if code else ''))
-        if not re.fullmatch(r'[0-9a-f-]{36}', receipt.get('journalId', '')):
-            raise RuntimeError('Invalid UAT opening receipt')
-        print('Authorized UAT opening journal: ' + receipt['journalId'] + '; seven accounts credited once')
-        return receipt
+        receipt = parse_console_receipt(output, marker, failure_label, invalid_label, final=True)
+        return receipt, {'outcome': outcome, 'exitCode': process.poll(), 'bytes': byte_count}
     finally:
-        if process.poll() is None:
+        if process is not None and process.poll() is None:
             process.terminate()
             try:
                 process.wait(timeout=5)
@@ -460,55 +484,77 @@ def apply_authorized_opening(revision, container):
                 process.wait()
         os.close(master)
 
+
+def opening_console(revision, container, script, marker, failure_label, invalid_label):
+    # Reconnect only when the console supplied no complete result. Both fixed
+    # opening scripts replay their existing idempotency keys and journal receipts.
+    for attempt in range(1, 3):
+        replicas = az('containerapp', 'replica', 'list', '-g', RG, '-n', APP, '--revision', revision)
+        if not replicas:
+            raise RuntimeError('No running UAT replica for opening entries')
+        args = ['az', 'containerapp', 'exec', '-g', RG, '-n', APP, '--revision', revision,
+                '--replica', replicas[0]['name'], '--container', container,
+                '--command', 'node /app/src/' + script, '--only-show-errors']
+        receipt, transport = opening_console_attempt(args, marker, failure_label, invalid_label)
+        if receipt is not None:
+            return receipt
+        print('Opening console transport: ' + json.dumps({'operation': marker, 'attempt': attempt, **transport}, sort_keys=True))
+    raise RuntimeError(failure_label + '; console receipt unavailable after 2 attempts')
+
+
+def apply_authorized_opening(revision, container):
+    """Run the fixed, idempotent UAT request inside the existing application."""
+    receipt = opening_console(revision, container, 'uat-opening.mjs', 'AVIS_UAT_OPENING',
+                              'UAT opening entries not confirmed', 'Invalid UAT opening receipt')
+    if (type(receipt.get('creditedAccounts')) is not int or receipt['creditedAccounts'] != 7
+            or receipt.get('requestId') != 'uat-opening-2026-11-14-seven-accounts'):
+        raise RuntimeError('UAT opening entries not confirmed')
+    if not isinstance(receipt.get('journalId'), str) or not re.fullmatch(
+            r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', receipt['journalId']):
+        raise RuntimeError('Invalid UAT opening receipt')
+    print('Authorized UAT opening journal: ' + receipt['journalId'] + '; seven accounts credited once')
+    return receipt
+
+
 def apply_treasury_opening(revision, container):
     """Post the four owner-authorised opening positions in the existing UAT container."""
-    replicas = az('containerapp', 'replica', 'list', '-g', RG, '-n', APP, '--revision', revision)
-    if not replicas:
-        raise RuntimeError('No running UAT replica for Treasury opening')
-    args = ['az', 'containerapp', 'exec', '-g', RG, '-n', APP, '--revision', revision,
-            '--replica', replicas[0]['name'], '--container', container,
-            '--command', 'node /app/src/treasury-opening.mjs', '--only-show-errors']
-    master, slave = pty.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 120, 0, 0))
-    process = subprocess.Popen(args, stdin=slave, stdout=slave, stderr=slave,
-                               env={**os.environ, 'TERM': 'xterm'}, start_new_session=True)
-    os.close(slave)
-    output = ''
-    receipt = None
-    try:
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline:
-            ready = select.select([master], [], [], 1)[0]
-            if ready:
-                try:
-                    chunk = os.read(master, 8192)
-                except OSError:
-                    break
-                if not chunk:
-                    break
-                output = (output + chunk.decode('utf-8', errors='replace'))[-65536:]
-                match = re.search(r'AVISPAY_TREASURY_BOOKING_OK (\{[^\r\n]+\})', output)
-                if match:
-                    receipt = json.loads(match.group(1))
-                    break
-            if not ready and process.poll() is not None:
-                break
-        if not receipt or receipt.get('requestId') != 'avispay-treasury-registered-inventory-2026-11-16':
-            code = re.search(r'AVISPAY_TREASURY_BOOKING_FAILED ([A-Z0-9_]+)', output)
-            raise RuntimeError('Treasury opening posting failed' + (': ' + code.group(1) if code else ''))
-        if receipt.get('booked') != 4:
-            raise RuntimeError('Treasury opening count mismatch')
-        print('Authorized Treasury opening recorded: four booking references')
-        return receipt
-    finally:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-        os.close(master)
+    receipt = opening_console(revision, container, 'treasury-opening.mjs', 'AVISPAY_TREASURY_BOOKING',
+                              'Treasury opening posting failed', 'Invalid Treasury opening receipt')
+    if receipt.get('requestId') != 'avispay-treasury-registered-inventory-2026-11-16':
+        raise RuntimeError('Treasury opening posting failed')
+    if type(receipt.get('booked')) is not int or receipt['booked'] != 4:
+        raise RuntimeError('Treasury opening count mismatch')
+    print('Authorized Treasury opening recorded: four booking references')
+    return receipt
+
+
+def deployment_revision_suffix(sha, environment=None):
+    environment = os.environ if environment is None else environment
+    run_id, attempt = environment.get('GITHUB_RUN_ID', ''), environment.get('GITHUB_RUN_ATTEMPT', '')
+    if (not re.fullmatch(r'[0-9a-f]{40}', sha)
+            or not re.fullmatch(r'[1-9][0-9]{0,19}', run_id)
+            or not re.fullmatch(r'[1-9][0-9]{0,5}', attempt)):
+        raise RuntimeError('Release run identity invalid')
+    suffix = 'bank-' + sha[:12] + '-r' + run_id + '-a' + attempt
+    if len(APP + '--' + suffix) > 64:
+        raise RuntimeError('Release revision name too long')
+    return suffix
+
+
+def application_image_release(image):
+    match = re.fullmatch(r'[^\s]+/avispay-sovereign:([0-9a-f]{40})', image or '')
+    if not match:
+        raise RuntimeError('Previous application image release is not verified')
+    return match[1]
+
+
+def restore_application_image(container):
+    # Image tags are the immutable source identity; an earlier rollback may
+    # have left a newer RELEASE_SHA in the existing container environment.
+    sha = application_image_release(container['image'])
+    az('containerapp', 'update', '-g', RG, '-n', APP, '--image', container['image'],
+       '--container-name', container['name'], '--set-env-vars', 'RELEASE_SHA=' + sha)
+
 
 def existing_crypto_settings(current_env, known_secrets=()):
     """Reuse only named crypto connectors from the existing AVIS application.
@@ -588,11 +634,14 @@ def main():
     image = os.environ['AVISPAY_IMAGE']
     if not re.fullmatch(r'[0-9a-f]{40}', sha) or not image.endswith('/avispay-sovereign:' + sha):
         raise RuntimeError('Release image and source SHA must match')
+    suffix = deployment_revision_suffix(sha)
+    revision = APP + '--' + suffix
     before = app(APP)
     identity = app(IDENTITY_APP)
     containers = before['properties']['template']['containers']
     if len(containers) != 1:
         raise RuntimeError('Expected exactly one application container')
+    application_image_release(containers[0]['image'])
     if before['properties']['managedEnvironmentId'] != identity['properties']['managedEnvironmentId']:
         raise RuntimeError('Existing applications are in different environments')
     if image.split('/')[0] != containers[0]['image'].split('/')[0]:
@@ -621,7 +670,7 @@ def main():
     try:
         az('containerapp', 'update', '-g', RG, '-n', APP, '--image', image,
            '--container-name', containers[0]['name'], '--set-env-vars', *env,
-           '--revision-suffix', 'bank-' + sha[:12])
+           '--revision-suffix', suffix)
         after = app(APP)
         stage = 'configuration preservation'
         for field in ['managedEnvironmentId', 'workloadProfileName']:
@@ -739,7 +788,7 @@ def main():
         dates = sorted({row['source_date'][:10] for row in rates})
         print('Verified ECB reference data: ' + str(len(rates)) + ' currencies; publication ' + ', '.join(dates))
         stage = 'authorized UAT opening balances'
-        receipt = apply_authorized_opening(APP + '--bank-' + sha[:12], containers[0]['name'])
+        receipt = apply_authorized_opening(revision, containers[0]['name'])
         # Verify the immutable posting rather than replenishing balances on
         # future deployments after users have spent or transferred their funds.
         entries = api(opener, base, '/api/views/transactions')['rows']
@@ -754,7 +803,7 @@ def main():
                     raise RuntimeError('Opening journal currency totals mismatch')
         print('Verified the authorized UAT opening request; existing balances are never reset on replay')
         stage = 'authorized Treasury opening positions'
-        treasury = apply_treasury_opening(APP + '--bank-' + sha[:12], containers[0]['name'])
+        treasury = apply_treasury_opening(revision, containers[0]['name'])
         booked = api(opener, base, '/api/views/treasurypositions')['rows']
         expected = {'USU3712QAA05': Decimal('500000'),
                     'AVISPAY-PLC-SHARES': Decimal('100000000'),
@@ -783,7 +832,7 @@ def main():
         if isinstance(error, RuntimeError):
             print(str(error))  # Only this module's fixed, credential-free diagnostics.
         # Additive migrations remain; restoring the old image never rolls back financial data.
-        az('containerapp', 'update', '-g', RG, '-n', APP, '--image', containers[0]['image'])
+        restore_application_image(containers[0])
         raise RuntimeError('Release verification failed; previous application image restored') from None
 
 if __name__ == '__main__':
