@@ -19,16 +19,26 @@ real_popen = subprocess.Popen
 class OpeningConsoleTests(unittest.TestCase):
     def execute(self, output):
         calls = []
+        outputs = iter(output if isinstance(output, list) else [output])
+        self.console_calls = calls
 
         def process(args, **kwargs):
             calls.append(args)
-            return real_popen([sys.executable, '-c', 'import sys; sys.stdout.write(' + repr(output) + '); sys.stdout.flush()'], **kwargs)
+            return real_popen([sys.executable, '-c', 'import sys; sys.stdout.write(' + repr(next(outputs)) + '); sys.stdout.flush()'], **kwargs)
 
-        with patch.object(deploy, 'az', return_value=[{'name': 'replica-one'}]), patch.object(deploy.subprocess, 'Popen', side_effect=process):
+        with patch.object(deploy, 'az', return_value=[{'name': 'replica-one'}]) as replicas, patch.object(deploy.subprocess, 'Popen', side_effect=process):
+            self.replica_reads = replicas
             captured = io.StringIO()
-            with contextlib.redirect_stdout(captured):
-                result = deploy.apply_authorized_opening('genesis-banking-uat--bank-fixture', 'banking')
+            try:
+                with contextlib.redirect_stdout(captured):
+                    result = deploy.apply_authorized_opening('genesis-banking-uat--bank-fixture', 'banking')
+            finally:
+                self.console_output = captured.getvalue()
         return result, calls, captured.getvalue()
+
+    def receipt(self):
+        return {'journalId': '11111111-1111-4111-8111-111111111111',
+                'requestId': 'uat-opening-2026-11-14-seven-accounts', 'creditedAccounts': 7}
 
     def test_reads_receipt_from_real_terminal_without_echoing_console_diagnostics(self):
         receipt = {'journalId': '11111111-1111-4111-8111-111111111111', 'requestId': 'uat-opening-2026-11-14-seven-accounts', 'creditedAccounts': 7}
@@ -53,8 +63,137 @@ class OpeningConsoleTests(unittest.TestCase):
                 deploy.apply_authorized_opening('revision', 'container')
             start.assert_not_called()
 
+    def test_wrapped_ansi_receipt_survives_remote_terminal_formatting(self):
+        receipt = self.receipt()
+        line = 'AVIS_UAT_OPENING_OK ' + json.dumps(receipt, separators=(',', ':'))
+        decorated = '\x1b[32m' + line[:13] + '\r\n' + line[13:120] + '\x1b[0m\r\n' + line[120:] + '\n'
+        result, calls, output = self.execute('private-console-fixture\n' + decorated)
+        self.assertEqual(result, receipt)
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn('private-console-fixture', output)
+
+    def test_split_marker_and_json_wait_for_the_complete_receipt(self):
+        receipt = self.receipt()
+        line = 'AVIS_UAT_OPENING_OK ' + json.dumps(receipt, separators=(',', ':'))
+        for length in (5, 21, 44, len(line) - 1):
+            self.assertIsNone(deploy.parse_console_receipt(line[:length], 'AVIS_UAT_OPENING', 'failed', 'invalid'))
+        self.assertEqual(deploy.parse_console_receipt(line, 'AVIS_UAT_OPENING', 'failed', 'invalid'), receipt)
+
+    def test_unconfirmed_console_reconnects_once_with_the_identical_command(self):
+        receipt = self.receipt()
+        result, calls, output = self.execute(['private-disconnect-fixture\n',
+                                             'AVIS_UAT_OPENING_OK ' + json.dumps(receipt) + '\n'])
+        self.assertEqual(result, receipt)
+        self.assertEqual(calls[0], calls[1])
+        self.assertEqual(self.replica_reads.call_count, 2)
+        self.assertIn('"attempt": 1', output)
+        self.assertIn('"bytes":', output)
+        self.assertNotIn('private-disconnect-fixture', output)
+
+    def test_missing_receipt_is_bounded_and_never_prints_console_text(self):
+        with self.assertRaisesRegex(RuntimeError, 'unavailable after 2 attempts'):
+            self.execute(['private-first-transport-error\n', 'private-second-transport-error\n'])
+        self.assertEqual(len(self.console_calls), 2)
+        self.assertEqual(self.replica_reads.call_count, 2)
+        self.assertNotIn('private-', self.console_output)
+
+    def test_explicit_operation_failure_is_preserved_without_reconnect(self):
+        with self.assertRaisesRegex(RuntimeError, 'UAT_OPENING_ACCOUNT_SET'):
+            self.execute('\x1b[31mAVIS_UAT_OPENING_FAILED UAT_OPENING_ACCOUNT_SET\x1b[0m\n')
+        self.assertEqual(len(self.console_calls), 1)
+        self.assertNotIn('Opening console transport', self.console_output)
+
+    def test_split_failure_code_is_not_reported_until_complete(self):
+        partial = 'AVIS_UAT_OPENING_FAILED UAT_OPENING_ACC'
+        self.assertIsNone(deploy.parse_console_receipt(partial, 'AVIS_UAT_OPENING', 'failed', 'invalid'))
+        for final, output in ((False, partial + 'OUNT_SET\n'), (True, partial + 'OUNT_SET')):
+            with self.assertRaisesRegex(RuntimeError, 'failed: UAT_OPENING_ACCOUNT_SET$'):
+                deploy.parse_console_receipt(output, 'AVIS_UAT_OPENING', 'failed', 'invalid', final=final)
+
+    def test_malformed_receipt_is_a_protocol_failure_without_reconnect(self):
+        for line in ('AVIS_UAT_OPENING_OK {"journalId":}\n',
+                     'AVIS_UAT_OPENING_OK ["private-payload"]\n'):
+            with self.subTest(line=line):
+                with self.assertRaisesRegex(RuntimeError, 'Invalid UAT opening receipt'):
+                    self.execute(line)
+                self.assertEqual(len(self.console_calls), 1)
+                self.assertNotIn('private-payload', self.console_output)
+
+    def test_exact_request_count_and_canonical_journal_checks_are_preserved(self):
+        for change in ({'requestId': 'other-opening'}, {'creditedAccounts': 6},
+                       {'creditedAccounts': '7'}, {'creditedAccounts': 7.0},
+                       {'journalId': '-' * 36}, {'journalId': None}):
+            with self.subTest(change=change):
+                receipt = {**self.receipt(), **change}
+                with self.assertRaisesRegex(RuntimeError, 'not confirmed|Invalid UAT opening receipt'):
+                    self.execute('AVIS_UAT_OPENING_OK ' + json.dumps(receipt) + '\n')
+                self.assertEqual(len(self.console_calls), 1)
+
+
+class DeploymentRevisionTests(unittest.TestCase):
+    def test_rollback_restores_the_image_tag_release_even_if_environment_already_drifted(self):
+        previous = 'a' * 40
+        container = {'name': 'banking', 'image': 'registry.example/avispay-sovereign:' + previous,
+                     'env': [{'name': 'RELEASE_SHA', 'value': 'b' * 40},
+                             {'name': 'PGPASSWORD', 'secretRef': 'private-secret-ref'}]}
+        original = deepcopy(container)
+        with patch.object(deploy, 'az') as azure:
+            deploy.restore_application_image(container)
+        azure.assert_called_once_with('containerapp', 'update', '-g', deploy.RG, '-n', deploy.APP,
+            '--image', container['image'], '--container-name', 'banking',
+            '--set-env-vars', 'RELEASE_SHA=' + previous)
+        self.assertEqual(container, original)
+        self.assertNotIn('private-secret-ref', str(azure.call_args))
+
+    def test_rollback_does_not_guess_release_for_an_unversioned_image(self):
+        container = {'name': 'banking', 'image': 'registry.example/avispay-sovereign:latest',
+                     'env': [{'name': 'RELEASE_SHA', 'value': 'b' * 40}]}
+        with patch.object(deploy, 'az') as azure:
+            with self.assertRaisesRegex(RuntimeError, 'image release is not verified'):
+                deploy.restore_application_image(container)
+        azure.assert_not_called()
+
+    def test_same_commit_has_unique_run_and_attempt_names(self):
+        sha = 'b9a23b8ad316f559d208348272d1d6006ec9e1d6'
+        first = deploy.deployment_revision_suffix(sha, {'GITHUB_RUN_ID': '44199999999', 'GITHUB_RUN_ATTEMPT': '1'})
+        retry = deploy.deployment_revision_suffix(sha, {'GITHUB_RUN_ID': '44199999999', 'GITHUB_RUN_ATTEMPT': '2'})
+        next_run = deploy.deployment_revision_suffix(sha, {'GITHUB_RUN_ID': '44200000000', 'GITHUB_RUN_ATTEMPT': '1'})
+        self.assertEqual(len({first, retry, next_run}), 3)
+        for suffix in (first, retry, next_run):
+            self.assertRegex(suffix, r'^bank-b9a23b8ad316-r[0-9]+-a[0-9]+$')
+            self.assertLessEqual(len(deploy.APP + '--' + suffix), 64)
+
+    def test_invalid_run_context_is_rejected_before_azure_mutation(self):
+        for environment in ({}, {'GITHUB_RUN_ID': '1', 'GITHUB_RUN_ATTEMPT': '0'},
+                            {'GITHUB_RUN_ID': '1\nprivate', 'GITHUB_RUN_ATTEMPT': '1'},
+                            {'GITHUB_RUN_ID': '-1', 'GITHUB_RUN_ATTEMPT': '1'},
+                            {'GITHUB_RUN_ID': '9' * 20, 'GITHUB_RUN_ATTEMPT': '9' * 6}):
+            with self.subTest(environment=environment):
+                with self.assertRaisesRegex(RuntimeError, 'Release run identity invalid|revision name too long'):
+                    deploy.deployment_revision_suffix('b' * 40, environment)
+
+    def test_invalid_run_context_stops_main_before_any_azure_access(self):
+        sha = 'b' * 40
+        with patch.dict(os.environ, {'GITHUB_SHA': sha, 'AVISPAY_IMAGE': 'registry/avispay-sovereign:' + sha,
+                                     'GITHUB_RUN_ID': 'invalid', 'GITHUB_RUN_ATTEMPT': '1'}), patch.object(deploy, 'az') as azure:
+            with self.assertRaisesRegex(RuntimeError, 'Release run identity invalid'):
+                deploy.main()
+        azure.assert_not_called()
+
 
 class AzureDiagnosticsTests(unittest.TestCase):
+    def test_known_revision_conflict_is_classified_without_echoing_template_or_secrets(self):
+        for code in ('InvalidParameterValueInContainerTemplate', 'WebhookInvalidParameterValue'):
+            with self.subTest(code=code):
+                error = deploy.AzureOperationError(('containerapp', 'update', '--set-env-vars', 'SECRET=private-value'),
+                    'ERROR: (' + code + ') template.revisionsuffix: revision with suffix bank-private-value already exists; private-template')
+                self.assertEqual(error.azure_code, 'REVISION_SUFFIX_CONFLICT')
+                self.assertNotIn('private-', str(error))
+                self.assertNotIn('SECRET', str(error))
+                other = deploy.AzureOperationError(('containerapp', 'update'),
+                    'ERROR: (' + code + ') unrelated private-template field validation')
+                self.assertEqual(other.azure_code, code)
+
     def test_retains_known_azure_error_codes_without_secret_arguments_or_messages(self):
         errors = [
             ('ERROR: (AuthorizationFailed) private-provider-fixture', 'AuthorizationFailed'),
