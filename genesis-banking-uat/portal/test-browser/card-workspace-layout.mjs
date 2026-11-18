@@ -37,3 +37,22 @@ test('Cards and POS are separate administrator workspaces',async()=>{
   await page.locator('nav a[href="#pos"]').click();await page.getByRole('heading',{name:'POS',exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Register terminal',exact:true}).isVisible(),true);assert.equal(await page.getByRole('button',{name:'Activate card account',exact:true}).count(),0);
  }finally{await page.close();}
 });
+
+test('a card action finishing after navigation cannot reopen the previous card',async()=>{
+ const page=await browser.newPage();let started;
+ const pending=new Promise(resolve=>{started=resolve;});
+ try{
+  await page.route('**/api/cards/status',route=>started(route));
+  await page.goto(base+'/customer#cards');
+  await page.getByRole('button',{name:'View account',exact:true}).click();
+  await page.getByRole('button',{name:'Block card',exact:true}).click();
+  const request=await pending;
+  await page.evaluate(()=>{location.hash='#accounts';});
+  await page.getByRole('heading',{name:'My accounts',exact:true}).waitFor();
+  const receipt=page.waitForResponse(r=>r.url()===base+'/api/cards/status');
+  await request.fulfill({json:{status:'BLOCKED'}});await receipt;
+  await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+  assert.equal(await page.locator('dialog[open]').count(),0);
+  assert.equal(await page.locator('#notice').isHidden(),true);
+ }finally{await page.close();}
+});

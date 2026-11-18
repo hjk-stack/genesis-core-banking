@@ -87,3 +87,55 @@ for(const width of [1440,390])for(const side of ['Buy','Sell'])test(side+' secur
   assert.equal(await source.locator('option[value="'+custody.account_id+'"], option[value="'+margin.account_id+'"]').count(),0);assert.equal(calls.slice(start).some(call=>call.path.includes('/portfolio/orders/')),false);await dialog.getByRole('button',{name:'Close portfolio window'}).click();assert.deepEqual(errors,[]);
  }finally{await page.close();}
 });
+
+test('a late POS lookup stays out of Crypto and market lookup cannot delay receiving',async()=>{
+ const page=await browser.newPage();
+ const response=(route,status,json)=>route.fulfill({status,json});
+ let terminalRoute,marketRoute;
+ const terminalRequest=new Promise(resolve=>{terminalRoute=resolve;});
+ const marketRequest=new Promise(resolve=>{marketRoute=resolve;});
+ const wallet={account_id:'funding-wallet',currency_code:'ETH',user_id:'1',wallet_scope:'FUNDING',network:'ETHEREUM',address_id:'address-one',available_balance:'0',locked_balance:'0'};
+ try{
+  await page.goto(base+'/admin#pos');
+  await page.getByRole('heading',{name:'POS terminals'}).waitFor();
+  await page.route('**/api/views/terminals',route=>terminalRoute(route));
+  await page.route('**/api/views/cryptomarkets',route=>marketRoute(route));
+  await page.route('**/api/views/cryptowallets',route=>response(route,200,{rows:[wallet]}));
+  await page.route('**/api/crypto/wallet',route=>response(route,200,{address_id:wallet.address_id,network:wallet.network,public_address:'receiving-fixture',qr:'data:image/png;base64,AA=='}));
+  await page.getByRole('button',{name:'Authorize',exact:true}).click();
+  const terminals=await terminalRequest;
+  await page.locator('nav a[href="#wallets"]').click();
+  const markets=await marketRequest;
+  await page.getByRole('button',{name:'Receive ETH',exact:true}).click();
+  await page.locator('dialog[open] code').filter({hasText:'receiving-fixture'}).waitFor();
+  await response(terminals,503,{code:'POS_READ',message:'POS terminals could not be loaded.'});
+  await response(markets,503,{code:'MARKET_READ',message:'Market prices could not be loaded.'});
+  await page.locator('[data-market-read-error]').filter({hasText:'Market prices could not be loaded.'}).waitFor({state:'attached'});
+  assert.equal(await page.locator('#notice').isHidden(),true);
+  assert.equal(await page.locator('#crypto-wallet-desk [data-crypto-error]').textContent(),'');
+  assert.equal(await page.getByText('POS terminals could not be loaded.',{exact:true}).count(),0);
+  assert.equal(await page.locator('dialog[open]').count(),1);
+  assert.equal(await page.locator('dialog[open]').evaluate(el=>el.parentElement.tagName),'BODY');
+ }finally{await page.close();}
+});
+
+test('the banking form shows server validation beside its field and accepts a corrected retry',async()=>{
+ const page=await browser.newPage();let attempts=0;
+ try{
+  await page.route('**/api/accounts/open',route=>++attempts===1
+   ?route.fulfill({status:422,json:{code:'INVALID_FIELD',field:'fullName',message:'Check the account holder.'}})
+   :route.fulfill({json:{accounts:[]}}));
+  await page.goto(base+'/admin#accounts');
+  await page.getByRole('button',{name:'Open account',exact:true}).click();
+  const dialog=page.locator('#form-dialog'),name=dialog.getByLabel('Account name / holder',{exact:true});
+  await dialog.getByLabel('Account type',{exact:true}).selectOption('BUSINESS');
+  await name.fill('First holder');await dialog.locator('[name=currency]').selectOption('EUR');
+  await dialog.getByRole('button',{name:'Open account',exact:true}).click();
+  await dialog.locator('#action-field-error').waitFor();assert.equal(await name.getAttribute('aria-invalid'),'true');
+  assert.equal(await name.locator('..').getByRole('alert').textContent(),'Check the account holder.');
+  assert.equal(await page.locator('#notice').isHidden(),true);
+  await name.fill('Updated holder');assert.equal(await name.getAttribute('aria-invalid'),null);
+  await dialog.getByRole('button',{name:'Open account',exact:true}).click();await dialog.waitFor({state:'hidden'});
+  assert.equal(attempts,2);
+ }finally{await page.close();}
+});

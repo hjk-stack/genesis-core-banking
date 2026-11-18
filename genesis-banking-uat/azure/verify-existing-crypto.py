@@ -43,9 +43,14 @@ def verify_existing_wallets(request, sha):
                 and r.get('wallet_scope') == 'FUNDING']
         funded = [r for r in rows if Decimal(r['available_balance']) != 0
                   or Decimal(r['locked_balance']) != 0]
-        if len(funded) != 1:
+        if len(funded) > 1:
             raise RuntimeError('CRYPTO_EXISTING_FUNDED_ACCOUNT_NOT_UNIQUE:' + symbol)
-        original = funded[0]
+        # A fully spent position still has a receiving wallet. Use an existing
+        # unambiguous route and retain the same account and address on activation.
+        candidates = funded or (rows if len(rows) == 1 else [r for r in rows if r.get('wallet_visible') is True])
+        if len(candidates) != 1:
+            raise RuntimeError('CRYPTO_EXISTING_ACCOUNT_NOT_UNIQUE:' + symbol)
+        original = candidates[0]
         historical = original.get('historical_wallet_address', '')
         if not re.fullmatch(r'0x[0-9a-fA-F]{40}', historical):
             raise RuntimeError('CRYPTO_HISTORICAL_RECORD_MISSING:' + symbol)

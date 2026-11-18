@@ -8,9 +8,9 @@ const resultLabel=r=>r.current_status==='COMPLETED'?'Transfer completed':r.curre
 export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],purchase=()=>{},sell=()=>{},settle=()=>{},isAdmin=()=>true,userId=()=>null}){
  const dialog=document.createElement('dialog');dialog.id='payment-dialog';dialog.className='payment-dialog';
  dialog.setAttribute('aria-labelledby','payment-title');document.body.append(dialog);
- let step=0,busy=false,review=null,reviewKey='',externalKey='',transferKey='',lookupSeq=0,lookupTimer,receiverKey='',opened=false;
+ let generation=0,step=0,busy=false,review=null,reviewKey='',externalKey='',transferKey='',lookupSeq=0,lookupTimer,receiverKey='',opened=false;
  const q=s=>dialog.querySelector(s),els=()=>q('form')?.elements;
- function clearErrors(){dialog.querySelectorAll('.field-error,.payment-error').forEach(e=>e.textContent='');dialog.querySelectorAll('[aria-invalid]').forEach(e=>e.removeAttribute('aria-invalid'));}
+ function clearErrors(){dialog.querySelectorAll('[data-error],.payment-error').forEach(e=>e.textContent='');dialog.querySelectorAll('[aria-invalid]').forEach(e=>e.removeAttribute('aria-invalid'));}
  function show(index){
   step=index;q('.payment-track').className='payment-track step-'+step;
   dialog.querySelectorAll('.payment-slide').forEach((panel,i)=>{panel.inert=i!==step;panel.setAttribute('aria-hidden',String(i!==step));});
@@ -21,7 +21,7 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
  }
  function setBusy(value){busy=value;dialog.querySelectorAll('.payment-slide').forEach((p,i)=>p.inert=value||i!==step);dialog.querySelectorAll('.payment-footer button,.payment-close').forEach(b=>b.disabled=value);q('form')?.setAttribute('aria-busy',String(value));}
  function error(e){
-  if(!opened||!q('form')){notice(e.message);return;}
+  if(!opened||!q('form'))return;
   clearErrors();const input=els()?.namedItem(e.field),slot=dialog.querySelector(`[data-error="${String(e.field).replace(/[^a-zA-Z]/g,'')}"]`);
   if(input){const index=[...dialog.querySelectorAll('.payment-slide')].findIndex(p=>p.contains(input));if(index>=0)show(index);input.setAttribute('aria-invalid','true');input.focus({preventScroll:true});}
   (slot||q('.payment-error')).textContent=e.message;
@@ -30,15 +30,58 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
  const method=()=>els().method.value;
  const secured=()=>method()==='CODED_CARD'&&els().offlineDebit.checked;
  const own=rows=>isAdmin()?rows:rows.filter(r=>String(r.user_id)===String(userId()));
- const cryptoSources=()=>[...new Map([...own(data('cryptoholdings')),...own(data('cryptowallets')).filter(r=>r.wallet_scope==='CUSTODY'&&r.network==='ETHEREUM')].map(r=>[String(r.account_id),r])).values()];
- const bankSource=()=>own(accounts()).find(a=>a.abiq_iban===els().from.value);
+ let loadedRows=null, preferredWallet='';
+ const rowsFor=view=>loadedRows ? loadedRows[view]||[] : view==='accounts' ? accounts() : data(view);
+ const cryptoSources=()=>[...new Map([...own(rowsFor('cryptoholdings')),...own(rowsFor('cryptowallets')).filter(r=>r.wallet_scope==='CUSTODY'&&r.network==='ETHEREUM')].map(r=>[String(r.account_id),r])).values()];
+ const bankSource=()=>own(rowsFor('accounts')).find(a=>a.abiq_iban===els().from.value);
  const option=(v,t)=>`<option value="${escape(v)}">${escape(t)}</option>`;
  function fillOptions(name,rows){const current=els()[name].value;els()[name].innerHTML=option('','Select…')+rows.map(r=>option(...r)).join('');if(rows.some(r=>String(r[0])===current))els()[name].value=current;}
  function syncOptions(){
+  fillOptions('from',own(rowsFor('accounts')).map(a=>[a.abiq_iban,`${isAdmin()?a.full_name+' · ':''}${a.currency_code} · ${a.abiq_iban} · ${amount(a.available_balance)}`]));
   fillOptions('cryptoAccount',cryptoSources().map(r=>[r.account_id,`${isAdmin()?r.full_name+' · ':''}${r.currency_code} · ${r.network}${r.wallet_scope==='CUSTODY'?' · Security token':''} · Available ${amount(r.available_balance)}`]));
-  fillOptions('sourceCardId',own(data('transfercards')).filter(r=>r.card_rail_mode!=='GLOBAL_SCHEME_ONLY').map(r=>[r.card_id,`${isAdmin()?r.full_name+' · ':''}${r.card_number||'Card ending '+r.last_four_digits} · ${amount(r.available_balance)} ${r.currency_code}`]));
-  for(const n of ['cryptoAccount','sourceCardId'])if(!els()[n].value&&els()[n].options.length===2)els()[n].selectedIndex=1;
-  if(isAdmin())fillOptions('receiverUserId',data('customers').map(r=>[r.user_id,r.full_name+' · User '+r.user_id]));
+  fillOptions('sourceCardId',own(rowsFor('transfercards')).filter(r=>r.card_rail_mode!=='GLOBAL_SCHEME_ONLY').map(r=>[r.card_id,`${isAdmin()?r.full_name+' · ':''}${r.card_number||'Card ending '+r.last_four_digits} · ${amount(r.available_balance)} ${r.currency_code}`]));
+  if(preferredWallet)els().cryptoAccount.value=preferredWallet;
+  else if(!els().cryptoAccount.value&&els().cryptoAccount.options.length===2)els().cryptoAccount.selectedIndex=1;
+  if(!els().sourceCardId.value&&els().sourceCardId.options.length===2)els().sourceCardId.selectedIndex=1;
+  if(isAdmin())fillOptions('receiverUserId',rowsFor('customers').map(r=>[r.user_id,r.full_name+' · User '+r.user_id]));
+ }
+ // Each selector becomes usable as its own records arrive. A failed read can be
+ // retried in place without resetting the amount, method or other selections.
+ function loadSourceOptions(form,loadRows){
+  const sources=[
+   ['accounts','from','Currency accounts'],
+   ['cryptoholdings','cryptoAccount','Funding wallets'],
+   ['cryptowallets','cryptoAccount','Custody wallets'],
+   ['transfercards','sourceCardId','Cards']
+  ];
+  if(isAdmin())sources.push(['customers','receiverUserId','Receiving users']);
+  for(const [view,fieldName,label] of sources){
+   const slot=document.createElement('span');
+   slot.className='field-error';
+   slot.dataset.sourceRead=view;
+   slot.setAttribute('aria-live','polite');
+   form.elements.namedItem(fieldName).closest('label').append(slot);
+   const current=()=>opened&&q('form')===form;
+   async function read(){
+    slot.replaceChildren();
+    try{
+     const rows=await loadRows(view);
+     if(!current())return;
+     loadedRows[view]=rows;
+     syncOptions();
+     source();
+    }catch(e){
+     if(!current())return;
+     const retry=document.createElement('button');
+     retry.type='button';
+     retry.textContent='Retry';
+     retry.setAttribute('aria-label','Retry loading '+label.toLowerCase());
+     retry.onclick=read;
+     slot.append(label+' could not be loaded. ',retry);
+    }
+   }
+   void read();
+  }
  }
  function syncMode(){
   const m=method();if(m!=='CODED_CARD')els().offlineDebit.checked=false;
@@ -52,19 +95,20 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
   source();
  }
  function source(){
-  const m=method(),a=m==='BANK'?bankSource():m==='CRYPTO'?cryptoSources().find(r=>String(r.account_id)===els().cryptoAccount.value):own(data('transfercards')).find(r=>r.card_id===els().sourceCardId.value);
+  const m=method(),a=m==='BANK'?bankSource():m==='CRYPTO'?cryptoSources().find(r=>String(r.account_id)===els().cryptoAccount.value):own(rowsFor('transfercards')).find(r=>r.card_id===els().sourceCardId.value);
   q('[data-balance]').textContent=a?`Available balance: ${amount(a.available_balance)} ${a.currency_code}${a.network?' · '+a.network:''}`:'';
   q('[data-currency]').textContent=a?.currency_code||'';return a;
  }
  function nonBankReceiver(){
   let name='';
   if(secured())name=source()?.full_name||'';
-  else if(method()==='CRYPTO'&&els().cryptoDestination.value==='INTERNAL'&&isAdmin())name=data('customers').find(r=>String(r.user_id)===els().receiverUserId.value)?.full_name||'';
+  else if(method()==='CRYPTO'&&els().cryptoDestination.value==='INTERNAL'&&isAdmin())name=rowsFor('customers').find(r=>String(r.user_id)===els().receiverUserId.value)?.full_name||'';
   els().receiverName.readOnly=Boolean(name);if(name)els().receiverName.value=name;
   q('[data-receiver-note]').textContent=name?'Receiver details loaded':'';
  }
  async function showDelivery(r){
-  const payload=await api('payments/card-delivery',{requestId:r.request_id});
+  const serial=generation,payload=await api('payments/card-delivery',{requestId:r.request_id});
+  if(serial!==generation||!opened)return;
   q('[data-summary]').innerHTML=`<h3>${payload.code?'Offline card debit':'Card issued'}</h3><p>${escape(payload.holder)} · ${escape(amount(payload.amount))} ${escape(payload.currency)}</p>${payload.code?`<p class="card-code">${escape(payload.code)}</p><p>Valid from ${escape(new Date(payload.validFrom||Date.now()).toLocaleString())}<br>Until ${escape(new Date(payload.expiresAt).toLocaleString())}</p>`:''}<label>Delivery password<input type="password" name="deliveryPassword" aria-label="Delivery password" autocomplete="new-password" minlength="12" maxlength="256"></label><p class="field-help">The recipient opens the encrypted message with this password. Share the password separately.</p><button type="button" data-encrypt>Download encrypted message</button>`;
   q('[data-message]').textContent='';q('details').hidden=true;q('[data-back]').hidden=true;q('[data-next]').hidden=true;q('.step-caption').textContent='Transfer completed';
   q('form').onsubmit=e=>e.preventDefault();q('[data-encrypt]').onclick=async()=>{try{const envelope=await encryptCardMessage(payload,els().deliveryPassword.value);envelope.openWith=new URL('/card-message',location.href).href;downloadMessage(envelope,'AVISPay-card-'+r.request_id+'.json');els().deliveryPassword.value='';}catch(e){q('.payment-error').textContent=e.message;}};
@@ -100,39 +144,42 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
   e.preventDefault();if(busy)return;clearErrors();
   const panel=q('.payment-slide:nth-child('+(step+1)+')');
   for(const input of panel.querySelectorAll('input,select'))if(!input.reportValidity())return;
-  setBusy(true);
+  const serial=generation;setBusy(true);
   try{
    if(step===1){
-    if(method()==='BANK'||(['CARD','CODED_CARD'].includes(method())&&!secured())){if(!await lookup())return;}
+    if(method()==='BANK'||(['CARD','CODED_CARD'].includes(method())&&!secured())){if(!await lookup()||serial!==generation)return;}
     else if(method()==='CRYPTO'&&els().cryptoDestination.value==='INTERNAL'){
-     const r=await api('payments/crypto-receiver',{receiverUserId:els().receiverUserId.value});els().receiverName.value=r.receiverName;els().receiverName.readOnly=true;
+     const r=await api('payments/crypto-receiver',{receiverUserId:els().receiverUserId.value});if(serial!==generation)return;els().receiverName.value=r.receiverName;els().receiverName.readOnly=true;
     }else nonBankReceiver();
    }
    if(step===3){
     const v=values(),a=source();reviewKey ||= crypto.randomUUID();
-    review=await api('payments/review',{method:method(),cryptoAccount:v.cryptoAccount,cryptoDestination:v.cryptoDestination,receiverUserId:v.receiverUserId,cryptoAddress:v.cryptoAddress,destinationTag:v.destinationTag,sourceCardId:v.sourceCardId,
+    const prepared=await api('payments/review',{method:method(),cryptoAccount:v.cryptoAccount,cryptoDestination:v.cryptoDestination,receiverUserId:v.receiverUserId,cryptoAddress:v.cryptoAddress,destinationTag:v.destinationTag,sourceCardId:v.sourceCardId,
      offlineDebit:secured(),...(secured()?{codeStart:new Date(v.codeStart).toISOString(),codeEnd:new Date(v.codeEnd).toISOString()}:{}),from:method()==='BANK'?v.from:undefined,currency:a.currency_code,amount:v.amount,
      receiverAccount:v.receiverAccount,receiverBic:v.receiverBic,receiverName:v.receiverName,
      address:{street:v.street,city:v.city,postalCode:v.postalCode,country:v.country},reference:v.reference},reviewKey);
-    transferKey=crypto.randomUUID();reviewDisplay(review);
+    if(serial!==generation)return;review=prepared;transferKey=crypto.randomUUID();reviewDisplay(review);
    }
    if(step===4){
     const r=await api('payments/transfer',{requestId:review.id,messageHash:review.messageHash},transferKey);
+    if(serial!==generation)return;
     if(r.hasDelivery){await showDelivery(r);await refresh();return;}
     if(review.mode==='BLOCKCHAIN'){await view(r.request_id||review.id);await refresh();return;}
     close();notice(resultLabel(r));await refresh();return;
    }
    show(step+1);
-  }catch(e){error(e);}finally{setBusy(false);}
+  }catch(e){if(serial===generation)error(e);}finally{if(serial===generation)setBusy(false);}
  }
- function close(){opened=false;lookupSeq++;clearTimeout(lookupTimer);dialog.close();dialog.replaceChildren();}
+ function close(){generation++;opened=false;busy=false;lookupSeq++;clearTimeout(lookupTimer);dialog.close();dialog.replaceChildren();}
  function open(initial={}){
+  generation++;clearTimeout(lookupTimer);lookupSeq++;
+  loadedRows=initial.loadRows?{}:null;preferredWallet=initial.cryptoAccountId||'';
   opened=true;step=0;review=null;reviewKey='';externalKey='';transferKey=crypto.randomUUID();receiverKey='';busy=false;
   dialog.innerHTML=`<div class="payment-heading"><div><h2 id="payment-title">Register a payment</h2></div><button type="button" class="payment-close" aria-label="Close payment">×</button></div>
    <ol class="payment-progress">${names.map((name,i)=>`<li><span>${i+1}</span><small>${name}</small></li>`).join('')}</ol><p class="step-caption" aria-live="polite"></p>
    <form novalidate><div class="payment-viewport"><div class="payment-track">
     <section class="payment-slide"><label>Transfer by<select name="method" aria-label="Transfer by"><option value="BANK">Bank account</option><option value="CRYPTO">Crypto</option><option value="CARD">Card</option><option value="CODED_CARD">Make a force payment</option></select></label>
-     <label data-method="BANK">${isAdmin()?'Account':'My currency account'}<select name="from" aria-label="Account" required><option value="">Select account…</option>${own(accounts()).map(a=>`<option value="${escape(a.abiq_iban)}">${escape(isAdmin()?a.full_name+' · ':'')}${escape(a.currency_code)} · ${escape(a.abiq_iban)} · ${escape(amount(a.available_balance))}</option>`).join('')}</select><span class="field-error" data-error="from"></span></label>
+     <label data-method="BANK">${isAdmin()?'Account':'My currency account'}<select name="from" aria-label="Account" required></select><span class="field-error" data-error="from"></span></label>
      <div data-method="CRYPTO"><label>Wallet holdings<select name="cryptoAccount" aria-label="Wallet holdings" required></select><span class="field-error" data-error="cryptoAccount"></span></label><p class="field-help">For cross-border volume transfers, we offer AG and AGi as payment media. At any time, our exchange offers conversion of AG or AGi back to FIAT.</p><p>If you don’t have enough holdings, purchase now.</p><div class="actions"><button type="button" data-purchase>Purchase now</button><button type="button" data-sell>Convert to FIAT</button></div></div>
      <div data-method="CARD CODED_CARD"><label>My cards<select name="sourceCardId" aria-label="My cards" required></select><span class="field-error" data-error="sourceCardId"></span></label></div>
      <p class="account-balance" data-balance></p><div class="amount-field">${field('amount','Amount','required inputmode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" maxlength="21"')}<span data-currency></span></div>
@@ -153,6 +200,7 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
   q('[data-purchase]').onclick=()=>{close();purchase();};q('[data-sell]').onclick=()=>{close();sell();};
   q('form').oninput=e=>{
    review=null;reviewKey='';clearErrors();
+   if(e.target.name==='cryptoAccount')preferredWallet=e.target.value;
    if(['method','from','cryptoAccount','sourceCardId','cryptoDestination','offlineDebit','amount'].includes(e.target.name))syncMode();
    if(secured()||method()==='CRYPTO'){nonBankReceiver();return;}
    if(['receiverAccount','receiverBic','from','sourceCardId'].includes(e.target.name)){
@@ -162,10 +210,13 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
   };
   const localTime=date=>{const d=new Date(date.getTime()-date.getTimezoneOffset()*60000);return d.toISOString().slice(0,16);};
   els().codeStart.value=localTime(new Date());els().codeEnd.value=localTime(new Date(Date.now()+48*3600000));
-  syncOptions();syncMode();source();dialog.showModal();show(0);
+  if(preferredWallet){els().method.value='CRYPTO';els().cryptoDestination.value='EXTERNAL';}
+  syncOptions();syncMode();if(!dialog.open)dialog.showModal();show(0);
+  if(initial.loadRows)loadSourceOptions(q('form'),initial.loadRows);
  }
  async function view(id){
-  const r=await api('payment-requests/'+id);open();reviewDisplay({instruction:r.instruction,mode:r.delivery_mode,format:r.message_format,message:r.message_content});show(4);
+  const serial=++generation,r=await api('payment-requests/'+id);if(serial!==generation)return;open();reviewDisplay({instruction:r.instruction,mode:r.delivery_mode,format:r.message_format,message:r.message_content});show(4);
+  const owner=q('form'),current=()=>opened&&q('form')===owner;
   q('#payment-title').textContent='Transfer request';q('.step-caption').textContent=resultLabel(r);q('.payment-progress').hidden=true;
   if(r.delivery_mode==='BLOCKCHAIN'){
    const detail=(name,value)=>{if(value==null)return;const label=document.createElement('dt'),text=document.createElement('dd');label.textContent=name;text.textContent=String(value);q('.payment-summary').append(label,text);};
@@ -176,23 +227,23 @@ export function createPaymentWizard({api,accounts,refresh,notice,data=()=>[],pur
   download.onclick=()=>{const url=URL.createObjectURL(new Blob([r.message_content],{type:r.message_format==='AVIS_TRANSFER_V1'?'application/json':r.message_format==='FIN_MT103'?'text/plain':'application/xml'}));const a=document.createElement('a');a.href=url;a.download='AVISPay-'+r.request_id+(r.message_format==='AVIS_TRANSFER_V1'?'.json':r.message_format==='FIN_MT103'?'.fin':'.xml');a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
   if(r.delivery_mode==='BLOCKCHAIN'&&!['COMPLETED','CANCELLED','FAILED'].includes(r.current_status)){
    const check=document.createElement('button');check.type='button';check.textContent='Refresh status';q('.payment-footer').append(check);
-   check.onclick=async()=>{if(busy)return;setBusy(true);try{await view(id);await refresh();}catch(e){error(e);}finally{setBusy(false);}};
+   check.onclick=async()=>{if(busy)return;setBusy(true);try{await view(id);if(opened)await refresh();}catch(e){if(current())error(e);}finally{if(current())setBusy(false);}};
   }
-  if(r.hasDelivery){const showCard=document.createElement('button');showCard.type='button';showCard.textContent='Card delivery & code';q('.payment-footer').append(showCard);showCard.onclick=()=>showDelivery(r).catch(error);}
+  if(r.hasDelivery){const showCard=document.createElement('button');showCard.type='button';showCard.textContent='Card delivery & code';q('.payment-footer').append(showCard);showCard.onclick=()=>showDelivery(r).catch(e=>{if(current())error(e);});}
   if(isAdmin()&&r.delivery_mode!=='BLOCKCHAIN'&&(r.status==='OUTGOING'||r.current_status==='PROCESSING')){
-   const pick=document.createElement('button');pick.type='button';pick.textContent='Pick up request';q('.payment-footer').append(pick);pick.onclick=async()=>{setBusy(true);try{await api('payments/pickup',{requestId:id},crypto.randomUUID());pick.textContent='Picked up';await refresh();}catch(e){error(e);}finally{setBusy(false);}};
+   const pick=document.createElement('button');pick.type='button';pick.textContent='Pick up request';q('.payment-footer').append(pick);pick.onclick=async()=>{setBusy(true);try{await api('payments/pickup',{requestId:id},crypto.randomUUID());if(!current())return;pick.textContent='Picked up';await refresh();}catch(e){if(current())error(e);}finally{if(current())setBusy(false);}};
   }
   if(isAdmin()&&r.delivery_mode==='MANUAL'&&r.status==='OUTGOING'){
    const complete=document.createElement('button');complete.type='button';complete.textContent='Record completed transfer';q('.payment-footer').append(complete);complete.onclick=()=>{close();settle(r);};
-   if(r.external_card_id){const details=document.createElement('button');details.type='button';details.textContent='Card processing details';q('.payment-footer').append(details);details.onclick=async()=>{try{const c=await api('cards/pickup-details',{requestId:id},crypto.randomUUID());q('[data-message]').textContent=c.holder+'\n'+c.pan+'\n'+c.expiry;}catch(e){error(e);}};}
+   if(r.external_card_id){const details=document.createElement('button');details.type='button';details.textContent='Card processing details';q('.payment-footer').append(details);details.onclick=async()=>{try{const c=await api('cards/pickup-details',{requestId:id},crypto.randomUUID());if(!details.isConnected)return;q('[data-message]').textContent=c.holder+'\n'+c.pan+'\n'+c.expiry;}catch(e){if(current())error(e);}};}
 
    const cancel=document.createElement('button');cancel.type='button';cancel.textContent='Cancel request and release funds';q('.payment-footer').append(cancel);
-   const key=crypto.randomUUID();cancel.onclick=async()=>{if(busy)return;setBusy(true);try{await api('payments/cancel',{requestId:id},key);close();notice('Transfer request cancelled · funds released');await refresh();}catch(e){error(e);}finally{setBusy(false);}};
+   const key=crypto.randomUUID();cancel.onclick=async()=>{if(busy)return;setBusy(true);try{await api('payments/cancel',{requestId:id},key);if(!current())return;close();notice('Transfer request cancelled · funds released');await refresh();}catch(e){if(current())error(e);}finally{if(current())setBusy(false);}};
   }
   // Viewing an existing instruction is read-only; Enter cannot submit it again.
   q('form').onsubmit=e=>e.preventDefault();
  }
  function reviewPrepared(r){open();review=r;transferKey=crypto.randomUUID();reviewDisplay(r);show(4);q('[data-back]').hidden=true;}
- function fromCrypto(accountId){open();els().method.value='CRYPTO';syncMode();els().cryptoAccount.value=accountId;els().cryptoDestination.value='EXTERNAL';syncMode();}
+ function fromCrypto(accountId,loadRows){open({cryptoAccountId:accountId,loadRows});}
  return {open,view,close,reviewPrepared,fromCrypto};
 }

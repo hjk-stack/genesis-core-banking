@@ -93,7 +93,7 @@ test('Send retains all funding wallets and Ethereum custody while other custody 
  assert.deepEqual(sent,wallets.slice(0,3),'Send must pass the selected funding or Ethereum custody wallet to the payment flow');
 });
 
-test('Receive keeps balance reads separate from receipt booking and retries the selected transaction without duplicate submission',async()=>{
+test('Wallet activity keeps balance reads separate from receipt booking and retries the selected transaction without duplicate submission',async()=>{
  const wallet=holding('ETH',{asset_id:'ethereum',address_id:'wallet-one'}),views={cryptowallets:[wallet]},calls=[];
  const txHash='0x'+'a'.repeat(64),publicAddress='0x'+'1'.repeat(40);let release,attempt=0;
  await mount(views,()=>{},async(path,input,key)=>{
@@ -106,6 +106,12 @@ test('Receive keeps balance reads separate from receipt booking and retries the 
   wallet.available_balance='2.125';return {status:'CONFIRMED',amount:'2.125',currency:'ETH',txHash,confirmations:64,finalized:true};
  });
  await document.querySelector('[data-receive]').onclick();
+ assert.deepEqual(calls.map(c=>c.path),['crypto/wallet']);
+ assert.equal(document.querySelector('.crypto-receive code').textContent,publicAddress);
+ assert.ok(document.querySelector('[data-copy]'));assert.ok(document.querySelector('[data-share]'));
+ assert.equal(document.querySelector('[data-chain-balance],[data-deposit-form]'),null);
+ document.querySelector('dialog .close').click();
+ await document.querySelector('[data-wallet-activity]').onclick();
  const balanceButton=document.querySelector('[data-chain-balance]');await balanceButton.onclick({currentTarget:balanceButton});
  assert.match(document.querySelector('[data-balance-result]').textContent,/Blockchain: 2\.125 ETH/);
  assert.equal(calls.filter(c=>c.path==='crypto/deposits/reconcile').length,0);
@@ -120,17 +126,17 @@ test('Receive keeps balance reads separate from receipt booking and retries the 
  const reconciliation=calls.filter(c=>c.path==='crypto/deposits/reconcile');assert.equal(reconciliation.length,2);assert.equal(reconciliation[0].key,reconciliation[1].key);
 });
 
-test('Receive places reconciliation errors beside the transaction hash and exposes the action only for Ethereum',async()=>{
+test('Wallet activity places reconciliation errors beside the transaction hash and exposes the action only for Ethereum',async()=>{
  const wallets=[holding('ETH',{address_id:'eth-wallet'}),holding('SOL',{address_id:'sol-wallet',network:'SOLANA'})];
  await mount({cryptowallets:wallets},()=>{},async(path,input)=>{
   if(path==='crypto/wallet')return {address_id:input.addressId,public_address:'fixture-address',network:input.addressId==='eth-wallet'?'ETHEREUM':'SOLANA',destination_tag:null,qr:'data:image/png;base64,AA=='};
   assert.equal(path,'crypto/deposits/reconcile');throw Object.assign(new Error('Select the matching Ethereum wallet for this incoming transfer.'),{field:'accountId'});
  });
- await document.querySelector('[data-receive="ETH"]').onclick();const form=document.querySelector('[data-deposit-form]');form.elements.txHash.value='0x'+'b'.repeat(64);
+ await document.querySelector('[data-wallet="ETH"] [data-wallet-activity]').onclick();const form=document.querySelector('[data-deposit-form]');form.elements.txHash.value='0x'+'b'.repeat(64);
  await form.onsubmit({preventDefault(){}});
  assert.equal(form.querySelector('[data-deposit-error]').textContent,'Select the matching Ethereum wallet for this incoming transfer.');
  assert.equal(document.querySelector('[data-crypto-error]').textContent,'');assert.equal(form.querySelector('button').disabled,false);
- await document.querySelector('[data-receive="SOL"]').onclick();assert.equal(document.querySelector('[data-deposit-form]'),null);
+ await document.querySelector('[data-wallet="SOL"] [data-wallet-activity]').onclick();assert.equal(document.querySelector('[data-deposit-form]'),null);
  assert.ok(document.querySelector('[data-chain-balance]'));
 });
 
@@ -201,8 +207,10 @@ test('rapid QR changes clear previous details immediately and reject out-of-orde
   const pending=deferred();walletReads.push({input,response,...pending});return pending.promise;
  });
  Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>copied.push(text)},configurable:true});navigator.share=async data=>shared.push(data);
+ await document.querySelector('[data-wallet-activity]').onclick();
+ const staleBalance=document.querySelector('[data-chain-balance]').onclick();
  await document.querySelector('[data-receive]').onclick();const oldCopy=document.querySelector('[data-copy]').onclick,oldShare=document.querySelector('[data-share]').onclick,oldSend=document.querySelector('[data-send]').onclick;
- const staleBalance=document.querySelector('[data-chain-balance]').onclick();delay=true;
+ delay=true;
  const solSelection=choose('[data-receive-network]','SOLANA');
  assert.equal(document.querySelector('.crypto-qr'),null);assert.equal(document.querySelector('.crypto-receive code'),null);
  assert.equal(document.querySelector('[data-copy]'),null);assert.equal(document.querySelector('[data-share]'),null);assert.equal(document.querySelector('[data-deposit-form]'),null);
@@ -218,7 +226,7 @@ test('rapid QR changes clear previous details immediately and reject out-of-orde
  assert.equal(document.querySelector('[data-send]').disabled,false);
  walletReads[0].resolve(walletReads[0].response);balance.resolve({balance:'999999',observedAt:'2026-11-15T13:00:00Z'});await Promise.all([solSelection,repeatedReceive,staleBalance]);
  assert.equal(document.querySelectorAll('dialog').length,1);assert.equal(document.querySelector('[data-receive-network]').value,'ETHEREUM');
- assert.equal(document.querySelector('.crypto-qr').getAttribute('src'),walletReads[1].response.qr);assert.equal(document.querySelector('[data-balance-result]').textContent,'');
+ assert.equal(document.querySelector('.crypto-qr').getAttribute('src'),walletReads[1].response.qr);assert.equal(document.querySelector('[data-balance-result]'),null);
  await oldCopy();await oldShare();assert.deepEqual(copied,[]);assert.deepEqual(shared,[],'a previous request remains obsolete even after returning to its blockchain');
  await document.querySelector('[data-copy]').onclick();await document.querySelector('[data-share]').onclick();document.querySelector('[data-send]').click();
  assert.deepEqual(copied,[walletReads[1].response.public_address]);assert.equal(shared[0].text,'USDC · ETHEREUM\n'+walletReads[1].response.public_address);assert.deepEqual(sent,[wallets[0]]);
@@ -259,8 +267,8 @@ test('a confirmed deposit refreshes holdings without replacing a subsequently se
   calls.push({path,input,key});if(path==='crypto/wallet')return walletResponse(views.cryptowallets.find(w=>w.address_id===input.addressId));
   assert.equal(path,'crypto/deposits/reconcile');await pending.promise;eth.available_balance='124.456789012345678001';return {status:'CONFIRMED',currency:'USDC',amount:'1',txHash};
  });
- await document.querySelector('[data-receive]').onclick();const form=document.querySelector('[data-deposit-form]');form.elements.txHash.value=txHash;
- const deposit=form.onsubmit({preventDefault(){}});await choose('[data-receive-network]','SOLANA');
+ await document.querySelector('[data-wallet-activity]').onclick();const form=document.querySelector('[data-deposit-form]');form.elements.txHash.value=txHash;
+ const deposit=form.onsubmit({preventDefault(){}});await document.querySelector('[data-receive]').onclick();await choose('[data-receive-network]','SOLANA');
  assert.equal(document.querySelector('[data-deposit-form]'),null);pending.resolve();await deposit;
  assert.deepEqual(calls.find(c=>c.path==='crypto/deposits/reconcile').input,{accountId:eth.account_id,addressId:eth.address_id,txHash});
  assert.equal(document.querySelector('[data-wallet-network]').value,'SOLANA');assert.equal(document.querySelector('[data-wallet-group]').dataset.wallet,sol.account_id);
@@ -279,10 +287,10 @@ test('first-time administrator approval refreshes authoritative verification and
   return {...input};
  },()=>({admin:true}));
  await document.querySelector('[data-add-asset]').onclick();assert.deepEqual(options(document.querySelector('[name=assetId]')),['','usd-coin']);document.querySelector('dialog .close').click();
- await document.querySelector('[data-receive]').onclick();const qr=document.querySelector('.crypto-qr').getAttribute('src'),hash='0x'+'e'.repeat(64);document.querySelector('[name=txHash]').value=hash;
+ await document.querySelector('[data-receive]').onclick();const qr=document.querySelector('.crypto-qr').getAttribute('src');
  await document.querySelector('[data-approve="usd-coin"][data-network="SOLANA"]').onclick();
  assert.deepEqual(options(document.querySelector('[data-wallet-network]')),['ETHEREUM','SOLANA']);assert.deepEqual(options(document.querySelector('[data-receive-network]')),['ETHEREUM','SOLANA']);
- assert.equal(document.querySelector('[data-receive-network]').value,'ETHEREUM');assert.equal(document.querySelector('.crypto-qr').getAttribute('src'),qr);assert.equal(document.querySelector('[name=txHash]').value,hash);
+ assert.equal(document.querySelector('[data-receive-network]').value,'ETHEREUM');assert.equal(document.querySelector('.crypto-qr').getAttribute('src'),qr);assert.equal(document.querySelector('[name=txHash]'),null);
  assert.equal(document.querySelector('[data-approve="usd-coin"][data-network="SOLANA"]').getAttribute('aria-checked'),'true');
  document.querySelector('dialog .close').click();await document.querySelector('[data-approve="dai"]').onclick();
  await document.querySelector('[data-add-asset]').onclick();const form=document.querySelector('dialog form');assert.deepEqual(options(form.elements.assetId),['','usd-coin','dai']);
@@ -332,4 +340,27 @@ test('the registered AVISPay PLC share converter is visible without asserting a 
  assert.match(document.querySelector('[data-security="'+share.card_id+'"] dl').textContent,/Source holding100,000,000 units/);
  assert.ok(document.querySelector('[data-security-details]'));
  assert.ok(document.querySelector('[data-security-detail] .security-conversion'));
+});
+
+test('a failed market read stays in Market performance and an unfunded wallet can still receive',async()=>{
+ const wallet=holding('ETH',{address_id:'wallet-one'}),views={cryptowallets:[wallet]};
+ Object.defineProperty(views,'cryptomarkets',{get(){throw Object.assign(Error('Market prices could not be loaded.'),{code:'MARKET_READ'});}});
+ const calls=[];
+ await mount(views,()=>{},async(path,body)=>{calls.push(path);assert.equal(body.addressId,wallet.address_id);return walletResponse(wallet);});
+ assert.equal(document.querySelector('#crypto-market-desk [role=alert]').textContent,'Market prices could not be loaded.');
+ assert.equal(document.querySelector('#crypto-wallet-desk [role=alert]').textContent,'');
+ await document.querySelector('[data-receive]').onclick();
+ assert.deepEqual(calls,['crypto/wallet']);
+ assert.equal(document.querySelector('dialog code').textContent,'public-wallet-one');
+ assert.equal(document.querySelector('dialog [data-chain-balance],dialog form'),null);
+});
+
+test('a failed wallet read does not ask an existing customer to create a first currency',async()=>{
+ const views={cryptomarkets:[market('ETH',1,1)]};
+ Object.defineProperty(views,'cryptowallets',{get(){throw Error('Wallet records could not be loaded.');}});
+ await mount(views);
+ assert.equal(document.querySelector('#crypto-wallet-desk [role=alert]').textContent,'Wallet records could not be loaded.');
+ assert.equal(document.querySelector('[data-wallets] [data-add-asset]'),null);
+ assert.equal(marketCards().length,1);
+ assert.equal(document.querySelector('[data-market-read-error]').textContent,'');
 });

@@ -1,6 +1,6 @@
 import {pathToFileURL} from 'node:url';
 import pg from 'pg';
-import {SovereignCore,fault} from './core.mjs';
+import {SovereignCore,fault,money} from './core.mjs';
 
 // Internal initial-position registration. Does not initiate a security trade,
 // external custody instruction, blockchain transfer, or payment.
@@ -59,17 +59,17 @@ export async function consolidateTreasuryCrypto(pool,env=process.env){
    TREASURY_WALLET_CONSOLIDATION,async db=>{
     const result=[];
     for(const position of TREASURY_POSITIONS.filter(p=>p.assetClass==='CRYPTO')){
-     const source=(await db.query(`SELECT p.ledger_account_id AS account_id,a.available_balance::text,a.locked_balance::text
+     const source=(await db.query(`SELECT p.ledger_account_id AS account_id,
+       (a.available_balance=p.quantity AND a.locked_balance=0 AND p.quantity=$2::numeric) AS exact_opening
       FROM avis_core_v2.treasury_opening_positions p
       JOIN avis_core_v2.ledger_accounts a ON a.account_id=p.ledger_account_id
-      WHERE p.owner_user_id=1 AND p.asset_code=$1 AND p.asset_class='CRYPTO' FOR UPDATE OF a`,[position.assetCode])).rows[0];
+      WHERE p.owner_user_id=1 AND p.asset_code=$1 AND p.asset_class='CRYPTO' FOR UPDATE OF a`,[position.assetCode,position.quantity])).rows[0];
      const dest=(await db.query(`SELECT account_id,available_balance::text,locked_balance::text
       FROM avis_core_v2.ledger_accounts
       WHERE owner_type='USER' AND user_id=1 AND currency_code=$1 AND network='ETHEREUM'
        AND wallet_scope='FUNDING' AND account_category='LIABILITY'
       ORDER BY account_id FOR UPDATE`,[position.assetCode])).rows;
-     if(!source||dest.length!==1||source.locked_balance!=='0.000000000000000000'
-        && Number(source.locked_balance)!==0||Number(source.available_balance)!==Number(position.quantity))
+     if(!source?.exact_opening||dest.length!==1)
        fault('TREASURY_SOURCE_MISMATCH');
      const originOffset=await core.system(db,'MIGRATION_OFFSET',position.assetCode,'TREASURY_INITIAL_POSITION','EQUITY');
      await db.query(`INSERT INTO avis_core_v2.ledger_accounts(owner_type,sub_account_code,currency_code,network,account_category)
@@ -94,15 +94,48 @@ export async function readTreasuryOpening(pool){
  quantity::text,destination,ledger_account_id,journal_id,booking_reference,booked_at FROM avis_core_v2.treasury_opening_positions
  WHERE owner_user_id=1 ORDER BY asset_class,asset_code`)).rows;
 }
+// Validate the immutable postings. Subsequent use of a wallet can change its
+// current balance without changing the original Treasury booking.
+export async function verifyTreasuryOpening(pool,opening,move){
+ const rows=await readTreasuryOpening(pool);
+ const expectedMoves=TREASURY_POSITIONS.filter(p=>p.assetClass==='CRYPTO');
+ if(opening.requestId!==TREASURY_REQUEST||move.requestId!==TREASURY_WALLET_CONSOLIDATION||
+    opening.positions.length!==TREASURY_POSITIONS.length||move.positions.length!==expectedMoves.length)
+  fault('TREASURY_READBACK_MISMATCH');
+ for(const position of TREASURY_POSITIONS){
+  const receipt=opening.positions.find(p=>p.asset===position.assetCode);
+  const row=rows.find(p=>p.booking_id===receipt?.bookingId);
+  if(!row||row.asset_code!==position.assetCode||row.source_reference!==position.sourceReference||
+     row.destination!==position.destination||row.journal_id!==receipt.journalId||
+     row.ledger_account_id!==receipt.accountId||money(row.quantity)!==money(position.quantity)||
+     money(receipt.quantity)!==money(position.quantity))fault('TREASURY_READBACK_MISMATCH');
+  if(position.assetClass!=='CRYPTO')continue;
+  const transfer=move.positions.find(p=>p.asset===position.assetCode);
+  if(!transfer||money(transfer.quantity)!==money(position.quantity))fault('TREASURY_WALLET_MOVE_READBACK');
+  const {rows:[evidence]}=await pool.query(`
+   SELECT count(*)=4 AND bool_and(e.amount=$2::numeric AND a.currency_code=$3)
+    AND count(*) FILTER (WHERE e.account_id=$4 AND e.direction='CREDIT'
+      AND a.owner_type='TREASURY' AND a.network IS NULL)=1
+    AND count(*) FILTER (WHERE e.account_id=$5 AND e.direction='CREDIT'
+      AND a.owner_type='USER' AND a.user_id=1 AND a.network='ETHEREUM'
+      AND a.wallet_scope='FUNDING' AND a.account_category='LIABILITY')=1
+    AND count(*) FILTER (WHERE e.direction='DEBIT' AND a.owner_type='MIGRATION_OFFSET'
+      AND a.sub_account_code='TREASURY_INITIAL_POSITION' AND a.network IS NULL)=1
+    AND count(*) FILTER (WHERE e.direction='DEBIT' AND a.owner_type='MIGRATION_OFFSET'
+      AND a.sub_account_code='TREASURY_WALLET_BRIDGE' AND a.network='ETHEREUM')=1 AS verified
+   FROM avis_core_v2.ledger_journals j JOIN avis_core_v2.ledger_entries e USING(journal_id)
+   JOIN avis_core_v2.ledger_accounts a ON a.account_id=e.account_id
+   WHERE j.journal_id=$1 AND j.event_type='TREASURY_CRYPTO_MOVE'
+    AND j.idempotency_key=$6 AND j.reference_id=$7`,
+   [transfer.journalId,position.quantity,position.assetCode,row.ledger_account_id,transfer.accountId,
+    TREASURY_WALLET_CONSOLIDATION+':'+position.assetCode,position.sourceReference]);
+  if(!evidence.verified)fault('TREASURY_WALLET_MOVE_READBACK');
+ }
+}
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  const pool=new pg.Pool({host:process.env.PGHOST,port:Number(process.env.PGPORT||5432),database:process.env.PGDATABASE,user:process.env.PGUSER,password:process.env.PGPASSWORD,ssl:{rejectUnauthorized:true},max:1});
- try{const result=await bookTreasuryOpening(pool);const walletMove=await consolidateTreasuryCrypto(pool);const rows=await readTreasuryOpening(pool);
-  if(!result.positions.every(p=>rows.some(r=>r.booking_id===p.bookingId&&Number(r.quantity)===Number(p.quantity))))throw Error('TREASURY_READBACK_MISMATCH');
-  for(const p of result.positions.filter(p=>p.accountId)){
-   const ledger=(await pool.query('SELECT available_balance::text FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[p.accountId])).rows[0];
-   if(!ledger||Number(ledger.available_balance)!==0)throw Error('TREASURY_LEDGER_READBACK_MISMATCH');
-  }
-  for(const entry of walletMove.positions){const wallet=(await pool.query('SELECT available_balance::text FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[entry.accountId])).rows[0];if(!wallet||Number(wallet.available_balance)<Number(entry.quantity))throw Error('TREASURY_WALLET_MOVE_READBACK');}
+ try{const result=await bookTreasuryOpening(pool);const walletMove=await consolidateTreasuryCrypto(pool);
+  await verifyTreasuryOpening(pool,result,walletMove);
   // Keep the Azure console receipt on one short line; full booking IDs are read via the authenticated API.
   console.log('AVISPAY_TREASURY_BOOKING_OK '+JSON.stringify({requestId:result.requestId,booked:result.positions.length,consolidated:walletMove.positions.length}));
  }catch(e){console.error('AVISPAY_TREASURY_BOOKING_FAILED '+(e.code||e.message));process.exitCode=1;}finally{await pool.end();}

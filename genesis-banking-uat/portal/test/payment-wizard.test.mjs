@@ -110,3 +110,53 @@ test('requested copy and labels replace redundant payment headings and sender pr
  fill('method','CRYPTO');assert.equal(fields().from.disabled,true);assert.match(q('dialog').textContent,/AG and AGi as payment media/);assert.match(q('dialog').textContent,/purchase now/);
  assert.equal(fields().method.querySelector('[value=CODED_CARD]').textContent,'Make a force payment');
 });
+
+test('a wallet payment opens immediately and keeps its exact source while independent selectors load or retry',async()=>{
+ const state=setup();
+ const wallet={account_id:'chosen-wallet',user_id:'1',wallet_scope:'CUSTODY',network:'ETHEREUM',currency_code:'AVIS',available_balance:'3'};
+ const pending=new Map();let accountAttempts=0;
+ const read=view=>{
+  if(view==='accounts'&&accountAttempts++===0)return Promise.reject(Error('FIAT lookup failed'));
+  if(view==='accounts')return Promise.resolve([account]);
+  return new Promise(resolve=>pending.set(view,resolve));
+ };
+ wizard.fromCrypto(wallet.account_id,read);
+ const form=q('form'),tick=()=>new Promise(resolve=>setImmediate(resolve));
+ assert.equal(q('dialog').parentElement,document.body);
+ assert.equal(fields().method.value,'CRYPTO');
+ pending.get('cryptoholdings')([{...wallet,account_id:'another-wallet'}]);
+ await tick();
+ assert.equal(fields().cryptoAccount.value,'','Send must never substitute another holding');
+ pending.get('cryptowallets')([wallet]);
+ await tick();
+ assert.equal(fields().cryptoAccount.value,wallet.account_id);
+ assert.equal(q('[data-source-read=accounts]').closest('label').hidden,true);
+ fill('amount','0.25');await next();
+ assert.equal(q('.payment-slide[aria-hidden=false]').querySelector('[name=cryptoAddress]'),fields().cryptoAddress);
+ assert.deepEqual(state.notices,[]);assert.equal(state.calls.length,0);
+ back();fill('method','BANK');
+ assert.equal(q('[data-source-read=accounts]').closest('label').hidden,false);
+ await q('[data-source-read=accounts] button').onclick();
+ assert.equal(q('form'),form);assert.equal(fields().amount.value,'0.25');
+ assert.ok(fields().from.querySelector('option[value="'+account.abiq_iban+'"]'));
+ assert.equal(q('[data-source-read=accounts]').textContent,'');
+ wizard.close();wizard.open();
+ pending.get('transfercards')([{...wallet,card_id:'old-card'}]);pending.get('customers')([]);
+ await tick();
+ assert.equal(fields().sourceCardId.querySelector('option[value=old-card]'),null);
+});
+
+test('an expired payment review cannot set an error or change the step in a newly opened form',async()=>{
+ let finish;
+ const state=setup(async(path,body)=>{
+  if(path==='payments/check-receiver')return {account:body.receiverAccount,bic:'AVIPTN64XXX',receiverName:'Receiver',address,receiverBridgeId:'2',addressSource:'REGISTERED'};
+  if(path==='payments/review')return new Promise((_resolve,reject)=>{finish=reject;});
+  throw Error('Unexpected '+path);
+ });
+ fill('from',account.abiq_iban);fill('amount','1');await next();
+ fill('receiverAccount','000011000102');await next();await next();fill('reference','Original instruction');
+ const oldRead=next();wizard.close();wizard.open();
+ finish(Object.assign(Error('Previous payment failed'),{field:'amount'}));await oldRead;
+ assert.equal(q('.payment-error').textContent,'');assert.equal(q('[data-error=amount]').textContent,'');
+ assert.match(q('.payment-track').className,/step-0/);assert.deepEqual(state.notices,[]);
+});

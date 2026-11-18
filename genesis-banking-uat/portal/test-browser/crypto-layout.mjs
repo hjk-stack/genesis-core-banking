@@ -134,8 +134,7 @@ async function verifyGroupedCurrency(page,width){
  assert.deepEqual(await dialog.locator('select[data-receive-network] option').evaluateAll(options=>options.map(o=>o.value).filter(Boolean)),['ETHEREUM','SOLANA']);
  assert.equal(await dialog.locator('.crypto-qr').getAttribute('src'),addresses['2'].qr);
  assert.equal(await dialog.locator('[data-deposit-form]').count(),0,'Ethereum receipt reconciliation must follow the selected blockchain');
- await dialog.getByRole('button',{name:'Read blockchain balance',exact:true}).click();
- await page.waitForFunction(()=>document.querySelector('dialog[open] [data-balance-result]')?.textContent.startsWith('Blockchain: 987.654321 USDC'));
+ assert.equal(await dialog.locator('[data-chain-balance]').count(),0);
  const solanaQr=await dialog.locator('.crypto-qr').getAttribute('src');
  await dialog.locator('select[data-receive-network]').selectOption('ETHEREUM');
  await page.waitForFunction(address=>document.querySelector('dialog[open] .crypto-receive code')?.textContent===address,addresses['1'].public_address);
@@ -143,6 +142,14 @@ async function verifyGroupedCurrency(page,width){
  assert.equal(await dialog.locator('select[data-receive-network]').inputValue(),'ETHEREUM');
  assert.equal(await dialog.locator('.crypto-qr').getAttribute('src'),addresses['1'].qr);
  assert.notEqual(await dialog.locator('.crypto-qr').getAttribute('src'),solanaQr,'the QR must encode the selected network address');
+ assert.equal(await dialog.locator('[data-chain-balance],[data-deposit-form]').count(),0);
+ assert.equal(calls.slice(start).filter(c=>c.url==='/api/crypto/balance').length,0);
+ await dialog.getByRole('button',{name:'Close',exact:true}).click();
+ await usdc.getByRole('button',{name:'Wallet activity for USDC',exact:true}).click();
+ await dialog.locator('select[data-receive-network]').selectOption('SOLANA');
+ await dialog.getByRole('button',{name:'Read blockchain balance',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('dialog[open] [data-balance-result]')?.textContent.startsWith('Blockchain: 987.654321 USDC'));
+ await dialog.locator('select[data-receive-network]').selectOption('ETHEREUM');
  assert.equal(await dialog.locator('[data-deposit-form]').count(),1);
  await dialog.getByRole('button',{name:'Read blockchain balance',exact:true}).click();
  await page.waitForFunction(()=>document.querySelector('dialog[open] [data-balance-result]')?.textContent.startsWith('Blockchain: 123.456789 USDC'));
@@ -318,6 +325,9 @@ for(const width of [2560,1440,834,390])test('real banking shell fits crypto scro
   assert.equal(await d.evaluate(e=>e.parentElement.tagName),'BODY');
   assert.equal(await d.getByRole('button',{name:'Close',exact:true}).count(),1);
   const b=await d.boundingBox();assert.ok(b.x>=0&&b.x+b.width<=width+1);
+  assert.equal(await d.locator('[data-chain-balance],[data-deposit-form]').count(),0);
+  await d.getByRole('button',{name:'Close',exact:true}).click();
+  await page.getByRole('button',{name:'Wallet activity for AG',exact:true}).click();
   const txHash='0x'+width.toString(16).padStart(64,'a'),receipt=d.locator('[data-deposit-result]');
   await d.getByRole('textbox',{name:'Transaction hash',exact:true}).fill(txHash);
   await d.getByRole('button',{name:'Check incoming transfer',exact:true}).click();

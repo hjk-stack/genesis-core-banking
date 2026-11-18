@@ -11,18 +11,48 @@ let exchangeIntent=null;try{exchangeIntent=readExchangeIntent(location.hash);}ca
 if(exchangeIntent)$('#login-form h2').textContent=exchangeIntent.side?'Sign in to '+exchangeIntent.side.toLowerCase()+' '+exchangeIntent.symbol:'Sign in to your portfolio';
 if(new URLSearchParams(location.search).get('own')==='1'){$('#close-workspace').hidden=false;$('#close-workspace').onclick=()=>{if(window.avisDesktop?.windowControl)window.avisDesktop.windowControl('close');else{window.close();setTimeout(()=>{if(!window.closed)location.assign('https://avis.land/exchange');},300);}};}
 const currencies=['EUR','USD','GBP','CHF','SEK','NOK','DKK','PLN','CZK','HUF','RON','AED','SGD','JPY'];
-async function api(path,body,key){const epoch=sessionEpoch,res=await fetch('/api/'+path,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'content-type':'application/json','x-csrf-token':csrf,'idempotency-key':key||crypto.randomUUID()},...(body===undefined?{}:{body:JSON.stringify(body)})});const data=await res.json();if(!res.ok){if(res.status===401&&path!=='login'&&epoch===sessionEpoch){exchangeIntent=portfolioManager.pendingIntent()||exchangeIntent;signedOut();}throw Object.assign(new Error(data.message||'Please try this action again.'),data);}return data;}
-function clearForm(){if($('#form-dialog').open)$('#form-dialog').close();$('#action-form').reset();$('#form-fields').replaceChildren();}
-function signedOut(){sessionEpoch++;clearForm();paymentWizard.close();cardManager.close();accountStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';$('#workspace-selector').hidden=true;$('#workspace').hidden=true;$('#signin').hidden=false;$('#signout').hidden=true;$('#operator-name').textContent='';csrf='';for(const k of Object.keys(cache))delete cache[k];if($('#form-dialog').open)$('#form-dialog').close();}
-function signedIn(session){sessionEpoch++;clearForm();paymentWizard.close();cardManager.close();accountStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';for(const k of Object.keys(cache))delete cache[k];identity={...session,admin:session.admin!==false};csrf=session.csrf;document.querySelectorAll('nav a').forEach(a=>a.hidden=!identity.admin&&!['#accounts','#portfolio','#payments','#cards','#wallets'].includes(a.hash));void refreshWorkspaces();void refreshPickupAlerts();$('#workspace').hidden=false;$('#signin').hidden=true;$('#signout').hidden=false;$('#operator-name').textContent=session.username;void resumeExchange();}
+async function api(path,body,key){
+ const epoch=sessionEpoch,write=body!==undefined;
+ let response;
+ try{
+  response=await fetch('/api/'+path,{
+   method:write?'POST':'GET',
+   headers:write?{'content-type':'application/json','x-csrf-token':csrf,'idempotency-key':key||crypto.randomUUID()}:{},
+   ...(write?{body:JSON.stringify(body)}:{})
+  });
+ }catch{
+  throw Object.assign(new Error('Could not reach the banking service.'),{code:'NETWORK_REQUEST_FAILED'});
+ }
+ if(response.status===401&&path!=='login'&&epoch===sessionEpoch){
+  exchangeIntent=portfolioManager.pendingIntent()||exchangeIntent;signedOut();
+ }
+ let data;
+ try{data=await response.json();}
+ catch{
+  throw Object.assign(new Error('Could not read the banking response.'),{
+   code:'INVALID_RESPONSE',status:response.status,requestId:response.headers.get('x-request-id')
+  });
+ }
+ if(!response.ok)throw Object.assign(new Error(data.message||'Please try this action again.'),data);
+ return data;
+}
+let formGeneration=0,noticeTimer;
+function clearNotice(){clearTimeout(noticeTimer);$('#notice').textContent='';$('#notice').hidden=true;}
+function clearForm(){formGeneration++;activeForm=null;if($('#form-dialog').open)$('#form-dialog').close();$('#action-form').reset();$('#form-fields').replaceChildren();}
+function signedOut(){sessionEpoch++;loading++;clearNotice();$('#workspace-selector').replaceChildren();$('#workspace-error').textContent='';clearForm();paymentWizard.close();cardManager.close();accountStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';$('#workspace-selector').hidden=true;$('#workspace').hidden=true;$('#signin').hidden=false;$('#signout').hidden=true;$('#operator-name').textContent='';csrf='';for(const k of Object.keys(cache))delete cache[k];if($('#form-dialog').open)$('#form-dialog').close();}
+function signedIn(session){sessionEpoch++;clearNotice();$('#workspace-selector').replaceChildren();$('#workspace-error').textContent='';clearForm();paymentWizard.close();cardManager.close();accountStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';for(const k of Object.keys(cache))delete cache[k];identity={...session,admin:session.admin!==false};csrf=session.csrf;document.querySelectorAll('nav a').forEach(a=>a.hidden=!identity.admin&&!['#accounts','#portfolio','#payments','#cards','#wallets'].includes(a.hash));void refreshWorkspaces();void refreshPickupAlerts();$('#workspace').hidden=false;$('#signin').hidden=true;$('#signout').hidden=false;$('#operator-name').textContent=session.username;void resumeExchange();}
 async function resumeExchange(){
  const serial=sessionEpoch,intent=exchangeIntent;
  if(intent)history.replaceState(null,'','#portfolio');
  await render();if(serial!==sessionEpoch||!intent)return;
- try{if(intent.side)await portfolioManager.fromExchange(intent);if(serial===sessionEpoch)exchangeIntent=null;}catch(e){if(serial===sessionEpoch)notice(e.message);}
+ try{if(intent.side)await portfolioManager.fromExchange(intent);if(serial===sessionEpoch)exchangeIntent=null;}catch(e){if(serial===sessionEpoch&&location.hash==='#portfolio')pageError(e);}
 }
 $('#login-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,button=form.querySelector('button');button.disabled=true;form.querySelector('.form-error').textContent='';try{signedIn(await api('login',Object.fromEntries(new FormData(form))));form.reset();}catch(err){form.querySelector('.form-error').textContent=err.message;}finally{button.disabled=false;}});
-$('#signout').onclick=async()=>{try{await api('logout',{});signedOut();}catch(e){notice(e.message);}};
+$('#signout').onclick=async()=>{
+ const epoch=sessionEpoch;
+ try{await api('logout',{});if(epoch===sessionEpoch)signedOut();}
+ catch(e){if(epoch===sessionEpoch)$('#workspace-error').textContent=e.message;}
+};
 const number=s=>{const[a,b]=String(s).split('.');return a.replace(/\B(?=(\d{3})+(?!\d))/g,',')+(b?'.'+b.replace(/0+$/,'').padEnd(2,'0'):'');};
 const displayAbiq=s=>typeof s==='string'&&/^TN\d{2}AVIP000\d{15}$/.test(s)?s.slice(0,14)+' '+s.slice(14):s;
 const label=s=>s.toLowerCase().replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase());
@@ -58,8 +88,30 @@ pos:{title:'POS',subtitle:'Terminals, authorizations and merchant settlement.',a
 wallets:{title:'Crypto & tokenisation',subtitle:'Receiving addresses and asset balances by customer and blockchain.',actions:[['buycrypto','Purchase AG / AGi / crypto'],['sellcrypto','Convert to FIAT'],['cryptooffer','Register sale offer']],views:[['cryptoholdings','Crypto holdings'],['cryptooffers','Purchase offers'],['wallets','Blockchain addresses']]},
 administration:{title:'Administration',subtitle:'Transfer requests, operator audit and bank connections.',actions:[['bindlogin','Link customer login'],['dispatch','Submit queued bank payment'],['cashaccount','Add clearing account'],['bankprofile','Add bank connector'],['bankroute','Link IBAN to ABIQ']],views:[['transferalerts','Transfers awaiting administrator pickup'],['transferrequests','Transfer requests · Outgoing transfer requests'],['correspondents','Clearing & correspondent accounts'],['bankprofiles','Bank connectors'],['connectors','Quantum connectors'],['clearing','Clearing records'],['audit','Operations audit']]}
 };
-async function refreshWorkspaces(){const field=$('#workspace-selector');field.hidden=!identity.canSwitchWorkspace;if(!identity.canSwitchWorkspace)return;try{const result=await api('workspaces');field.innerHTML='<option value="">Administration</option>'+result.rows.map(r=>`<option value="${esc(r.user_id)}">${esc(r.full_name)} · User ${esc(r.user_id)}</option>`).join('');field.value=identity.customerUserId||'';}catch(e){notice(e.message);}}
-$('#workspace-selector').onchange=async e=>{try{const session=await api('workspace',{userId:e.target.value||null});location.hash='#accounts';signedIn(session);}catch(err){notice(err.message);}};
+async function refreshWorkspaces(){
+ const field=$('#workspace-selector'),epoch=sessionEpoch;
+ field.hidden=!identity.canSwitchWorkspace;
+ if(!identity.canSwitchWorkspace)return;
+ try{
+  const result=await api('workspaces');
+  if(epoch!==sessionEpoch)return;
+  field.innerHTML='<option value="">Administration</option>'+result.rows.map(r=>`<option value="${esc(r.user_id)}">${esc(r.full_name)} · User ${esc(r.user_id)}</option>`).join('');
+  field.value=identity.customerUserId||'';
+ }catch(e){
+  if(epoch===sessionEpoch)console.error('WORKSPACE_LIST_READ_FAILED',e.code||e.name,e.requestId||'');
+ }
+}
+$('#workspace-selector').onfocus=()=>{if(!$('#workspace-selector').options.length)void refreshWorkspaces();};
+$('#workspace-selector').onchange=async e=>{
+ const field=e.currentTarget,epoch=sessionEpoch;
+ field.disabled=true;$('#workspace-error').textContent='';
+ try{
+  const session=await api('workspace',{userId:field.value||null});
+  if(epoch===sessionEpoch){location.hash='#accounts';signedIn(session);}
+ }catch(err){
+  if(epoch===sessionEpoch){field.value=identity.customerUserId||'';$('#workspace-error').textContent=err.message;}
+ }finally{field.disabled=false;}
+};
 function visiblePage(key){
  if(identity.admin)return pages[key]||pages.accounts;
  const allowed={accounts:{...pages.accounts,subtitle:'Your accounts and available balances.',actions:[['currency','Add currencies'],['customerprofile','My details']],views:[['accountsummaries','My accounts']]},portfolio:{...pages.portfolio,subtitle:'Your securities, investment values and exchange orders.',actions:[['buysecurity','Buy'],['sellsecurity','Sell'],['buycrypto','Purchase assets'],['sellcrypto','Convert to FIAT']]},payments:{...pages.payments,views:[['paymentregister','My payments'],['transactions','Account activity']]},cards:{...pages.cards,actions:pages.cards.actions.filter(([id])=>!['card','offlinekeys','allowance','offlineclose'].includes(id)),views:[['cardaccounts','My card accounts'],['codedcards','Code-secured card debits']]},wallets:{...pages.wallets,actions:pages.wallets.actions.filter(([id])=>id!=='cryptooffer')}};
@@ -84,9 +136,11 @@ html+=results.map((r,i)=>{
  if(view==='securityorders')return securityOrdersTable(rows);
  if(view==='exchangebook')return securityBookTable(rows);
  return table(view,page.views[i][1],rows)+(view==='portfolio'&&!rows.length?'<p class="panel-empty">No investment holdings recorded yet.</p>':'');
-}).join('');$('#panels').innerHTML=html;$('#panels').setAttribute('aria-busy','false');accountStatements.bind($('#panels'));portfolioManager.bind($('#panels'));document.querySelectorAll('[data-request]').forEach(b=>b.onclick=()=>paymentWizard.view(b.dataset.request).catch(e=>notice(e.message)));document.querySelectorAll('[data-card-row]').forEach(row=>{const show=()=>cardManager.open(row.querySelector('select').value).catch(e=>notice(e.message));row.onclick=e=>{if(e.target.closest('select'))return;void show();};row.onkeydown=e=>{if(e.target===row&&e.key==='Enter'){e.preventDefault();void show();}};});}
+}).join('');$('#panels').innerHTML=html;$('#panels').setAttribute('aria-busy','false');accountStatements.bind($('#panels'));portfolioManager.bind($('#panels'));document.querySelectorAll('[data-request]').forEach(b=>b.onclick=()=>paymentWizard.view(b.dataset.request).catch(e=>pageError(e,b)));document.querySelectorAll('[data-card-row]').forEach(row=>{const show=()=>cardManager.open(row.querySelector('select').value).catch(e=>pageError(e,row));row.onclick=e=>{if(e.target.closest('select'))return;void show();};row.onkeydown=e=>{if(e.target===row&&e.key==='Enter'){e.preventDefault();void show();}};});}
 window.addEventListener('hashchange',()=>{
- try{const intent=readExchangeIntent(location.hash);if(intent){exchangeIntent=intent;if(csrf)void resumeExchange();else $('#login-form h2').textContent=intent.side?'Sign in to '+intent.side.toLowerCase()+' '+intent.symbol:'Sign in to your portfolio';return;}}catch(e){notice(e.message);return;}
+ clearNotice();clearForm();paymentWizard.close();accountStatements.close();cardManager.close();portfolioManager.close();
+
+ try{const intent=readExchangeIntent(location.hash);if(intent){exchangeIntent=intent;if(csrf)void resumeExchange();else $('#login-form h2').textContent=intent.side?'Sign in to '+intent.side.toLowerCase()+' '+intent.symbol:'Sign in to your portfolio';return;}}catch(e){pageError(e);return;}
  void render();
 });
 const input=(name,title,type='text',extra='')=>`<label>${esc(title)}<input name="${name}" aria-label="${esc(title)}" type="${type}" ${extra} required></label>`;
@@ -145,16 +199,67 @@ capture:{title:'Capture AVIS card payment',path:'cards/capture',button:'Capture 
 reverse:{title:'Reverse AVIS card authorization',path:'cards/reverse',button:'Reverse authorization',fields:()=>select('authorizationId','Authorization',authOptions())}
 };
 function addSplit(){$('#split-fields').insertAdjacentHTML('beforeend',`<fieldset><legend>Shop allocation</legend><div class="split">${select('merchantId','Shop',shopOptions())}${input('splitAmount','Amount (EUR)','text','inputmode="decimal"')}</div></fieldset>`);}
-async function openForm(id){try{if(['recordsecurity','buysecurity','sellsecurity','syncsecurities'].includes(id)){await portfolioManager.open(id);return;}if(id==='opencardmessage'){openCardMessage();return;}if(id==='newpayment'){await getRows('accounts');const extra=['customers','cryptoholdings','cryptowallets','transfercards','externalcards'];const results=await Promise.allSettled(extra.map(getRows));results.forEach((r,i)=>{if(r.status==='rejected'){cache[extra[i]]=[];console.error('PAYMENT_OPTION_READ_FAILED',extra[i]);}});paymentWizard.open();return;}const dependencies={issuecard:['accounts'],loadcard:['accounts','transfercards'],externalcard:['accounts'],loadexternal:['accounts','externalcards'],suspense:['accounts'],bindlogin:['customers'],sellcrypto:['accounts','cryptooffers','cryptoholdings'],settletransfer:['ledger'],redeemcode:['accounts'],cancelcode:['codedcards'],cryptooffer:['accounts','cryptoholdings'],buycrypto:['accounts','cryptooffers'],customerprofile:['customers'],fxquote:['accounts'],fxexecute:['fxquotes'],fxcancel:['fxquotes'],fxrefresh:[],offlinekeys:[],allowance:[],offlinesync:[],offlineclose:['offlinegrants'],cashaccount:[],bankprofile:['correspondents'],bankroute:['accounts','bankprofiles'],bankpayment:['accounts','bankprofiles'],dispatch:['bankpayments'],statement:['bankprofiles'],customer:[],currency:['customers'],transfer:['accounts'],shop:['customers'],checkout:['accounts','shops'],release:['checkouts'],refund:['checkouts'],card:['accounts'],terminal:['shops'],authorize:['terminals'],capture:['authorizations'],reverse:['authorizations']}[id];await Promise.all(dependencies.map(getRows));activeForm=forms[id];requestKey=crypto.randomUUID();$('#dialog-title').textContent=activeForm.title;$('#form-fields').innerHTML=activeForm.fields();$('#submit-action').textContent=activeForm.button;$('#action-form .form-error').textContent='';if(id==='customer'&&accountTypeFilter)$('#action-form').elements.accountType.value=accountTypeFilter;if(id==='checkout'){addSplit();$('#add-split').onclick=addSplit;}if(id==='customerprofile')$('#action-form').elements.userId.onchange=e=>{const address=(cache.customers||[]).find(c=>String(c.user_id)===e.target.value)?.postal_address;for(const n of ['street','city','postalCode','country'])$('#action-form').elements[n].value=address?.[n]||'';};if(id==='buycrypto'||id==='sellcrypto'){
+async function openForm(id){
+ const epoch=sessionEpoch,hash=location.hash,generation=++formGeneration;
+ const current=()=>epoch===sessionEpoch&&hash===location.hash&&generation===formGeneration;
+ try{if(['recordsecurity','buysecurity','sellsecurity','syncsecurities'].includes(id)){await portfolioManager.open(id);return;}if(id==='opencardmessage'){openCardMessage();return;}if(id==='newpayment'){paymentWizard.open({loadRows:readPaymentRows});return;}const dependencies={issuecard:['accounts'],loadcard:['accounts','transfercards'],externalcard:['accounts'],loadexternal:['accounts','externalcards'],suspense:['accounts'],bindlogin:['customers'],sellcrypto:['accounts','cryptooffers','cryptoholdings'],settletransfer:['ledger'],redeemcode:['accounts'],cancelcode:['codedcards'],cryptooffer:['accounts','cryptoholdings'],buycrypto:['accounts','cryptooffers'],customerprofile:['customers'],fxquote:['accounts'],fxexecute:['fxquotes'],fxcancel:['fxquotes'],fxrefresh:[],offlinekeys:[],allowance:[],offlinesync:[],offlineclose:['offlinegrants'],cashaccount:[],bankprofile:['correspondents'],bankroute:['accounts','bankprofiles'],bankpayment:['accounts','bankprofiles'],dispatch:['bankpayments'],statement:['bankprofiles'],customer:[],currency:['customers'],transfer:['accounts'],shop:['customers'],checkout:['accounts','shops'],release:['checkouts'],refund:['checkouts'],card:['accounts'],terminal:['shops'],authorize:['terminals'],capture:['authorizations'],reverse:['authorizations']}[id];await Promise.all(dependencies.map(getRows));if(!current())return false;activeForm=forms[id];requestKey=crypto.randomUUID();$('#dialog-title').textContent=activeForm.title;$('#form-fields').innerHTML=activeForm.fields();$('#submit-action').textContent=activeForm.button;$('#submit-action').disabled=false;$('#action-form .form-error').textContent='';if(id==='customer'&&accountTypeFilter)$('#action-form').elements.accountType.value=accountTypeFilter;if(id==='checkout'){addSplit();$('#add-split').onclick=addSplit;}if(id==='customerprofile')$('#action-form').elements.userId.onchange=e=>{const address=(cache.customers||[]).find(c=>String(c.user_id)===e.target.value)?.postal_address;for(const n of ['street','city','postalCode','country'])$('#action-form').elements[n].value=address?.[n]||'';};if(id==='buycrypto'||id==='sellcrypto'){
  const f=$('#action-form');f.oninput=()=>{const offer=cache.cryptooffers.find(o=>o.offer_id===f.elements.offerId.value);f.elements.unitPrice.value=offer?.unit_price||'';f.elements.total.value='';try{if(offer&&/^[0-9]{1,18}(\.[0-9]{1,18})?$/.test(f.elements.quantity.value)){const units=s=>{const[w,d='']=s.split('.');return BigInt(w)*10n**18n+BigInt(d.padEnd(18,'0'));};const quantum=offer.fiat==='JPY'?10n**18n:10n**16n,divisor=10n**18n*quantum,n=((units(f.elements.quantity.value)*units(offer.unit_price)+(id==='buycrypto'?divisor-1n:0n))/divisor)*quantum;const digits=n.toString().padStart(19,'0');f.elements.total.value=digits.slice(0,-18)+'.'+digits.slice(-18);}}catch{}};
  }else $('#action-form').oninput=null;
- $('#form-dialog').showModal();}catch(err){notice(err.message);}}
-$('#close-dialog').onclick=$('#cancel-dialog').onclick=()=>$('#form-dialog').close();
-function notice(message){$('#notice').textContent=message;$('#notice').hidden=false;setTimeout(()=>{$('#notice').hidden=true;},7000);}
-$('#action-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,button=$('#submit-action');button.disabled=true;const error=$('#action-form .form-error');error.textContent='';try{const data=new FormData(e.currentTarget),body=activeForm.build?activeForm.build(data):Object.fromEntries(data);const result=await api(activeForm.path,body,requestKey);$('#form-dialog').close();form.reset();if(activeForm===forms.loadexternal){paymentWizard.reviewPrepared(result);return;}if(result.allowance){const url=URL.createObjectURL(new Blob([JSON.stringify(result.allowance,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='AVIS-offline-allowance-'+result.id+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}notice(result.accounts?`Account created · ${result.accounts.map(a=>a.currency+' '+displayAbiq(a.abiqIban)).join(' · ')}`:result.delivery?`Payment delivery · ${label(result.delivery)}`:result.journalId?`Recorded · journal ${result.journalId}`:'Saved successfully.');await render();}catch(err){error.textContent=err.message;if(err.field)form.elements.namedItem(err.field)?.focus?.();}finally{button.disabled=false;}});
-const cryptoManager=createCryptoWorkspace({api,identity:()=>identity,purchase:()=>openForm('buycrypto'),sell:()=>openForm('sellcrypto'),send:async holding=>{await openForm('newpayment');paymentWizard.fromCrypto(holding.account_id);},notice});
-const paymentWizard=createPaymentWizard({api,accounts:()=>cache.accounts||[],refresh:render,notice,data:view=>cache[view]||[],purchase:()=>openForm('buycrypto'),sell:()=>openForm('sellcrypto'),isAdmin:()=>identity.admin,userId:()=>identity.customerUserId,settle:async r=>{await openForm('settletransfer');$('#action-form').elements.requestId.value=r.request_id;$('#action-form').elements.requestId.readOnly=true;}});
+ $('#form-dialog').showModal();return true;
+ }catch(err){
+  if(current())pageError(err);
+  return false;
+ }
+}
+function pageError(err,origin){
+ if(origin&&!origin.isConnected)return;
+ const panel=origin?.closest('.panel');
+ if(panel){
+  let issue=panel.querySelector('[data-panel-action-error]');
+  if(!issue){
+   issue=document.createElement('p');issue.className='form-error';issue.dataset.panelActionError='';
+   issue.setAttribute('role','alert');(panel.querySelector('.panel-header')||panel.firstElementChild)?.after(issue);
+  }
+  issue.textContent=err.message;return;
+ }
+ const target=$('#account-page-error')||$('#crypto-wallet-desk [data-crypto-error]')||$('#login-form .form-error');
+ if(target)target.textContent=err.message;
+}
+async function readPaymentRows(view){
+ try{return (await api('views/'+view)).rows;}
+ catch(e){console.error('PAYMENT_OPTION_READ_FAILED',view,e.code||e.name,e.requestId||'');throw e;}
+}
+$('#close-dialog').onclick=$('#cancel-dialog').onclick=clearForm;
+$('#form-dialog').oncancel=e=>{e.preventDefault();clearForm();};
+function notice(message){clearNotice();$('#notice').textContent=message;$('#notice').hidden=false;noticeTimer=setTimeout(clearNotice,7000);}
+function clearFieldError(form){
+ const issue=form.querySelector('[data-action-field-error]');
+ if(!issue)return;
+ const field=form.elements.namedItem(issue.dataset.actionFieldError);
+ if(field){field.removeAttribute('aria-invalid');field.removeAttribute('aria-describedby');}
+ issue.remove();
+}
+$('#action-form').addEventListener('input',e=>{
+ if(e.target.name&&e.target.getAttribute('aria-invalid')==='true')clearFieldError(e.currentTarget);
+});
+$('#action-form').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const form=e.currentTarget,button=$('#submit-action'),generation=formGeneration;
+ if(!activeForm||button.disabled)return;
+ button.disabled=true;clearFieldError(form);
+ const error=form.querySelector('.form-error');error.textContent='';try{const data=new FormData(e.currentTarget),body=activeForm.build?activeForm.build(data):Object.fromEntries(data);const result=await api(activeForm.path,body,requestKey);if(generation!==formGeneration)return;$('#form-dialog').close();form.reset();if(activeForm===forms.loadexternal){paymentWizard.reviewPrepared(result);return;}if(result.allowance){const url=URL.createObjectURL(new Blob([JSON.stringify(result.allowance,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='AVIS-offline-allowance-'+result.id+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}notice(result.accounts?`Account created · ${result.accounts.map(a=>a.currency+' '+displayAbiq(a.abiqIban)).join(' · ')}`:result.delivery?`Payment delivery · ${label(result.delivery)}`:result.journalId?`Recorded · journal ${result.journalId}`:'Saved successfully.');await render();}catch(err){
+ if(generation!==formGeneration)return;
+ const field=err.field&&form.elements.namedItem(err.field);
+ if(field?.closest?.('label')){
+  const slot=document.createElement('span');slot.className='field-error';slot.id='action-field-error';
+  slot.dataset.actionFieldError=field.name;slot.setAttribute('role','alert');slot.textContent=err.message;
+  field.after(slot);field.setAttribute('aria-invalid','true');field.setAttribute('aria-describedby',slot.id);field.focus();
+ }else error.textContent=err.message;
+ }finally{if(generation===formGeneration)button.disabled=false;}
+});
+const cryptoManager=createCryptoWorkspace({api,identity:()=>identity,purchase:()=>openForm('buycrypto'),sell:()=>openForm('sellcrypto'),send:holding=>paymentWizard.fromCrypto(holding.account_id,readPaymentRows),notice});
+const paymentWizard=createPaymentWizard({api,accounts:()=>cache.accounts||[],refresh:render,notice,data:view=>cache[view]||[],purchase:()=>openForm('buycrypto'),sell:()=>openForm('sellcrypto'),isAdmin:()=>identity.admin,userId:()=>identity.customerUserId,settle:async r=>{if(!await openForm('settletransfer'))return;$('#action-form').elements.requestId.value=r.request_id;$('#action-form').elements.requestId.readOnly=true;}});
 const cardManager=createCardManager({api,refresh:render,notice});
 const accountStatements=createAccountStatements({api});
-const portfolioManager=createPortfolio({api,getRows,data:view=>cache[view]||[],refresh:render,notice,isAdmin:()=>identity.admin});
+const portfolioManager=createPortfolio({api,getRows,data:view=>cache[view]||[],refresh:render,notice,actionError:pageError,isAdmin:()=>identity.admin});
 api('session').then(signedIn).catch(()=>signedOut());
