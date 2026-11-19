@@ -111,7 +111,7 @@ test('Wallet activity keeps balance reads separate from receipt booking and retr
  assert.ok(document.querySelector('[data-copy]'));assert.ok(document.querySelector('[data-share]'));
  assert.equal(document.querySelector('[data-chain-balance],[data-deposit-form]'),null);
  document.querySelector('dialog .close').click();
- await document.querySelector('[data-wallet-activity]').onclick();
+ assert.equal(document.querySelector('[data-wallet-activity]'),null);await document.querySelector('[data-receive]').onclick();await document.querySelector('[data-receive-details-open]').onclick();
  const balanceButton=document.querySelector('[data-chain-balance]');await balanceButton.onclick({currentTarget:balanceButton});
  assert.match(document.querySelector('[data-balance-result]').textContent,/Blockchain: 2\.125 ETH/);
  assert.equal(calls.filter(c=>c.path==='crypto/deposits/reconcile').length,0);
@@ -132,11 +132,11 @@ test('Wallet activity places reconciliation errors beside the transaction hash a
   if(path==='crypto/wallet')return {address_id:input.addressId,public_address:'fixture-address',network:input.addressId==='eth-wallet'?'ETHEREUM':'SOLANA',destination_tag:null,qr:'data:image/png;base64,AA=='};
   assert.equal(path,'crypto/deposits/reconcile');throw Object.assign(new Error('Select the matching Ethereum wallet for this incoming transfer.'),{field:'accountId'});
  });
- await document.querySelector('[data-wallet="ETH"] [data-wallet-activity]').onclick();const form=document.querySelector('[data-deposit-form]');form.elements.txHash.value='0x'+'b'.repeat(64);
+ await document.querySelector('[data-wallet="ETH"] [data-receive]').onclick();await document.querySelector('[data-receive-details-open]').onclick();const form=document.querySelector('[data-deposit-form]');form.elements.txHash.value='0x'+'b'.repeat(64);
  await form.onsubmit({preventDefault(){}});
  assert.equal(form.querySelector('[data-deposit-error]').textContent,'Select the matching Ethereum wallet for this incoming transfer.');
  assert.equal(document.querySelector('[data-crypto-error]').textContent,'');assert.equal(form.querySelector('button').disabled,false);
- await document.querySelector('[data-wallet="SOL"] [data-wallet-activity]').onclick();assert.equal(document.querySelector('[data-deposit-form]'),null);
+ await document.querySelector('[data-wallet="SOL"] [data-receive]').onclick();await document.querySelector('[data-receive-details-open]').onclick();assert.equal(document.querySelector('[data-deposit-form]'),null);
  assert.ok(document.querySelector('[data-chain-balance]'));
 });
 
@@ -207,7 +207,7 @@ test('rapid QR changes clear previous details immediately and reject out-of-orde
   const pending=deferred();walletReads.push({input,response,...pending});return pending.promise;
  });
  Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>copied.push(text)},configurable:true});navigator.share=async data=>shared.push(data);
- await document.querySelector('[data-wallet-activity]').onclick();
+ assert.equal(document.querySelector('[data-wallet-activity]'),null);await document.querySelector('[data-receive]').onclick();await document.querySelector('[data-receive-details-open]').onclick();
  const staleBalance=document.querySelector('[data-chain-balance]').onclick();
  await document.querySelector('[data-receive]').onclick();const oldCopy=document.querySelector('[data-copy]').onclick,oldShare=document.querySelector('[data-share]').onclick,oldSend=document.querySelector('[data-send]').onclick;
  delay=true;
@@ -267,7 +267,7 @@ test('a confirmed deposit refreshes holdings without replacing a subsequently se
   calls.push({path,input,key});if(path==='crypto/wallet')return walletResponse(views.cryptowallets.find(w=>w.address_id===input.addressId));
   assert.equal(path,'crypto/deposits/reconcile');await pending.promise;eth.available_balance='124.456789012345678001';return {status:'CONFIRMED',currency:'USDC',amount:'1',txHash};
  });
- await document.querySelector('[data-wallet-activity]').onclick();const form=document.querySelector('[data-deposit-form]');form.elements.txHash.value=txHash;
+ assert.equal(document.querySelector('[data-wallet-activity]'),null);await document.querySelector('[data-receive]').onclick();await document.querySelector('[data-receive-details-open]').onclick();const form=document.querySelector('[data-deposit-form]');form.elements.txHash.value=txHash;
  const deposit=form.onsubmit({preventDefault(){}});await document.querySelector('[data-receive]').onclick();await choose('[data-receive-network]','SOLANA');
  assert.equal(document.querySelector('[data-deposit-form]'),null);pending.resolve();await deposit;
  assert.deepEqual(calls.find(c=>c.path==='crypto/deposits/reconcile').input,{accountId:eth.account_id,addressId:eth.address_id,txHash});
