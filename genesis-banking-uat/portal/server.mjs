@@ -15,6 +15,7 @@ import {TRADING_TEST_MESSAGES} from './src/trading-testing.mjs';
 import {TRADING_INSTRUCTION_MESSAGES} from './src/trading-instructions.mjs';
 import {TRADING_LIVE_MESSAGES} from './src/trading-live.mjs';
 import {LiveMarketFeed} from './src/trading/live-market.mjs';
+import {scanFinalizedEthereumDeposits} from './src/crypto-deposit-monitor.mjs';
 import {CRYPTO_MESSAGES} from './src/crypto-workspace.mjs';
 import {CustomerAccess} from './src/customer-access.mjs';
 import {processAvis8583} from './src/pos-switch.mjs';
@@ -274,7 +275,15 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  const liveMarkets=new LiveMarketFeed({env:process.env});
  createBankServer({pool,authenticate:(u,p)=>authenticateFineract(u,p,process.env.FINERACT_URL),release:process.env.RELEASE_SHA||'local',transferOptions:{tradingMarketFeed:liveMarkets}})
   .listen(Number(process.env.PORT||8080),'0.0.0.0');
- const robotCore=new TradingRobotCore(pool,{tradingMarketFeed:liveMarkets});let recoveringChain=false;const recoverChain=async()=>{if(recoveringChain)return;recoveringChain=true;try{const pending=(await pool.query("SELECT action_id,status,tx_hash FROM avis_core_v2.crypto_chain_actions WHERE status IN('SIGNED','SUBMITTED') ORDER BY created_at LIMIT 20")).rows;for(const a of pending){try{if(a.status==='SIGNED')await robotCore.broadcastCryptoAction({id:'system:chain-recovery',admin:true},{actionId:a.action_id});await robotCore.confirmCryptoAction({id:'system:chain-recovery',admin:true},{actionId:a.action_id},'confirm:'+a.tx_hash);}catch(e){console.error(JSON.stringify({operation:'CHAIN_RECOVERY',code:e.code||'CHAIN_RECEIPT'}));}}}finally{recoveringChain=false;}};void recoverChain();setInterval(recoverChain,15000).unref();const trading=new TradingRuntime(robotCore).start();
+ const robotCore=new TradingRobotCore(pool,{tradingMarketFeed:liveMarkets});
+ let scanningDeposits=false;
+ const scanDeposits=async()=>{if(scanningDeposits)return;scanningDeposits=true;try{
+  const outcome=await scanFinalizedEthereumDeposits(robotCore);
+  if(outcome.booked)console.info(JSON.stringify({operation:'AUTO_CRYPTO_DEPOSIT',network:outcome.network,booked:outcome.booked}));
+ }catch(e){console.error(JSON.stringify({operation:'AUTO_CRYPTO_DEPOSIT',code:e.code||e.message||'DEPOSIT_SCAN_FAILED'}));}
+ finally{scanningDeposits=false;}};
+ void scanDeposits();setInterval(scanDeposits,30000).unref();
+ let recoveringChain=false;const recoverChain=async()=>{if(recoveringChain)return;recoveringChain=true;try{const pending=(await pool.query("SELECT action_id,status,tx_hash FROM avis_core_v2.crypto_chain_actions WHERE status IN('SIGNED','SUBMITTED') ORDER BY created_at LIMIT 20")).rows;for(const a of pending){try{if(a.status==='SIGNED')await robotCore.broadcastCryptoAction({id:'system:chain-recovery',admin:true},{actionId:a.action_id});await robotCore.confirmCryptoAction({id:'system:chain-recovery',admin:true},{actionId:a.action_id},'confirm:'+a.tx_hash);}catch(e){console.error(JSON.stringify({operation:'CHAIN_RECOVERY',code:e.code||'CHAIN_RECEIPT'}));}}}finally{recoveringChain=false;}};void recoverChain();setInterval(recoverChain,15000).unref();const trading=new TradingRuntime(robotCore).start();
  const processTradingTests=()=>robotCore.processTradingTests().catch(error=>console.error(JSON.stringify({operation:'TRADING_TESTS',code:error.code||'TRADING_TEST_PROCESS'})));
  void processTradingTests();setInterval(processTradingTests,10000).unref();
  const refreshMarkets=()=>robotCore.refreshCryptoMarkets({id:'system:crypto-markets',admin:true},{},'markets:'+Math.floor(Date.now()/120000)).catch(e=>console.error(JSON.stringify({operation:'CRYPTO_MARKET_REFRESH',code:e.code||'CRYPTO_CATALOGUE'})));void refreshMarkets();setInterval(refreshMarkets,120000).unref();
