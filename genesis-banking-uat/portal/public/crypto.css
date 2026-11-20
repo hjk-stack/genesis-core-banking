@@ -205,3 +205,48 @@
 .crypto-source-fields{border:0;padding:0;margin:0;min-width:0}
 .crypto-source-fields [data-source-metadata]{grid-column:1/-1}
 .crypto-source-fields .crypto-details dd{overflow-wrap:anywhere}
+
+/* Tablet/iPad crypto workspace: do not spend ~180-222px of the screen on the
+   desktop bank sidebar. Keep other bank pages and desktop (>=1400px) intact.
+   Sections, market tapes and wallet lists retain their own horizontal scrolling. */
+@media (min-width:701px) and (max-width:1399px) {
+ #workspace:has(> #main > #view > .crypto-section){
+  display:block;width:100%;min-width:0;
+ }
+ #workspace:has(> #main > #view > .crypto-section)>aside{
+  width:100%;min-width:0;padding:8px 14px;background:#fff;
+  border-right:0;border-bottom:1px solid var(--line);
+ }
+ #workspace:has(> #main > #view > .crypto-section)>aside .nav-caption,
+ #workspace:has(> #main > #view > .crypto-section)>aside .sidebar-note{display:none}
+ #workspace:has(> #main > #view > .crypto-section)>aside nav{
+  display:flex;flex-direction:row;flex-wrap:nowrap;gap:6px;
+  max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;
+  -webkit-overflow-scrolling:touch;scrollbar-width:thin;
+ }
+ #workspace:has(> #main > #view > .crypto-section)>aside nav a{
+  flex:0 0 auto;white-space:nowrap;padding:10px 14px;
+ }
+ #workspace:has(> #main > #view > .crypto-section)>#main{
+  box-sizing:border-box;margin:0;width:100%;max-width:none;
+  min-width:0;padding:clamp(12px,2vw,24px);
+ }
+ #workspace:has(> #main > #view > .crypto-section)>#main>#view{
+  width:100%;min-width:0;max-width:100%;
+ }
+ #workspace:has(> #main > #view > .crypto-section) .crypto-section{
+  box-sizing:border-box;width:100%;min-width:0;max-width:100%;
+ }
+ #workspace:has(> #main > #view > .crypto-section) .crypto-section-heading{
+  min-width:0;flex-wrap:wrap;
+ }
+ #workspace:has(> #main > #view > .crypto-section) .crypto-section-heading>div:first-child{
+  min-width:0;flex-wrap:wrap;
+ }
+ #workspace:has(> #main > #view > .crypto-section) .crypto-section-heading h2{
+  overflow-wrap:anywhere;
+ }
+ #workspace:has(> #main > #view > .crypto-section) .crypto-scroller{
+  width:100%;-webkit-overflow-scrolling:touch;
+ }
+}
