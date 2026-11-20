@@ -17,6 +17,9 @@ for line in sys.stdin:
             configure_runtime_robots(robots, data['robots'], WEffectStrategy)
         elif kind=='INDEX' and robot:robot.index=data['index']
         elif kind=='EVENT_ADVICE' and robot:robot.event_advice=data['candidates']
+        elif kind=='MARKET_CONTEXT' and robot:
+            context=data.get('context')
+            robot.market_context=context if isinstance(context,dict) and context.get('benchmarkOnly') is True else None
         elif kind=='ACK' and robot:robot.acknowledge(data['state'])
         elif kind=='TICK' and robot:
             result=robot.receive(data['tick'],int(time.time()*1000))
