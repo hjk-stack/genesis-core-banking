@@ -126,6 +126,8 @@ jobs:
           AVISPAY_PROVIDER_ALCHEMY_API_KEY: ${{ secrets.AVISPAY_PROVIDER_ALCHEMY_API_KEY }}
           AVISPAY_PROVIDER_TRONGRID_API_KEY: ${{ secrets.AVISPAY_PROVIDER_TRONGRID_API_KEY }}
           AVISPAY_PROVIDER_COINGECKO_API_KEY: ${{ secrets.AVISPAY_PROVIDER_COINGECKO_API_KEY }}
+          AVISPAY_PROVIDER_STRIPE_SECRET_KEY: ${{ secrets.AVISPAY_PROVIDER_STRIPE_SECRET_KEY }}
+          AVISPAY_PROVIDER_STRIPE_WEBHOOK_SECRET: ${{ secrets.AVISPAY_PROVIDER_STRIPE_WEBHOOK_SECRET }}
         run: python3 genesis-banking-uat/azure/deploy-sovereign.py
       - name: Activate existing AG and AGi wallets and verify authenticated receiving evidence
         run: python3 genesis-banking-uat/azure/verify-existing-crypto.py

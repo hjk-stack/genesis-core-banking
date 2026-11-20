@@ -631,6 +631,29 @@ def existing_crypto_settings(current_env, known_secrets=()):
     return result
 
 
+
+def existing_stripe_settings(current_env, known_secrets=()):
+    """Bind explicit AVISPay Stripe credentials; never import another merchant's key."""
+    current = {item['name'] for item in current_env}
+    known = {item['name'] for item in known_secrets}
+    result = []
+    for setting in ('STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET'):
+        if setting in current:
+            continue
+        secret_name = 'avispay-provider-' + setting.lower().replace('_', '-')
+        if secret_name in known:
+            result.append(setting + '=secretref:' + secret_name)
+            continue
+        value = os.environ.get('AVISPAY_PROVIDER_' + setting)
+        if not value or value.startswith('@Microsoft.KeyVault('):
+            continue
+        az('containerapp', 'secret', 'set', '-g', RG, '-n', APP,
+           '--secrets', secret_name + '=' + value)
+        result.append(setting + '=secretref:' + secret_name)
+    print('Preserved or configured AVISPay Stripe credential bindings: ' + str(len(result)))
+    return result
+
+
 def main():
     sha = os.environ['GITHUB_SHA']
     image = os.environ['AVISPAY_IMAGE']
@@ -668,6 +691,11 @@ def main():
            'PGPASSWORD=secretref:avispay-db-password', 'FINERACT_URL=http://genesis-fineract-uat',
            'AVIS_OFFLINE_SIGNING_KEY=secretref:avispay-offline-key', f'PORT={port}', f'RELEASE_SHA={sha}']
     env += existing_crypto_settings(containers[0].get('env', []), known_secrets)
+    env += existing_stripe_settings(containers[0].get('env', []), known_secrets)
+    public_fqdn = before['properties']['configuration']['ingress'].get('fqdn')
+    if not isinstance(public_fqdn, str) or not re.fullmatch(r'[a-z0-9.-]+', public_fqdn):
+        raise RuntimeError('Public banking checkout origin could not be verified')
+    env.append('AVIS_STRIPE_RETURN_ORIGIN=https://' + public_fqdn)
     stage = 'application update'
     try:
         az('containerapp', 'update', '-g', RG, '-n', APP, '--image', image,

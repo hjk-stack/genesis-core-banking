@@ -20,6 +20,7 @@ import {scanFinalizedEthereumDeposits} from './src/crypto-deposit-monitor.mjs';
 import {CRYPTO_MESSAGES} from './src/crypto-workspace.mjs';
 import {CustomerAccess} from './src/customer-access.mjs';
 import {processAvis8583} from './src/pos-switch.mjs';
+import {StripeWebPos} from './src/stripe-pos.mjs';
 import {authenticateMessage,connectorCredentials,dispatchPayment,recoverPaymentDeliveries} from './src/payment-transport.mjs';
 import {buildPacs002,readIso20022} from './src/iso20022.mjs';
 
@@ -106,12 +107,16 @@ const messages={...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX_ADVICE_MESSAGES,..
  AUTHORIZATION_ALREADY_CLOSED:'This authorization has already been captured or reversed.',
  SELECT_AVIS_CARD:'Select an active AVIS proprietary card.',CURRENCY_MISMATCH:'Select the card account currency.',
  TERMINAL_NOT_FOUND:'Select an active terminal.',SELECT_BANK_ACCOUNT:'Select AVIS Bank for this account-funded checkout.',
+ STRIPE_CONFIGURATION:'Configure the Stripe merchant connection in Banking Administration.',
+ STRIPE_PROVIDER_RESPONSE:'The card checkout request could not complete. Retry from this payment.',
+ STRIPE_SIGNATURE:'The Stripe event could not be verified.',STRIPE_EVENT_MISMATCH:'The card payment details did not match the original checkout.',
  DUPLICATE_RECORD:'This reference is already registered.',INVALID_REFERENCE:'Select a valid record.',
  FORBIDDEN:'You do not have access to this action.',REQUEST_FAILED:'This action could not be completed. Reference this request in Administration.',
  CSRF:'Refresh the page and submit again.',TOO_MANY_ATTEMPTS:'Please wait before trying to sign in again.'
 };
 export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={}}) {
  const core=new TradingRobotCore(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map(),indexService=new IndexServiceAuthenticator(pool,{env:core.secretEnv,fetcher:transferOptions.indexServiceFetcher||core.cryptoFetch});
+ const stripePos=transferOptions.stripePos||new StripeWebPos(pool,{env:transferOptions.secretEnv||process.env,fetcher:transferOptions.stripeFetch||fetch});
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  return http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
@@ -133,6 +138,12 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    }
    if(req.method==='GET'&&path==='/readyz'){await pool.query('SELECT 1');return send(res,200,{status:'ready',release});}
+   // Stripe sends signed raw events without browser cookies or CSRF tokens.
+   if(path==='/api/stripe/webpos/webhook'&&req.method==='POST'){
+    if(!req.headers['content-type']?.startsWith('application/json'))fault('STRIPE_SIGNATURE',null,415);
+    const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>512*1024)fault('STRIPE_SIGNATURE',null,413);chunks.push(chunk);}
+    return send(res,200,await stripePos.receiveWebhook(Buffer.concat(chunks),req.headers['stripe-signature']));
+   }
    const ingress=/^\/network\/([A-Z0-9_]{1,35})\/(iso20022|iso8583|offline-batch)$/.exec(path);
    if(ingress&&req.method==='POST'){
     const contentType={iso20022:'application/xml',iso8583:'application/octet-stream','offline-batch':'application/json'}[ingress[2]];
@@ -226,7 +237,11 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(req.method==='GET'&&path==='/api/crypto/trading/live')return send(res,200,await invoke('tradingLiveSnapshot',{robotId:url.searchParams.get('robotId')??undefined}));
    if(req.method==='GET'&&path==='/api/crypto/trading/live/liquidity')return send(res,200,await invoke('tradingLiveLiquidity',{robotId:url.searchParams.get('robotId')}));
    if(req.method==='GET'&&path==='/api/crypto/trading/robot-instructions')return send(res,200,await invoke('robotInstructions',{robotId:url.searchParams.get('robotId')}));
-   if(req.method==='GET'&&path.startsWith('/api/views/'))return send(res,200,{rows:await (actor.admin?core:customerAccess).list(actor,path.split('/').at(-1))});
+   if(req.method==='GET'&&path==='/api/stripe/webpos/status')return send(res,200,await stripePos.status(actor,url.searchParams.get('sessionId')));
+   if(req.method==='GET'&&path.startsWith('/api/views/')){
+    if(path==='/api/views/stripepayments')return send(res,200,{rows:await stripePos.list(actor)});
+    return send(res,200,{rows:await (actor.admin?core:customerAccess).list(actor,path.split('/').at(-1))});
+   }
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
    if(path==='/api/logout'){
@@ -248,6 +263,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if((path==='/api/abiq'||path==='/api/bankpayments/dispatch')&&!actor.admin)fault('FORBIDDEN',null,403);
    if(path==='/api/abiq')return send(res,200,await processAbiqRequest(core,actor,body));
    if(path==='/api/bankpayments/dispatch')return send(res,200,await dispatchPayment(core,actor,body,req.headers['idempotency-key']));
+   if(path==='/api/stripe/webpos/checkout')return send(res,200,await stripePos.createCheckout(actor,body,req.headers['idempotency-key']));
    const routes={'cards/issue':'issueManagedCard','cards/load':'loadManagedCard','cards/status':'setCardStatus','cards/pin':'resetCardPin','cards/delivery':'managedCardDelivery','accounts/suspense':'moveToSuspense','access/customer':'bindCustomerLogin','crypto/sell':'sellCrypto','cards/external':'registerExternalCard','cards/redeem-code':'redeemCode','cards/cancel-code':'cancelCodedDebit','cards/pickup-details':'externalCardDetails','payments/pickup':'pickupTransfer','payments/settle-manual':'settleManualTransfer','crypto/offers':'registerCryptoOffer','crypto/purchase':'purchaseCrypto','payments/review':'preparePayment','payments/transfer':'confirmPayment','payments/cancel':'cancelPayment','customers/profile':'saveCustomerProfile',customers:'openCustomer',currencies:'addCurrencies',transfers:'transfer',shops:'registerShop',
     correspondents:'registerCashAccount',bankprofiles:'registerBankConnector',bankroutes:'linkBankAccount',bankpayments:'initiatePayment','clearing/reconcile':'reconcileStatement',
     'fx/rates/refresh':'refreshFxRates','fx/quote':'quoteFx','fx/execute':'executeFx','fx/cancel':'cancelFx',
