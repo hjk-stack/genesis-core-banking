@@ -6,6 +6,7 @@ const now=Date.parse('2026-11-20T08:00:00Z'),start='2026-11-18T00:00:00Z',end='2
 const ids=['IDX_REFRATE_PRIMKT_BTC_USD','IDX_REFRATE_PRIMKT_ETH_USD'];
 const bar={time_period_start:start,time_period_end:end,value_open:100,value_high:110,value_low:90,value_close:105};
 function fixture({invalidETH=false,noKey=false}={}){
+ let currentTime=now;
  const observations=new Map(),bars=new Map(),calls=[],rows=[];
  const pool={async query(sql,params){
   if(sql.includes('INSERT INTO avis_core_v2.coinapi_index_bars')){const key=params.slice(0,2).join(':');if(bars.has(key))return {rowCount:0};bars.set(key,params);return {rowCount:1};}
@@ -21,7 +22,7 @@ function fixture({invalidETH=false,noKey=false}={}){
   return {ok:true,redirected:false,text:async()=>JSON.stringify(body)};
  };
  const env=noKey?{AVIS_INDEX_BENCHMARKS:ids.join(',')}:{COINAPI_INDEXES_API_KEY:'unit-secret',AVIS_INDEX_BENCHMARKS:ids.join(',')};
- return {pool,observations,bars,calls,env,collector:new CoinApiIndexResearch({pool,env,fetcher,now:()=>now})};
+ return {pool,observations,bars,calls,env,advance:ms=>{currentTime+=ms;},collector:new CoinApiIndexResearch({pool,env,fetcher,now:()=>currentTime})};
 }
 test('indexes feed ingests actual current values and completed daily history, never future bars',async()=>{
  const t=fixture(),r=await t.collector.poll();
@@ -35,6 +36,15 @@ test('indexes feed ingests actual current values and completed daily history, ne
  const again=await t.collector.poll();
  assert.equal(again.indices[0].latest.inserted,0);assert.equal(t.calls.length,6,'historical backfill must run once after success');
  assert.equal(t.observations.size,2);assert.equal(t.bars.size,2);
+});
+test('completed historical index bars refresh each day without creating duplicate observations',async()=>{
+ const t=fixture();
+ await t.collector.poll();assert.equal(t.calls.filter(c=>c.url.includes('/timeseries')).length,2);
+ await t.collector.poll();assert.equal(t.calls.filter(c=>c.url.includes('/timeseries')).length,2);
+ t.advance(24*60*60*1000+1);await t.collector.poll();
+ assert.equal(t.calls.filter(c=>c.url.includes('/timeseries')).length,4);
+ assert.equal(t.bars.size,2,'repeated completed bars retain immutable identities');
+ assert.equal(t.observations.size,2,'stale current values must not be recredited as new research observations');
 });
 test('invalid provider values cannot enter research data or block independent indexes',async()=>{
  const t=fixture({invalidETH:true});const result=await t.collector.poll();
