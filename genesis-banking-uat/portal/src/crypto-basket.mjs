@@ -1,0 +1,260 @@
+import {createHash,randomBytes,randomUUID} from 'node:crypto';
+import {decimal,fault,money,text} from './core.mjs';
+
+const S='avis_core_v2.', unit=10n**18n, bps=10000n;
+const currencies=new Set(['EUR','USD','GBP','CHF']);
+const own=asset=>asset==='AG'||asset==='AGi';
+const ceil=(n,d)=>(n+d-1n)/d;
+const digest=s=>createHash('sha256').update(s).digest('hex');
+const uuid=s=>typeof s==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+const minor=s=>money(s,2);
+const entry=(accountId,direction,amount)=>({accountId,direction,amount});
+const reject=(code,field,status=409)=>fault(code,field,status);
+const admin=a=>{if(!a?.admin||!a.id||a.customerUserId)fault('FORBIDDEN',null,403);};
+const integer=(v,max,field)=>{if(!Number.isInteger(v)||v<0||v>max)fault('INVALID_FIELD',field);return v;};
+const sameQty=(a,b)=>money(a)===money(b);
+const lines=(order,from,to)=>[entry(from,'DEBIT',order.quantity),entry(to,'CREDIT',order.quantity)];
+export const BASKET_MESSAGES={
+ BASKET_SESSION:'Open Purchase crypto from your AVISPay wallet.',BASKET_ORDER:'Open the order from its AVISPay checkout.',
+ BASKET_STOCK:'This quantity needs a new treasury quote.',BASKET_COST:'Select a confirmed treasury deposit and its MetaMask provider purchase receipt.',
+ BASKET_CARD:'Select a payment method available for this currency.',BASKET_REVIEW:'Review a new quote for this purchase.',
+ BASKET_SELF:'Select the purchasing customer workspace to complete this order.',BASKET_LIMIT:'Complete an existing checkout before opening another.',
+ BASKET_CHECKOUT:'Open the basket checkout to purchase this currency.'
+};
+export function priceBasket({quantity,lotQuantity,lotCost,unitPrice,markup=0,cardBps=0,fixedMinor=0}){
+ const qty=money(quantity);
+ const cost=lotQuantity?ceil(qty*BigInt(lotCost),money(lotQuantity)):ceil(qty*money(unitPrice)*100n,unit*unit);
+ const benefit=ceil(cost*BigInt(markup),bps);
+ const gross=ceil((cost+benefit+BigInt(fixedMinor))*bps,bps-BigInt(cardBps));
+ if(gross<=0n||gross>99999999n)fault('INVALID_AMOUNT','quantity');
+ return {costMinor:String(cost),markupMinor:String(benefit),collectionCostMinor:String(gross-cost-benefit),totalMinor:String(gross),total:decimal(gross,2)};
+}
+const offerSql=`SELECT o.offer_id,o.stock_account_id,o.proceeds_account_id,o.unit_price::text,s.currency_code AS asset,s.network,s.user_id AS seller,p.currency_code AS fiat,
+ LEAST(s.available_balance-s.locked_balance,COALESCE(l.remaining,s.available_balance))::text AS available,
+ l.quantity::text AS lot_quantity,l.cost_minor,l.remaining::text,l.deposit_journal,n.decimals
+ FROM avis_core_v2.crypto_sale_offers o JOIN avis_core_v2.ledger_accounts s ON s.account_id=o.stock_account_id
+ JOIN avis_core_v2.holder_identities h ON h.record_user_id=s.user_id AND h.account_role='INSTITUTION'
+ JOIN avis_core_v2.ledger_accounts p ON p.account_id=o.proceeds_account_id
+ JOIN avis_core_v2.crypto_assets a ON a.currency_code=s.currency_code
+ JOIN avis_core_v2.crypto_asset_networks n ON n.asset_id=a.asset_id AND n.network=s.network AND n.approved AND n.verified_at IS NOT NULL
+ LEFT JOIN avis_core_v2.crypto_basket_lots l USING(offer_id)
+ WHERE o.is_active AND p.currency_code IN ('EUR','USD','GBP','CHF') AND
+ (s.currency_code IN ('AG','AGi') OR (l.offer_id IS NOT NULL AND NOT EXISTS
+ (SELECT 1 FROM avis_core_v2.crypto_wallet_deposits d WHERE d.journal_id=l.deposit_journal AND d.reorg_detected_at IS NOT NULL)
+ AND NOT EXISTS (SELECT 1 FROM avis_core_v2.ledger_journals j WHERE j.reverses_journal_id=l.deposit_journal)))`;
+export class CryptoBasket {
+ constructor(core,stripe){this.core=core;this.pool=core.pool;this.stripe=stripe;}
+ async transaction(fn){const db=await this.pool.connect();try{await db.query('BEGIN');const result=await fn(db);await db.query('COMMIT');return result;}catch(e){await db.query('ROLLBACK');throw e;}finally{db.release();}}
+ async buyer(db,actor){if(!actor?.id)fault('UNAUTHORIZED',null,401);
+  if(actor.customerUserId)return String(actor.identityUserId||actor.customerUserId);
+  admin(actor);const row=(await db.query("SELECT user_id FROM avis_core_v2.sovereign_users WHERE account_role='INSTITUTION' AND merged_into_user_id IS NULL AND full_name='AVISPay PLC'")).rows[0];
+  if(!row)reject('BASKET_SESSION');return String(row.user_id);}
+ async start(actor){
+  const token=randomBytes(32).toString('hex'),buyer=await this.buyer(this.pool,actor);
+  await this.pool.query('INSERT INTO '+S+'crypto_basket_sessions(session_id,token_hash,buyer_id,opened_by,expires_at) VALUES($1,$2,$3,$4,now()+interval \'4 hours\')',[randomUUID(),digest(token),buyer,actor.id]);
+  return {token};
+ }
+ async session(db,token){if(typeof token!=='string'||!/^[a-f0-9]{64}$/.test(token))reject('BASKET_SESSION',null,401);
+  const row=(await db.query('SELECT * FROM '+S+'crypto_basket_sessions WHERE token_hash=$1 AND expires_at>now()',[digest(token)])).rows[0];
+  if(!row)reject('BASKET_SESSION',null,401);return row;}
+ async policy(actor){admin(actor);const db=this.pool;
+  const policy=(await db.query('SELECT markup_bps,participation_bps FROM '+S+'crypto_basket_policy')).rows[0];
+  const requests=(await db.query("SELECT order_id,asset,network,quantity::text,created_at FROM avis_core_v2.crypto_basket_orders WHERE status='SOURCING' ORDER BY created_at DESC LIMIT 40")).rows;
+  const receipts=(await db.query(`SELECT d.journal_id,d.currency_code,d.network,d.tx_hash,d.amount::text
+   FROM avis_core_v2.crypto_wallet_deposits d JOIN avis_core_v2.holder_identities h ON h.record_user_id=d.user_id
+   WHERE h.account_role='INSTITUTION' AND d.wallet_scope='FUNDING' AND d.reorg_detected_at IS NULL AND NOT EXISTS
+   (SELECT 1 FROM avis_core_v2.crypto_basket_lots l WHERE l.deposit_journal=d.journal_id) ORDER BY d.created_at DESC LIMIT 100`)).rows;
+  return {...policy,requests,receipts,cardCurrencies:(await db.query('SELECT fiat FROM '+S+'crypto_basket_card_terms ORDER BY fiat')).rows.map(r=>r.fiat)};
+ }
+ async setPolicy(actor,input,key){admin(actor);const markup=integer(input.markupBps,10000,'markupBps'),part=integer(input.participationBps,10000,'participationBps');
+  return this.core.operation(actor,'CRYPTO_BASKET_POLICY',{markup,part},key,async db=>{
+   await db.query('UPDATE '+S+'crypto_basket_policy SET markup_bps=$1,participation_bps=$2,updated_by=$3,updated_at=now()',[markup,part,actor.id]);return {markupBps:markup,participationBps:part};});}
+ async setCard(actor,input,key){admin(actor);if(!currencies.has(input.fiat))fault('INVALID_FIELD','fiat');
+  const publicKey=input.publishableKey?.trim()||null;
+  if(publicKey&&!/^pk_(live|test)_[A-Za-z0-9]+$/.test(publicKey))fault('INVALID_FIELD','publishableKey');
+  const approval=text(input.approvalReference,'approvalReference',150),rate=integer(input.feeBps,9999,'feeBps'),fixed=integer(input.fixedMinor,100000,'fixedMinor');
+  return this.core.operation(actor,'CRYPTO_BASKET_CARD_TERMS',{fiat:input.fiat,approval,rate,fixed,publicKey},key,async db=>{
+   await db.query(`INSERT INTO avis_core_v2.crypto_basket_card_terms(fiat,fee_bps,fixed_minor,approval_reference,updated_by,publishable_key) VALUES($1,$2,$3,$4,$5,$6)
+    ON CONFLICT(fiat) DO UPDATE SET fee_bps=EXCLUDED.fee_bps,fixed_minor=EXCLUDED.fixed_minor,publishable_key=EXCLUDED.publishable_key,approval_reference=EXCLUDED.approval_reference,updated_by=EXCLUDED.updated_by,updated_at=now()`,[input.fiat,rate,fixed,approval,actor.id,publicKey]);return {currency:input.fiat};});}
+ async registerLot(actor,input,key){
+  admin(actor);if(!currencies.has(input.fiat)||!uuid(input.journalId))reject('BASKET_COST','journalId');
+  const cost=minor(input.cost),ref=text(input.providerReference,'providerReference',140);
+  if(cost>99999999999999999n)fault('INVALID_AMOUNT','cost');
+  return this.core.operation(actor,'METAMASK_PURCHASE_LOT',{journal:input.journalId,fiat:input.fiat,cost:String(cost),ref},key,async db=>{
+   const receipt=(await db.query(`SELECT e.account_id,e.amount::text,s.user_id,s.currency_code,s.network,h.user_id AS institution
+    FROM avis_core_v2.ledger_entries e JOIN avis_core_v2.ledger_accounts s ON s.account_id=e.account_id
+    JOIN avis_core_v2.holder_identities h ON h.record_user_id=s.user_id
+    WHERE e.journal_id=$1 AND e.direction='CREDIT' AND h.account_role='INSTITUTION' AND s.wallet_scope='FUNDING'
+    AND s.owner_type='USER' AND s.currency_code NOT IN ('AG','AGi') AND s.network IS NOT NULL
+    AND EXISTS(SELECT 1 FROM avis_core_v2.onchain_transactions t WHERE t.journal_id=e.journal_id AND t.user_id=s.user_id AND t.network=s.network AND t.currency_code=s.currency_code AND t.tx_type='WALLET_DEPOSIT' AND t.status='CONFIRMED')
+    AND (s.network<>'ETHEREUM' OR EXISTS(SELECT 1 FROM avis_core_v2.crypto_wallet_deposits d WHERE d.journal_id=e.journal_id AND d.account_id=s.account_id AND d.amount=e.amount AND d.reorg_detected_at IS NULL))
+    AND NOT EXISTS(SELECT 1 FROM avis_core_v2.ledger_journals j WHERE j.reverses_journal_id=e.journal_id)`,[input.journalId])).rows;
+   if(receipt.length!==1)reject('BASKET_COST','journalId');
+   const r=receipt[0],proceeds=await this.core.userFunding(db,r.institution,input.fiat),id=randomUUID();
+   const price=decimal(ceil(cost*unit*unit,100n*money(r.amount)));
+   await db.query('INSERT INTO '+S+'crypto_sale_offers(offer_id,stock_account_id,proceeds_account_id,unit_price) VALUES($1,$2,$3,$4)',[id,r.account_id,proceeds,price]);
+   await db.query('INSERT INTO '+S+'crypto_basket_lots(offer_id,deposit_journal,provider_reference,cost_minor,quantity,remaining,registered_by) VALUES($1,$2,$3,$4,$5,$5,$6)',[id,input.journalId,ref,String(cost),r.amount,actor.id]);
+   return {id,asset:r.currency_code,quantity:r.amount};});
+ }
+ async state(token){
+  const session=await this.session(this.pool,token);
+  const assets=(await this.pool.query(`SELECT a.currency_code AS asset,a.name,n.network,n.decimals FROM avis_core_v2.crypto_assets a JOIN avis_core_v2.crypto_asset_networks n USING(asset_id)
+   WHERE n.approved AND n.verified_at IS NOT NULL ORDER BY a.market_rank NULLS LAST,a.name,n.network`)).rows;
+  const offers=(await this.pool.query(offerSql+' ORDER BY o.created_at')).rows;
+  const card=(await this.pool.query('SELECT fiat FROM '+S+'crypto_basket_card_terms')).rows;
+  const orders=(await this.pool.query(`SELECT order_id AS id,status,asset,network,quantity::text,fiat,method,expires_at AS "expiresAt",terms->>'total' AS total FROM avis_core_v2.crypto_basket_orders
+   WHERE session_id=$1 ORDER BY created_at DESC LIMIT 8`,[session.session_id])).rows;
+  return {assets,offers:offers.filter(r=>Number(r.available)>0).map(r=>({id:r.offer_id,asset:r.asset,network:r.network,fiat:r.fiat,available:r.available})),cardCurrencies:card.map(r=>r.fiat),orders};
+ }
+ async quote(token,input){
+  if(!uuid(input.requestKey)||!['ACCOUNT','CARD'].includes(input.method)||!currencies.has(input.fiat))fault('INVALID_FIELD','method');
+  const qty=money(input.quantity),asset=text(input.asset,'asset',25),network=text(input.network,'network',32);
+  return this.transaction(async db=>{
+   const s=await this.session(db,token);
+   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['basket-buyer:'+s.buyer_id]);
+   const prior=(await db.query('SELECT * FROM '+S+'crypto_basket_orders WHERE session_id=$1 AND request_key=$2',[s.session_id,input.requestKey])).rows[0];
+   if(prior){if(prior.method!==input.method||prior.fiat!==input.fiat||prior.asset!==asset||prior.network!==network||!sameQty(prior.quantity,input.quantity))fault('IDEMPOTENCY_CONFLICT',null,409);return this.publicOrder(prior);}
+   const accepted=(await db.query('SELECT n.decimals FROM '+S+'crypto_assets a JOIN '+S+'crypto_asset_networks n USING(asset_id) WHERE a.currency_code=$1 AND n.network=$2 AND n.approved AND n.verified_at IS NOT NULL',[asset,network])).rows[0];
+   if(!accepted||accepted.decimals===null||qty%10n**BigInt(18-accepted.decimals)!==0n)fault('CRYPTO_AMOUNT_PRECISION','quantity');
+   const card=(await db.query('SELECT * FROM '+S+'crypto_basket_card_terms WHERE fiat=$1',[input.fiat])).rows[0];
+   if(input.method==='CARD'&&!card)reject('BASKET_CARD','method');
+   const policy=(await db.query('SELECT * FROM '+S+'crypto_basket_policy')).rows[0];
+   const rows=(await db.query(offerSql+' AND s.currency_code=$1 AND s.network=$2 AND p.currency_code=$3 AND s.available_balance-s.locked_balance >= $4 AND (l.remaining IS NULL OR l.remaining >= $4) ORDER BY o.created_at,o.offer_id LIMIT 1',[asset,network,input.fiat,decimal(qty)])).rows;
+   const offer=rows[0],available=offer&&(own(asset)||policy.markup_bps>0);
+   const recent=await db.query("SELECT count(*)::int AS n FROM avis_core_v2.crypto_basket_orders WHERE buyer_id=$1 AND created_at>now()-interval '1 hour'",[s.buyer_id]);if(recent.rows[0].n>=60)reject('BASKET_LIMIT');
+   let terms=null;
+   if(available){const external=!own(asset);terms={...priceBasket({quantity:input.quantity,lotQuantity:offer.lot_quantity,lotCost:offer.cost_minor,unitPrice:offer.unit_price,markup:external?policy.markup_bps:0,cardBps:card?.fee_bps||0,fixedMinor:card?.fixed_minor||0}),
+    markupBps:external?policy.markup_bps:0,participationBps:external?policy.participation_bps:0,
+    publishableKey:card?.publishable_key||null,stock:offer.stock_account_id,proceeds:offer.proceeds_account_id,seller:String(offer.seller),source:external?'METAMASK':'TREASURY'};}
+   const row=(await db.query(`INSERT INTO avis_core_v2.crypto_basket_orders(order_id,session_id,buyer_id,request_key,asset,network,quantity,fiat,method,offer_id,terms,status,expires_at)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now()+interval '10 minutes') RETURNING *`,[randomUUID(),s.session_id,s.buyer_id,input.requestKey,asset,network,decimal(qty),input.fiat,input.method,available?offer.offer_id:null,terms?JSON.stringify(terms):null,available?'QUOTED':'SOURCING'])).rows[0];
+   return this.publicOrder(row);});
+ }
+ publicOrder(r){return {id:r.order_id,status:r.status,asset:r.asset,network:r.network,quantity:r.quantity,fiat:r.fiat,method:r.method,total:r.terms?.total,expiresAt:r.expires_at};}
+ async orderForBuyer(actor,id){if(!uuid(id))reject('BASKET_ORDER',null,404);
+  const buyer=await this.buyer(this.pool,actor);
+  const r=(await this.pool.query('SELECT * FROM '+S+'crypto_basket_orders WHERE order_id=$1 AND buyer_id=$2',[id,buyer])).rows[0];
+  if(!r)reject('BASKET_ORDER',null,404);return this.publicOrder(r);}
+ async reserve(db,r){
+  if(r.status!=='QUOTED'||new Date(r.expires_at)<=new Date())reject('BASKET_REVIEW');
+  if(String(r.buyer_id)===r.terms.seller)reject('BASKET_SELF');
+  // Lock the stock before checking spendable units. Moving them into escrow also protects
+  // this reservation from every other wallet action, including a simultaneous withdrawal.
+  await db.query('SELECT account_id FROM '+S+'ledger_accounts WHERE account_id=$1 FOR UPDATE',[r.terms.stock]);
+  const offer=(await db.query(offerSql+' AND o.offer_id=$1 AND s.available_balance-s.locked_balance >= $2',[r.offer_id,r.quantity])).rows[0];
+  if(!offer)reject('BASKET_STOCK','quantity');
+  if(offer.deposit_journal){const lot=await db.query('UPDATE '+S+'crypto_basket_lots SET remaining=remaining-$2 WHERE offer_id=$1 AND remaining >= $2 RETURNING offer_id',[r.offer_id,r.quantity]);if(!lot.rows[0])reject('BASKET_STOCK','quantity');}
+  const escrow=await this.core.networkAccount(db,'MARKETPLACE_ESCROW',r.asset,r.network,'CRYPTO_BASKET');
+  const journal=await this.core.post(db,{id:'system:crypto-basket'},'basket-reserve:'+r.order_id,'CRYPTO_BASKET_RESERVE',r.order_id,lines(r,r.terms.stock,escrow));
+  await db.query("UPDATE avis_core_v2.crypto_basket_orders SET status='RESERVED',reserved_journal=$2,expires_at=date_trunc('second',now())+interval '60 minutes' WHERE order_id=$1",[r.order_id,journal]);
+ }
+ async settle(db,r,source){
+  const escrow=await this.core.networkAccount(db,'MARKETPLACE_ESCROW',r.asset,r.network,'CRYPTO_BASKET');
+  const target=await this.core.networkAccount(db,'USER',r.asset,r.network,'CRYPTO',r.buyer_id);
+  const journal=await this.core.post(db,{id:'system:crypto-basket'},'basket-sale:'+r.order_id,'CRYPTO_BASKET_PURCHASE',r.order_id,
+   [entry(source,'DEBIT',r.terms.total),entry(r.terms.proceeds,'CREDIT',r.terms.total),...lines(r,escrow,target)]);
+  await db.query("UPDATE avis_core_v2.crypto_basket_orders SET status='PAID',settlement_journal=$2 WHERE order_id=$1",[r.order_id,journal]);
+  return {id:r.order_id,status:'PAID',journalId:journal};}
+ async confirmAccount(actor,input){
+  if(!uuid(input.id))reject('BASKET_ORDER',null,404);
+  return this.transaction(async db=>{const buyer=await this.buyer(db,actor);
+   const r=(await db.query('SELECT * FROM '+S+'crypto_basket_orders WHERE order_id=$1 AND buyer_id=$2 FOR UPDATE',[input.id,buyer])).rows[0];
+   if(!r||r.method!=='ACCOUNT')reject('BASKET_ORDER',null,404);
+   if(r.status==='PAID')return {id:r.order_id,status:r.status,journalId:r.settlement_journal};
+   if(r.terms?.total!==input.total)reject('BASKET_REVIEW');
+   const source=await this.core.userFunding(db,buyer,r.fiat);
+   await this.reserve(db,r);return this.settle(db,r,source);});}
+ async release(db,r,status){
+  if(r.settlement_journal||!['RESERVED','CARD_OPEN'].includes(r.status))return;
+  const escrow=await this.core.networkAccount(db,'MARKETPLACE_ESCROW',r.asset,r.network,'CRYPTO_BASKET');
+  await this.core.post(db,{id:'system:crypto-basket'},'basket-release:'+r.order_id,'CRYPTO_BASKET_RELEASE',r.order_id,lines(r,escrow,r.terms.stock));
+  await db.query('UPDATE '+S+'crypto_basket_lots SET remaining=remaining+$2 WHERE offer_id=$1',[r.offer_id,r.quantity]);
+  await db.query('UPDATE '+S+'crypto_basket_orders SET status=$2 WHERE order_id=$1',[r.order_id,status]);}
+ stripeMode(publicKey){
+  const k=this.stripe.secretKey(),pk=publicKey||this.stripe.env.STRIPE_PUBLISHABLE_KEY;
+  if(!/^whsec_[A-Za-z0-9]+$/.test(this.stripe.env.STRIPE_WEBHOOK_SECRET||''))fault('STRIPE_CONFIGURATION',null,503);
+  return {key:k,pk:typeof pk==='string'&&pk.startsWith('pk_'+k.split('_')[1]+'_')?pk:null,live:k.split('_')[1]==='live'};
+ }
+ async card(token,id){
+  if(!uuid(id))reject('BASKET_ORDER',null,404);
+  const r=await this.transaction(async db=>{
+   const s=await this.session(db,token),order=(await db.query('SELECT * FROM '+S+'crypto_basket_orders WHERE order_id=$1 AND session_id=$2 FOR UPDATE',[id,s.session_id])).rows[0];
+   if(!order||order.method!=='CARD')reject('BASKET_ORDER',null,404);
+   if(order.status==='PAID')return order;
+   const config=this.stripeMode(order.terms?.publishableKey);
+   if(!(await db.query('SELECT 1 FROM '+S+'crypto_basket_card_terms WHERE fiat=$1',[order.fiat])).rows.length)reject('BASKET_CARD','method');
+   if(order.status==='QUOTED'){
+    await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['basket-buyer:'+order.buyer_id]);
+    const active=await db.query("SELECT order_id FROM avis_core_v2.crypto_basket_orders WHERE buyer_id=$1 AND status IN ('RESERVED','CARD_OPEN') AND order_id<>$2",[order.buyer_id,id]);
+    if(active.rows.length>=3)reject('BASKET_LIMIT');await this.reserve(db,order);
+    await db.query('UPDATE '+S+'crypto_basket_orders SET stripe_mode=$2 WHERE order_id=$1',[id,config.pk?'embedded':'hosted']);
+   }else if(!['RESERVED','CARD_OPEN'].includes(order.status))reject('BASKET_REVIEW');
+   return (await db.query('SELECT * FROM '+S+'crypto_basket_orders WHERE order_id=$1',[id])).rows[0];
+  });if(r.status==='PAID')return this.publicOrder(r);return this.providerSession(r);
+ }
+ async providerSession(r,config=this.stripeMode(r.terms?.publishableKey)){
+  const base='https://api.stripe.com/v1/checkout/sessions',returnUrl='https://avis.land/avispay/checkout?source=crypto&own=1&order='+r.order_id;
+  const embedded=r.stripe_mode==='embedded',form=new URLSearchParams({mode:'payment',client_reference_id:r.order_id,
+   'metadata[source]':'AVISPAY_CRYPTO_BASKET','metadata[order_id]':r.order_id,'payment_intent_data[metadata][source]':'AVISPAY_CRYPTO_BASKET','payment_intent_data[metadata][order_id]':r.order_id,
+   'line_items[0][price_data][currency]':r.fiat.toLowerCase(),'line_items[0][price_data][unit_amount]':r.terms.totalMinor,
+   'line_items[0][price_data][product_data][name]':'AVISPay · '+r.quantity.replace(/\.?0+$/,'')+' '+r.asset+' · '+r.network,'line_items[0][quantity]':'1',
+   expires_at:String(Math.floor(Date.parse(r.expires_at)/1000)),...(embedded?{ui_mode:'embedded',return_url:returnUrl}:{success_url:returnUrl,cancel_url:returnUrl})});
+  let response;
+  try{response=await this.stripe.fetcher(r.stripe_session?base+'/'+encodeURIComponent(r.stripe_session):base,{
+   method:r.stripe_session?'GET':'POST',redirect:'error',headers:{authorization:'Bearer '+config.key,'content-type':'application/x-www-form-urlencoded','idempotency-key':'crypto-basket-'+r.order_id},
+   ...(r.stripe_session?{}:{body:form.toString()}),signal:AbortSignal.timeout(12000)});}catch{fault('STRIPE_PROVIDER_RESPONSE',null,503);}
+  if(!response.ok){
+   // An explicit validation rejection creates no Checkout Session. An ambiguous network/5xx
+   // result retains the reservation and is recovered under the same provider idempotency key.
+   if(!r.stripe_session&&response.status===400){
+    await this.transaction(async db=>{const current=(await db.query('SELECT * FROM '+S+'crypto_basket_orders WHERE order_id=$1 FOR UPDATE',[r.order_id])).rows[0];
+     if(current.status==='RESERVED'&&!current.stripe_session)await this.release(db,current,'FAILED');});
+   }
+   fault('STRIPE_PROVIDER_RESPONSE',null,503);
+  }
+  const session=await response.json();
+  if(!/^cs_(live|test)_[A-Za-z0-9]+$/.test(session.id||'')||session.livemode!==config.live||session.client_reference_id!==r.order_id||session.metadata?.source!=='AVISPAY_CRYPTO_BASKET'||session.metadata?.order_id!==r.order_id||session.amount_total!==Number(r.terms.totalMinor)||session.currency?.toUpperCase()!==r.fiat)fault('STRIPE_EVENT_MISMATCH',null,422);
+  await this.pool.query("UPDATE avis_core_v2.crypto_basket_orders SET stripe_session=$2,status=CASE WHEN status='RESERVED' THEN 'CARD_OPEN' ELSE status END WHERE order_id=$1 AND (stripe_session IS NULL OR stripe_session=$2)",[r.order_id,session.id]);
+  if(session.status==='expired'){
+   await this.transaction(async db=>{const current=(await db.query('SELECT * FROM '+S+'crypto_basket_orders WHERE order_id=$1 FOR UPDATE',[r.order_id])).rows[0];await this.release(db,current,'EXPIRED');});
+   return {id:r.order_id,status:'EXPIRED'};}
+  if(session.status==='complete'){
+   if(session.payment_status!=='paid'||!session.payment_intent)return {id:r.order_id,status:'PROCESSING'};
+   return this.transaction(async db=>{const saved=(await db.query('SELECT * FROM '+S+'crypto_basket_orders WHERE order_id=$1 FOR UPDATE',[r.order_id])).rows[0];
+    if(saved.settlement_journal)return this.publicOrder(saved);
+    if(!['CARD_OPEN','RESERVED'].includes(saved.status)||typeof session.payment_intent!=='string')reject('BASKET_REVIEW');
+    await db.query('UPDATE '+S+'crypto_basket_orders SET stripe_intent=$2 WHERE order_id=$1',[r.order_id,session.payment_intent]);
+    return this.settle(db,saved,await this.core.system(db,'EXCHANGE_CLEARING',saved.fiat,'STRIPE_CRYPTO','ASSET'));});
+  }
+  if(embedded){if(!config.pk||!session.client_secret)fault('STRIPE_PROVIDER_RESPONSE',null,503);return {id:r.order_id,clientSecret:session.client_secret,publishableKey:config.pk};}
+  let url;try{url=new URL(session.url);}catch{fault('STRIPE_PROVIDER_RESPONSE',null,503);}
+  if(url.origin!=='https://checkout.stripe.com'||url.username||url.password)fault('STRIPE_PROVIDER_RESPONSE',null,503);
+  return {id:r.order_id,checkoutUrl:url.href};
+ }
+ async recover(){
+  const pending=(await this.pool.query("SELECT * FROM avis_core_v2.crypto_basket_orders WHERE (status='RESERVED' AND expires_at<now()+interval '58 minutes') OR (status='CARD_OPEN' AND expires_at<now()) ORDER BY expires_at LIMIT 20")).rows;
+  for(const row of pending){try{await this.providerSession(row);}catch(e){console.error(JSON.stringify({operation:'CRYPTO_BASKET_RECOVERY',order:row.order_id,code:e.code||'STRIPE_PROVIDER_RESPONSE'}));}}
+ }
+ async event(event){
+  const obj=event.data?.object,checkout=event.type?.startsWith('checkout.session.'),pi=typeof obj?.payment_intent==='string'?obj.payment_intent:obj?.payment_intent?.id;
+  if(checkout&&obj?.metadata?.source!=='AVISPAY_CRYPTO_BASKET')return {received:true,ignored:true};
+  if(!checkout&&(!pi||!['charge.refunded','charge.dispute.created'].includes(event.type)))return {received:true,ignored:true};
+  if(checkout&&!uuid(obj.metadata.order_id))fault('STRIPE_EVENT_MISMATCH',null,422);
+  return this.transaction(async db=>{
+   const r=(await db.query('SELECT * FROM '+S+'crypto_basket_orders WHERE '+(checkout?'order_id=$1':'stripe_intent=$1')+' FOR UPDATE',[checkout?obj.metadata.order_id:pi])).rows[0];
+   if(!r){if(checkout)fault('STRIPE_EVENT_MISMATCH',null,422);return {received:true,ignored:true};}
+   if(event.livemode!==this.stripeMode().live||r.method!=='CARD'||checkout&&(obj.client_reference_id!==r.order_id||obj.mode!=='payment'||obj.currency?.toUpperCase()!==r.fiat||obj.amount_total!==Number(r.terms.totalMinor)||
+    (r.stripe_session&&r.stripe_session!==obj.id)||!/^cs_(live|test)_[A-Za-z0-9]+$/.test(obj.id)||r.stripe_intent&&pi&&r.stripe_intent!==pi))fault('STRIPE_EVENT_MISMATCH',null,422);
+   const receipt=await db.query('INSERT INTO '+S+'crypto_basket_stripe_events(event_id,order_id,event_type) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING event_id',[event.id,r.order_id,event.type]);
+   if(!receipt.rows.length)return {received:true,duplicate:true};
+   if(checkout)await db.query('UPDATE '+S+'crypto_basket_orders SET stripe_session=COALESCE(stripe_session,$2),stripe_intent=COALESCE(stripe_intent,$3) WHERE order_id=$1',[r.order_id,obj.id,pi||null]);
+   if(!checkout){await db.query("UPDATE avis_core_v2.crypto_basket_orders SET status='REVIEW' WHERE order_id=$1",[r.order_id]);}
+   else if(['checkout.session.completed','checkout.session.async_payment_succeeded'].includes(event.type)&&obj.payment_status==='paid'&&!r.settlement_journal){
+    if(!pi||!['RESERVED','CARD_OPEN'].includes(r.status))fault('STRIPE_EVENT_MISMATCH',null,422);
+    await this.settle(db,r,await this.core.system(db,'EXCHANGE_CLEARING',r.fiat,'STRIPE_CRYPTO','ASSET'));
+   }else if(['checkout.session.expired','checkout.session.async_payment_failed'].includes(event.type)){
+    await this.release(db,r,event.type==='checkout.session.expired'?'EXPIRED':'FAILED');
+   }
+   return {received:true,orderId:r.order_id};});
+ }
+}

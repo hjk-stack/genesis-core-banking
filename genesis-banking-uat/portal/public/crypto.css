@@ -250,3 +250,9 @@
   width:100%;-webkit-overflow-scrolling:touch;
  }
 }
+
+.basket-policy,.basket-treasury form{display:flex;flex-wrap:wrap;align-items:end;gap:.65rem}
+.basket-policy[hidden]{display:none}.basket-policy label,.basket-treasury label{display:grid;gap:.2rem;font-size:.85rem;font-weight:600}
+.basket-policy input{width:7rem}.basket-policy output{align-self:center}.basket-treasury{margin-top:1rem}
+.basket-treasury summary{cursor:pointer}.basket-treasury form{padding:1rem 0}.basket-treasury form h3{flex-basis:100%;margin:0}
+.basket-treasury input,.basket-treasury select{max-width:min(32rem,80vw)}.basket-treasury button{white-space:normal}

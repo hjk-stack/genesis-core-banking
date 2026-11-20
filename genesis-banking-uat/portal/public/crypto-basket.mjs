@@ -1,0 +1,57 @@
+const checkout='https://avis.land/avispay/checkout?source=crypto&own=1';
+const esc=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const percentage=v=>String(Number(v||0)/100);
+function asBps(value){if(!/^\d{1,3}(\.\d{1,2})?$/.test(value))throw Error('Enter a percentage with up to two decimal places.');const [a,b='']=value.split('.');return Number(a)*100+Number(b.padEnd(2,'0'));}
+export async function openCryptoBasket(api,asset,network){
+ const {token}=await api('crypto/basket/start',{}),url=new URL(checkout);
+ if(asset)url.searchParams.set('asset',asset);if(network)url.searchParams.set('network',network);
+ url.hash=new URLSearchParams({checkout:token}).toString();location.assign(url.href);
+}
+export const basketPolicyFields=`<form class="basket-policy" data-basket-policy hidden>
+ <label>Purchase markup %<input name="markup" type="number" min="0" max="100" step="0.01" required></label>
+ <label>Trading participation %<input name="participation" type="number" min="0" max="100" step="0.01" required></label>
+ <button type="submit">Save percentages</button><output aria-live="polite"></output></form>`;
+export async function mountBasketPolicy(host,api,registerOffer){
+ const form=host.querySelector('[data-basket-policy]');if(!form)return;
+ const pane=document.createElement('details');pane.className='basket-treasury';
+ pane.innerHTML='<summary>Treasury purchases</summary><div data-treasury></div><p role="status" aria-live="polite"></p>';
+ form.parentElement.after(pane);
+ const msg=pane.querySelector('[role=status]'),content=pane.querySelector('[data-treasury]');
+ const currency='<select name="fiat" required>'+['EUR','USD','GBP','CHF'].map(c=>'<option>'+c+'</option>').join('')+'</select>';
+ const refresh=async()=>{
+  try{const data=await api('crypto/basket/policy');if(!form.isConnected)return;
+   form.hidden=false;form.elements.markup.value=percentage(data.markup_bps);form.elements.participation.value=percentage(data.participation_bps);
+   content.innerHTML=`<p><a href="https://portfolio.metamask.io/buy" target="_blank" rel="noopener noreferrer">Buy for treasury in MetaMask</a> <button type="button" data-native-offer>Set treasury offer</button></p>
+    ${data.requests.length?'<h3>Requested quotes</h3><ul>'+data.requests.map(r=>'<li>'+esc(r.quantity.replace(/\.?0+$/,''))+' '+esc(r.asset)+' · '+esc(r.network)+' · '+esc(r.order_id)+'</li>').join('')+'</ul>':''}
+    <form data-lot><h3>Record MetaMask acquisition cost</h3><label>Confirmed treasury deposit<select name="journalId" required><option value="">Select receipt</option>${data.receipts.map(d=>'<option value="'+esc(d.journal_id)+'">'+esc(d.currency_code)+' · '+esc(d.amount)+' · '+esc(d.tx_hash)+'</option>').join('')}</select></label>
+    <label>Provider order reference<input name="providerReference" maxlength="140" required></label><label>Cost currency${currency}</label><label>Total cost including purchase and network fees<input name="cost" min="0.01" step="0.01" type="number" required></label><button>Register purchase</button></form>
+    <details><summary>Card acquiring terms</summary><p>${data.cardCurrencies.length?'Enabled currencies · '+data.cardCurrencies.map(esc).join(', '):'Enter the Stripe approval reference and contracted fee for crypto sales.'}</p>
+    <form data-card><label>Settlement currency${currency}</label><label>Stripe crypto acquiring approval reference<input name="approvalReference" maxlength="150" required></label><label>Stripe publishable key for the embedded form<input name="publishableKey" placeholder="pk_live_…" autocomplete="off"></label><label>Processing cost ceiling %<input name="fee" type="number" min="0" max="99.99" step="0.01" required></label><label>Fixed cost in settlement currency<input name="fixed" type="number" min="0" max="1000" step="0.01" required></label><button>Save card terms</button></form></details>`;
+   content.querySelector('[data-native-offer]').onclick=registerOffer;
+   for(const [selector,path] of [['[data-lot]','lot'],['[data-card]','card-terms']]){
+    const f=content.querySelector(selector);f.onsubmit=async e=>{e.preventDefault();const button=f.querySelector('button');button.disabled=true;try{
+     const body=Object.fromEntries(new FormData(f));if(path==='card-terms'){body.feeBps=asBps(body.fee);const [a,b='']=body.fixed.split('.');body.fixedMinor=Number(a)*100+Number(b.padEnd(2,'0'));}
+     await api('crypto/basket/'+path,body);msg.textContent=path==='lot'?'Treasury purchase recorded.':'Card terms saved.';await refresh();
+    }catch(err){msg.textContent=err.message;}finally{button.disabled=false;}};
+   }
+  }catch(err){if(form.isConnected)msg.textContent=err.message;}
+ };
+ form.onsubmit=async e=>{e.preventDefault();const button=form.querySelector('button');button.disabled=true;
+  try{await api('crypto/basket/policy',{markupBps:asBps(form.elements.markup.value),participationBps:asBps(form.elements.participation.value)});form.querySelector('output').textContent='Saved';}
+  catch(err){form.querySelector('output').textContent=err.message;}finally{button.disabled=false;}};
+ await refresh();
+}
+export async function resumeBasketAuthorization(api,container){
+ const id=new URLSearchParams(location.search).get('crypto_order');
+ if(!/^[a-f0-9-]{36}$/i.test(id||'')||document.querySelector('[data-basket-authorize]'))return;
+ const panel=document.createElement('dialog');panel.dataset.basketAuthorize='';container.append(panel);
+ panel.addEventListener('close',()=>panel.remove(),{once:true});
+ try{const order=await api('crypto/basket/orders/'+id);if(!panel.isConnected)return;
+  panel.innerHTML='<h2>Authorize AVISPay payment</h2><p>'+esc(order.quantity.replace(/\.?0+$/,''))+' '+esc(order.asset)+' · '+esc(order.network)+'</p><p><strong>'+esc(order.fiat)+' '+esc(order.total)+'</strong></p><p>Order '+esc(order.id)+'</p><div class="crypto-inline-actions"><button data-pay></button><button data-cancel>Back to basket</button></div><p role="status"></p>';
+  const pay=panel.querySelector('[data-pay]');pay.textContent='Pay '+order.fiat+' '+order.total;pay.hidden=order.status!=='QUOTED';
+  const back=()=>location.assign(checkout+'&order='+encodeURIComponent(id));panel.querySelector('[data-cancel]').onclick=back;
+  if(order.status==='PAID')panel.querySelector('[role=status]').textContent='Payment received.';
+  pay.onclick=async()=>{pay.disabled=true;try{await api('crypto/basket/confirm',{id,total:order.total});back();}catch(err){panel.querySelector('[role=status]').textContent=err.message;pay.disabled=false;}};
+  panel.showModal();
+ }catch(err){panel.textContent=err.message;const close=document.createElement('button');close.textContent='Close';close.onclick=()=>panel.close();panel.append(close);panel.showModal();}
+}
