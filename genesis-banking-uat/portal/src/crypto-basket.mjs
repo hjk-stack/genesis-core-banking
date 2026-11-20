@@ -164,7 +164,7 @@ export class CryptoBasket {
    if(prior){if((prior.tender_wallet||null)!==(input.method==='CRYPTO'?input.walletId:null)||prior.method!==input.method||prior.fiat!==input.fiat||prior.asset!==asset||prior.network!==network||!sameQty(prior.quantity,input.quantity))fault('IDEMPOTENCY_CONFLICT',null,409);if(prior.status!=='SOURCING')return this.publicOrder(prior);}
    const accepted=(await db.query('SELECT n.decimals FROM '+S+'crypto_assets a JOIN '+S+'crypto_asset_networks n USING(asset_id) WHERE a.currency_code=$1 AND n.network=$2 AND n.approved AND n.verified_at IS NOT NULL',[asset,network])).rows[0];
    if(!accepted||accepted.decimals===null||qty%10n**BigInt(18-accepted.decimals)!==0n)fault('CRYPTO_AMOUNT_PRECISION','quantity');
-   const card=(await db.query('SELECT * FROM '+S+'crypto_basket_card_terms WHERE fiat=$1',[input.fiat])).rows[0];
+   const card=input.method==='CARD'?(await db.query('SELECT * FROM '+S+'crypto_basket_card_terms WHERE fiat=$1',[input.fiat])).rows[0]:null;
    if(input.method==='CARD'&&!card)reject('BASKET_CARD','method');
    const policy=(await db.query('SELECT * FROM '+S+'crypto_basket_policy')).rows[0];
    const rows=(await db.query(offerSql+' AND s.currency_code=$1 AND s.network=$2 AND p.currency_code=$3 AND s.available_balance-s.locked_balance >= $4 AND (l.remaining IS NULL OR l.remaining >= $4) ORDER BY o.created_at,o.offer_id LIMIT 1',[asset,network,input.fiat,decimal(qty)])).rows;
