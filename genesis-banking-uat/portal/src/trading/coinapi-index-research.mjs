@@ -68,8 +68,8 @@ export class CoinApiIndexResearch {
   if(this.busy)return {skipped:'BUSY'};
   if(!coinApiIndexKey(this.env))return {configured:false,indices:[]};
   this.busy=true;
-  const ids=configuredCoinApiIndexes(this.env),results=[];
   try{
+   const ids=configuredCoinApiIndexes(this.env),results=[];
    for(const id of ids){
     const item={id};
     if(!this.historyCheckedAt.has(id)||this.now()-this.historyCheckedAt.get(id)>=24*60*60*1000){try{item.newBars=await this.history(id,this.now());this.historyCheckedAt.set(id,this.now());}
