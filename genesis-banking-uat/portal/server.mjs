@@ -15,6 +15,7 @@ import {TRADING_TEST_MESSAGES} from './src/trading-testing.mjs';
 import {TRADING_INSTRUCTION_MESSAGES} from './src/trading-instructions.mjs';
 import {TRADING_LIVE_MESSAGES} from './src/trading-live.mjs';
 import {LiveMarketFeed} from './src/trading/live-market.mjs';
+import {CoinApiIndexResearch,readCoinApiIndexResearch} from './src/trading/coinapi-index-research.mjs';
 import {scanFinalizedEthereumDeposits} from './src/crypto-deposit-monitor.mjs';
 import {CRYPTO_MESSAGES} from './src/crypto-workspace.mjs';
 import {CustomerAccess} from './src/customer-access.mjs';
@@ -217,6 +218,10 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(req.method==='GET'&&/^\/api\/crypto\/securities\/[0-9a-f-]{36}$/.test(path))return send(res,200,await invoke('cryptoSecurityDetails',{cardId:path.split('/').at(-1)}));
    if(req.method==='GET'&&path==='/api/crypto/trading/index-delivery')return send(res,200,await invoke('indexDelivery'));
    if(req.method==='GET'&&path==='/api/crypto/trading/index-policy')return send(res,200,await invoke('indexPolicy'));
+    if(req.method==='GET'&&path==='/api/crypto/trading/index-benchmarks'){
+     if(!actor.admin)fault('FORBIDDEN',null,403);
+     return send(res,200,await readCoinApiIndexResearch(pool,core.secretEnv));
+    }
    if(req.method==='GET'&&path==='/api/crypto/trading/testing')return send(res,200,await invoke('tradingTesting'));
    if(req.method==='GET'&&path==='/api/crypto/trading/live')return send(res,200,await invoke('tradingLiveSnapshot',{robotId:url.searchParams.get('robotId')??undefined}));
    if(req.method==='GET'&&path==='/api/crypto/trading/live/liquidity')return send(res,200,await invoke('tradingLiveLiquidity',{robotId:url.searchParams.get('robotId')}));
@@ -276,6 +281,14 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  createBankServer({pool,authenticate:(u,p)=>authenticateFineract(u,p,process.env.FINERACT_URL),release:process.env.RELEASE_SHA||'local',transferOptions:{tradingMarketFeed:liveMarkets}})
   .listen(Number(process.env.PORT||8080),'0.0.0.0');
  const robotCore=new TradingRobotCore(pool,{tradingMarketFeed:liveMarkets});
+ // Independent CoinAPI research ingestion continues while all trading robots are paused.
+ // Index values never enter the order dispatcher or ledger.
+ const coinapiResearch=new CoinApiIndexResearch({pool,env:process.env});
+ const pollCoinApiResearch=()=>coinapiResearch.poll().then(result=>{
+  for(const item of result.indices||[])if(item.currentError||item.historyError)
+   console.error(JSON.stringify({operation:'COINAPI_INDEX_RESEARCH',indexId:item.id,code:item.currentError||item.historyError}));
+ }).catch(error=>console.error(JSON.stringify({operation:'COINAPI_INDEX_RESEARCH',code:error.message||'INDEX_RESEARCH'})));
+ void pollCoinApiResearch();setInterval(pollCoinApiResearch,120000).unref();
  let scanningDeposits=false;
  const scanDeposits=async()=>{if(scanningDeposits)return;scanningDeposits=true;try{
   const outcome=await scanFinalizedEthereumDeposits(robotCore);

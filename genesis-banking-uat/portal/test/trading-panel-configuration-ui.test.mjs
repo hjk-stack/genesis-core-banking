@@ -20,6 +20,7 @@ async function setup(providers=[]){
   if(path==='crypto/trading/testing')return {profiles:[],runs:[],limits:{},engine:{name:'NautilusTrader'}};
   if(path==='crypto/trading/live')return {profiles:[],selectedRobotId:null,market:null,audit:null,liquidity:null};
   if(path==='crypto/trading/index-policy')return {policyVersion:1,instructions:'Use sources.',taxonomy:[]};
+   if(path==='crypto/trading/index-benchmarks')return {provider:'CoinAPI Indexes API',configured:true,researchActive:true,indices:[{indexId:'IDX_REFRATE_PRIMKT_BTC_USD',value:'93500.125',sourceAt:'2026-11-20T08:00:00.000Z',history:[{at:'2026-11-19T00:00:00.000Z',close:'90000'}]}]};
   const rows={customers:users,securities,ledger,accountsummaries:bankAccounts}[path.slice(6)]||[];
   return {rows};
  };
@@ -60,4 +61,15 @@ test('provider validation renders market data, execution and node capabilities a
  assert.match(result,/CoinAPI Market Data: verified · Authenticated reference pricing/);
  assert.match(result,/CoinAPI EMS: verified · VENUE_A/);assert.match(result,/Alchemy: verified · Ethereum block 25000000/);
  assert.doesNotMatch(result,/undefined/);
+});
+
+
+test('CoinAPI benchmark details lazy-loads index observations only on operator request',async()=>{
+ const ui=await setup(),details=ui.host.querySelector('[data-coinapi-benchmarks]');
+ assert.equal(ui.calls.filter(c=>c.path==='crypto/trading/index-benchmarks').length,0,'initial banking mount makes no unnecessary benchmark request');
+ details.open=true;await details.ontoggle();
+ assert.equal(ui.calls.filter(c=>c.path==='crypto/trading/index-benchmarks').length,1);
+ assert.match(details.textContent,/IDX_REFRATE_PRIMKT_BTC_USD/);
+ assert.match(details.textContent,/93500.125/);
+ assert.equal(ui.calls.some(c=>c.input&&/toggle|order/.test(c.path)),false,'benchmark observation never submits a trade');
 });
