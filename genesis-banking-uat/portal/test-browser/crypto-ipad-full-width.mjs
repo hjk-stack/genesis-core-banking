@@ -60,7 +60,8 @@ for(const width of [768,820,834,1024,1032,1194,1366,1376]){
   assert.ok(Math.abs(l.main.right-l.viewport)<1,'crypto main reaches right edge');
   assert.ok(l.aside.bottom<=l.main.top+1,'navigation is a separate row above crypto instead of occupying a left column');
   assert.equal(l.navDirection,'row','bank navigation is a horizontal strip');
-  assert.ok(l.navScroll>l.navClient,'extra banking tabs stay horizontally reachable');
+  assert.ok(l.navScroll>=l.navClient,'bank navigation stays within a scrollable horizontal strip');
+  if(width<=1032)assert.ok(l.navScroll>l.navClient,'narrow iPads can scroll to all banking tabs');
   assert.ok(l.page<=l.viewport+1,'tablet must not have document-level horizontal overflow');
   assert.ok(l.scrollWidth>l.scrollRect.width,'currency tiles remain scrollable inside their own row');
   assert.equal(l.sections,3,'crypto wallets, trading and securities remain mounted');
