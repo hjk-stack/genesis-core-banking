@@ -729,7 +729,7 @@ def main():
         # Existing administrator sign-in; read records only. Never create or fund test customers here.
         stage = 'administrator authentication'
         login = api(opener, base, '/api/login', {'username': 'mifos', 'password': secret('genesis-mifos-uat', 'admin-password')})
-        for view in ['accounts', 'accountsummaries', 'customers', 'issuer', 'ledger', 'backofficeaccounts', 'portfolio', 'cryptocatalogue', 'cryptomarkets', 'cryptosecurities', 'cryptowallets', 'cryptonetworks', 'cryptorobots', 'cryptoactions', 'tradingrobots', 'robotorders', 'tradingengine', 'securities', 'securitypositions', 'securityorders', 'exchangebook', 'cardaccounts', 'cryptoholdings', 'cryptooffers', 'transfercards', 'externalcards', 'codedcards', 'transferalerts', 'paymentregister', 'transferrequests', 'bankpayments', 'bankroutes', 'clearing', 'offlinegrants', 'fxrates', 'fxquotes', 'audit']:
+        for view in ['stripepayments', 'terminals', 'accounts', 'accountsummaries', 'customers', 'issuer', 'ledger', 'backofficeaccounts', 'portfolio', 'cryptocatalogue', 'cryptomarkets', 'cryptosecurities', 'cryptowallets', 'cryptonetworks', 'cryptorobots', 'cryptoactions', 'tradingrobots', 'robotorders', 'tradingengine', 'securities', 'securitypositions', 'securityorders', 'exchangebook', 'cardaccounts', 'cryptoholdings', 'cryptooffers', 'transfercards', 'externalcards', 'codedcards', 'transferalerts', 'paymentregister', 'transferrequests', 'bankpayments', 'bankroutes', 'clearing', 'offlinegrants', 'fxrates', 'fxquotes', 'audit']:
             stage = 'authenticated read ' + view
             result = api(opener, base, '/api/views/' + view)
             if not isinstance(result.get('rows'), list):

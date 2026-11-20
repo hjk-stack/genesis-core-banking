@@ -237,6 +237,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(req.method==='GET'&&path==='/api/crypto/trading/live')return send(res,200,await invoke('tradingLiveSnapshot',{robotId:url.searchParams.get('robotId')??undefined}));
    if(req.method==='GET'&&path==='/api/crypto/trading/live/liquidity')return send(res,200,await invoke('tradingLiveLiquidity',{robotId:url.searchParams.get('robotId')}));
    if(req.method==='GET'&&path==='/api/crypto/trading/robot-instructions')return send(res,200,await invoke('robotInstructions',{robotId:url.searchParams.get('robotId')}));
+   if(req.method==='GET'&&path==='/api/stripe/webpos/connection')return send(res,200,await stripePos.connection(actor));
    if(req.method==='GET'&&path==='/api/stripe/webpos/status')return send(res,200,await stripePos.status(actor,url.searchParams.get('sessionId')));
    if(req.method==='GET'&&path.startsWith('/api/views/')){
     if(path==='/api/views/stripepayments')return send(res,200,{rows:await stripePos.list(actor)});
