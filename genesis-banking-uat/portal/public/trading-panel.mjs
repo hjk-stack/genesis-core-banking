@@ -37,7 +37,8 @@ export async function mountTradingPanel({api,host,form,refresh,isAdmin}){
   }catch(error){if(current())benchmarkHost.textContent=error.message;}finally{if(current())benchmarkButton.disabled=false;}
  };
  benchmarkButton.onclick=()=>void benchmarkRefresh();
- void benchmarkRefresh();
+ const benchmarkDetails=host.querySelector('[data-coinapi-benchmarks]');
+ benchmarkDetails.ontoggle=()=>{if(benchmarkDetails.open)void benchmarkRefresh();};
  void mountIndexAdvice({api,host:host.querySelector('[data-index-advice]'),detailsHost:host.querySelector('[data-index-evidence]'),isCurrent:current});
  host.querySelector('[data-validate-providers]').onclick=async()=>{const b=host.querySelector('[data-validate-providers]'),out=host.querySelector('[data-provider-result]');b.disabled=true;try{const r=await api('crypto/trading/validate-providers',{});out.textContent=r.providers.map(providerResult).join(' | ');}catch(e){out.textContent=e.message;}finally{b.disabled=false;}};
  host.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=async()=>{const id=b.dataset.toggle,enabled=b.dataset.enabled==='true';if(!current()||toggling.has(id)||enabled&&!liveAllowed(id))return;toggling.add(id);syncLive();try{await api('crypto/trading/toggle',{robotId:id,enabled});if(current())await refresh();}catch(e){if(current())b.closest('article').querySelector('.form-error').textContent=e.message;}finally{toggling.delete(id);syncLive();}});
