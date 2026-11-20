@@ -1,10 +1,11 @@
 import {spawn} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {LiveMarketFeed} from './live-market.mjs';
+import {readCoinApiIndexResearch} from './coinapi-index-research.mjs';
 export const engineStatus={engine:'NautilusTrader',version:'1.231.0',ready:false};
 const actor={id:'system:w-effect-robot',admin:true};
 export class TradingRuntime {
- constructor(core,{python=process.env.AVIS_TRADING_PYTHON||'python3',fetcher=fetch,WebSocketClass=WebSocket}={}){this.core=core;this.python=python;this.fetcher=fetcher;this.liveMarkets=core.liveMarkets||new LiveMarketFeed({env:core.secretEnv||process.env,WebSocketClass});this.ownsLiveMarkets=!core.liveMarkets;this.configs=[];this.marketSubscriptions=new Map();this.avisBooks=new Map();this.ticks=new Map();this.states=new Map();this.busy=false;this.processing=new Set();this.stopped=false;}
+ constructor(core,{python=process.env.AVIS_TRADING_PYTHON||'python3',fetcher=fetch,WebSocketClass=WebSocket}={}){this.core=core;this.python=python;this.fetcher=fetcher;this.liveMarkets=core.liveMarkets||new LiveMarketFeed({env:core.secretEnv||process.env,WebSocketClass});this.ownsLiveMarkets=!core.liveMarkets;this.configs=[];this.marketSubscriptions=new Map();this.avisBooks=new Map();this.ticks=new Map();this.states=new Map();this.busy=false;this.processing=new Set();this.stopped=false;this.lastBenchmarkReadAt=0;}
  start(){if(this.stopped)return this;clearInterval(this.timer);this.child=spawn(this.python,[new URL('../../trading/worker.py',import.meta.url).pathname],{stdio:['pipe','pipe','pipe']});const lines=createInterface({input:this.child.stdout});lines.on('line',line=>{if(this.stopped||line.length>100000)return;try{const v=JSON.parse(line);if(v.type==='READY'){this.ready=v;Object.assign(engineStatus,{ready:true,version:v.version,startedAt:new Date().toISOString()});void this.refresh();}if(v.type==='ORDER')void this.execute(v);if(v.type==='STATE'&&Number.isFinite(v.stopPrice)&&Number.isFinite(v.peakPrice))this.states.set(v.robotId,v);}catch{}});this.child.stderr.on('data',()=>{});this.child.on('error',()=>this.log('ROBOT_PROCESS_START'));this.child.on('exit',()=>{this.ready=null;engineStatus.ready=false;if(!this.stopped)this.restart=setTimeout(()=>this.start(),5000);});this.timer=setInterval(()=>{void this.refresh();},10000);this.timer.unref();void this.refresh();return this;}
  send(v){if(!this.stopped&&this.ready&&this.child?.stdin.writable&&this.child.stdin.writableLength<1000000)this.child.stdin.write(JSON.stringify(v)+'\n');}
  log(code){console.error(JSON.stringify({operation:'W_EFFECT_ROBOT',code}));}
@@ -20,6 +21,7 @@ export class TradingRuntime {
   await this.refreshIndex();
   if(this.stopped)return;
   await this.refreshEventAdvice();
+  await this.refreshCoinApiBenchmarks();
   if(this.stopped)return;
   if(this.configs.length){
    for(const r of this.configs.filter(r=>r.venue==='AVIS')){if(this.stopped)return;await this.avisTick(r);}
@@ -35,6 +37,20 @@ export class TradingRuntime {
     this.send({type:'INDEX',robotId:r.robot_id,index:snapshot?{...snapshot,generatedAtMs:Date.parse(index.generatedAt),validUntilMs:Date.parse(row.validUntil)}:null});
    }
   }catch{this.log('PRESS_INDEX_READ');}
+ }
+ async refreshCoinApiBenchmarks(){
+  if(!this.configs.length||Date.now()-this.lastBenchmarkReadAt<60000)return;
+  this.lastBenchmarkReadAt=Date.now();
+  try{
+   const report=await readCoinApiIndexResearch(this.core.pool,this.core.secretEnv||process.env);
+   for(const r of this.configs){
+    const exactId='IDX_REFRATE_PRIMKT_'+String(r.base_asset||'').toUpperCase()+'_USD';
+    const source=report.indices.find(row=>row.indexId===exactId&&row.fresh&&row.value!==null);
+    const context=source?{provider:'CoinAPI Indexes API',indexId:source.indexId,value:source.value,sourceAt:source.sourceAt,
+     benchmarkOnly:true,historyDays:source.history.length}:null;
+    this.send({type:'MARKET_CONTEXT',robotId:r.robot_id,context});
+   }
+  }catch(error){this.log(error.message||'COINAPI_INDEX_CONTEXT');}
  }
  async refreshEventAdvice(){
   if(!this.configs.length)return;
