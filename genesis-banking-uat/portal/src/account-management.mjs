@@ -17,11 +17,11 @@ const balanceTotals=`LEFT JOIN LATERAL (SELECT
  FROM avis_core_v2.ledger_entries e WHERE e.account_id=a.account_id) totals ON true
  LEFT JOIN LATERAL (SELECT j.reference_id FROM avis_core_v2.ledger_entries e JOIN avis_core_v2.ledger_journals j USING(journal_id)
  WHERE e.account_id=a.account_id ORDER BY e.entry_id DESC LIMIT 1) latest ON true`;
-const bankSelect=`SELECT a.account_id,a.user_id,u.full_name,u.full_name AS display_name,u.account_type,u.account_role,u.postal_address,
+const bankSelect=`SELECT a.account_id,u.user_id,u.full_name,u.full_name AS display_name,u.account_type,u.account_role,u.postal_address,
  b.abiq_iban,b.abiq_iban AS account_reference,p.abiq_bic,b.status,a.currency_code,a.network,a.wallet_scope,a.account_category,
  a.available_balance::text,a.locked_balance::text
  FROM avis_core_v2.ledger_accounts a JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id
- JOIN avis_core_v2.sovereign_users u ON u.user_id=a.user_id JOIN avis_core_v2.abiq_network_participants p USING(participant_code)
+ JOIN avis_core_v2.holder_identities u ON u.record_user_id=a.user_id JOIN avis_core_v2.abiq_network_participants p USING(participant_code)
  JOIN avis_core_v2.abiq_currencies c ON c.currency_code=a.currency_code`;
 const cursor=value=>{if(value!==null&&(!/^[1-9][0-9]{0,18}$/.test(String(value))||BigInt(value)>9223372036854775807n))fault('INVALID_FIELD','before');};
 const adminOnly=actor=>{if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403);};

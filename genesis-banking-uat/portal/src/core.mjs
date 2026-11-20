@@ -1,5 +1,5 @@
 import {createHash,randomUUID} from 'node:crypto';
-import {ABIQ_PARTITIONS,ABIQ_ISSUER,provisionAbiqAccounts,resolveAbiqAccount} from './avispay-core-accounts.mjs';
+import {ABIQ_PARTITIONS,ABIQ_ISSUER,provisionAbiqAccounts,provisionHolderAccounts,resolveAbiqAccount} from './avispay-core-accounts.mjs';
 
 export function fault(code,field,status=422) {throw Object.assign(new Error(code),{code,field,status});}
 export function text(value,field,max=128) {
@@ -35,7 +35,11 @@ export class SovereignCore {
    await client.query('INSERT INTO avis_core_v2.operation_requests(operation_key,actor_id,operation,request,response) VALUES($1,$2,$3,$4,$5)',[operationKey,actor.id,operation,JSON.stringify(input),JSON.stringify(response)]);
    await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[actor.id,operation,response.id??response.journalId??response.userId??operationKey]);
    await client.query('COMMIT');return response;
-  } catch(e) {await client.query('ROLLBACK');throw e;} finally {client.release();}
+  } catch(e) {
+   await client.query('ROLLBACK');
+   if(e.constraint==='avispay_plc_active_identity')fault('BUSINESS_IDENTITY_EXISTS','fullName',409);
+   throw e;
+  } finally {client.release();}
  }
  async post(db,actor,key,event,reference,lines,reverses=null) {
   return (await db.query('SELECT avis_core_v2.post_journal($1,$2,$3,$4,$5::jsonb,$6::uuid) AS id',
@@ -52,9 +56,10 @@ export class SovereignCore {
  }
  async userFunding(db,userId,currency) {
   const rows=(await db.query(`SELECT b.ledger_account_id FROM avis_core_v2.abiq_routing_bridge b
-   JOIN avis_core_v2.abiq_network_participants p USING(participant_code) WHERE b.user_id=$1 AND b.currency_code=$2
+   JOIN avis_core_v2.abiq_network_participants p USING(participant_code) JOIN avis_core_v2.holder_identities h ON h.record_user_id=b.user_id
+   WHERE (b.user_id=$1 OR h.user_id=$1) AND b.currency_code=$2
    AND b.participant_code IN ('AVIP','AVIS') AND b.status='ACTIVE' AND p.is_active
-   ORDER BY (b.participant_code='AVIS') DESC LIMIT 1`,[userId,currency])).rows;
+   ORDER BY (b.user_id=$1) DESC,(b.participant_code='AVIS') DESC,b.bridge_id LIMIT 1`,[userId,currency])).rows;
   if(rows.length!==1)fault('ACCOUNT_NOT_FOUND','ownerUserId',404);return rows[0].ledger_account_id;
  }
  async openCustomer(actor,input,key) {
@@ -85,10 +90,10 @@ export class SovereignCore {
  async addCurrencies(actor,input,key) {
   return this.operation(actor,'ADD_CURRENCIES',input,key,async(db,k)=>{
    const node=input.participantCode||ABIQ_ISSUER.participantCode;
-   const accounts=await provisionAbiqAccounts(db,{userId:input.userId,participantCode:node,currencies:input.currencies,idempotencyKey:k});
+   const accounts=await provisionHolderAccounts(db,{userId:input.userId,participantCode:node,currencies:input.currencies,idempotencyKey:k,scopedUserId:actor.customerUserId});
    for(const a of accounts)for(const scope of ['MARGIN','CUSTODY'])
     await db.query(`INSERT INTO avis_core_v2.ledger_accounts(owner_type,user_id,sub_account_code,currency_code,wallet_scope,account_category)
-     VALUES('USER',$1,$2,$3,$4,'LIABILITY') ON CONFLICT DO NOTHING`,[input.userId,'ABIQ:'+node,a.currency,scope]);
+     SELECT 'USER',user_id,sub_account_code,currency_code,$2,'LIABILITY' FROM avis_core_v2.ledger_accounts WHERE account_id=$1 ON CONFLICT DO NOTHING`,[a.accountId,scope]);
    return {userId:String(input.userId),accounts};
   });
  }
@@ -105,11 +110,11 @@ export class SovereignCore {
   const id=text(input.merchantId,'merchantId',64),name=text(input.shopName,'shopName',150);
   if(!Number.isInteger(input.commissionBps)||input.commissionBps<0||input.commissionBps>10000)fault('INVALID_FIELD','commissionBps');
   return this.operation(actor,'REGISTER_SHOP',input,key,async db=>{
-   const user=(await db.query('SELECT account_type FROM avis_core_v2.sovereign_users WHERE user_id=$1 FOR SHARE',[input.ownerUserId])).rows[0];
+   const user=(await db.query('SELECT user_id,account_type FROM avis_core_v2.holder_identities WHERE record_user_id=$1',[input.ownerUserId])).rows[0];
    if(user?.account_type!=='BUSINESS')fault('BUSINESS_ACCOUNT_REQUIRED','ownerUserId');
-   await this.userFunding(db,input.ownerUserId,'EUR');
+   await this.userFunding(db,user.user_id,'EUR');
    await db.query(`INSERT INTO avis_core_v2.marketplace_merchants(merchant_id,owner_user_id,shop_name,commission_rate_bps,status)
-    VALUES($1,$2,$3,$4,'ACTIVE')`,[id,input.ownerUserId,name,input.commissionBps]);
+    VALUES($1,$2,$3,$4,'ACTIVE')`,[id,user.user_id,name,input.commissionBps]);
    return {id,shopName:name};
   });
  }
@@ -231,18 +236,21 @@ export class SovereignCore {
  async list(actor,view) {
   if(!actor?.admin)fault('FORBIDDEN',null,403);
   const queries={
-   accounts:`SELECT b.abiq_iban,b.currency_code,b.participant_code,p.abiq_bic,lpad(b.account_series::text,5,'0') || b.customer_number::text AS account_number,b.customer_number::text AS customer_number,b.user_id,u.full_name,u.account_type,u.account_role,a.available_balance::text,a.locked_balance::text,b.status
-    FROM avis_core_v2.abiq_routing_bridge b JOIN avis_core_v2.sovereign_users u USING(user_id) JOIN avis_core_v2.abiq_network_participants p USING(participant_code) JOIN avis_core_v2.ledger_accounts a ON a.account_id=b.ledger_account_id ORDER BY u.user_id,b.account_series NULLS LAST,b.currency_code LIMIT 300`,
-   customers:'SELECT u.user_id,u.full_name,u.account_type,u.account_role,u.postal_address,u.created_at,n.customer_number::text AS customer_number FROM avis_core_v2.sovereign_users u LEFT JOIN avis_core_v2.abiq_customer_numbers n USING(user_id) ORDER BY u.user_id DESC LIMIT 300',
+   accounts:`SELECT b.abiq_iban,b.currency_code,b.participant_code,p.abiq_bic,lpad(b.account_series::text,5,'0') || b.customer_number::text AS account_number,b.customer_number::text AS customer_number,u.user_id,b.user_id AS routing_user_id,u.full_name,u.account_type,u.account_role,a.available_balance::text,a.locked_balance::text,b.status
+    FROM avis_core_v2.abiq_routing_bridge b JOIN avis_core_v2.holder_identities u ON u.record_user_id=b.user_id JOIN avis_core_v2.abiq_network_participants p USING(participant_code) JOIN avis_core_v2.ledger_accounts a ON a.account_id=b.ledger_account_id ORDER BY u.user_id,b.account_series NULLS LAST,b.currency_code LIMIT 300`,
+   customers:`SELECT u.user_id,u.full_name,u.account_type,u.account_role,u.postal_address,u.created_at,n.customer_number::text AS customer_number,
+    EXISTS(SELECT 1 FROM avis_core_v2.holder_identities member WHERE member.user_id=u.user_id AND member.record_role='CUSTOMER') AS customer_workspace
+    FROM avis_core_v2.holder_identities u LEFT JOIN avis_core_v2.abiq_customer_numbers n USING(user_id)
+    WHERE u.record_user_id=u.user_id ORDER BY u.user_id DESC LIMIT 300`,
    issuer:"SELECT i.abiq_code,i.country_code,i.participant_code,p.institution_name FROM avis_core_v2.abiq_issuers i JOIN avis_core_v2.abiq_network_participants p USING(participant_code) WHERE p.is_active",
    currencies:'SELECT currency_code,iso_numeric_partition,account_series FROM avis_core_v2.abiq_currencies ORDER BY account_series',
-   ledger:`SELECT a.account_id,a.owner_type,a.user_id,
+   ledger:`SELECT a.account_id,a.owner_type,u.user_id,a.user_id AS routing_user_id,
     CASE WHEN a.owner_type='USER' THEN u.account_role ELSE a.owner_type END AS owner_class,
     COALESCE(u.full_name,issuer.institution_name) AS account_holder,
     b.abiq_iban,COALESCE(b.abiq_iban,a.sub_account_code) AS account_reference,
     a.sub_account_code,a.currency_code,a.network,a.wallet_scope,a.account_category,a.available_balance::text,a.locked_balance::text
     FROM avis_core_v2.ledger_accounts a
-    LEFT JOIN avis_core_v2.sovereign_users u USING(user_id)
+    LEFT JOIN avis_core_v2.holder_identities u ON u.record_user_id=a.user_id
     LEFT JOIN avis_core_v2.abiq_network_participants issuer ON issuer.participant_code='AVIP'
     LEFT JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id
     LEFT JOIN avis_core_v2.abiq_currencies c ON c.currency_code=a.currency_code
@@ -252,7 +260,7 @@ export class SovereignCore {
    transactions:`SELECT j.journal_id,j.created_at,j.event_type,j.reference_id,e.direction,e.amount::text,a.currency_code,a.owner_type,b.abiq_iban
     FROM avis_core_v2.ledger_entries e JOIN avis_core_v2.ledger_journals j USING(journal_id) JOIN avis_core_v2.ledger_accounts a USING(account_id)
     LEFT JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id ORDER BY e.entry_id DESC LIMIT 300`,
-   shops:`SELECT m.merchant_id,m.shop_name,m.owner_user_id,u.full_name,m.commission_rate_bps,m.status FROM avis_core_v2.marketplace_merchants m JOIN avis_core_v2.sovereign_users u ON u.user_id=m.owner_user_id ORDER BY m.created_at DESC LIMIT 300`,
+   shops:`SELECT m.merchant_id,m.shop_name,u.user_id AS owner_user_id,u.full_name,m.commission_rate_bps,m.status FROM avis_core_v2.marketplace_merchants m JOIN avis_core_v2.holder_identities u ON u.record_user_id=m.owner_user_id ORDER BY m.created_at DESC LIMIT 300`,
    checkouts:'SELECT checkout_id,marketplace_order_ref,buyer_user_id,payment_rail,total_amount_eur::text,status,created_at FROM avis_core_v2.checkout_payment_sessions ORDER BY created_at DESC LIMIT 300',
    cards:'SELECT card_id,user_id,last_four_digits,card_type,card_rail_mode,status FROM avis_core_v2.avis_cards ORDER BY created_at DESC LIMIT 300',
    terminals:'SELECT terminal_id,merchant_id,terminal_type,offline_enabled,status FROM avis_core_v2.pos_terminals ORDER BY terminal_id LIMIT 300',

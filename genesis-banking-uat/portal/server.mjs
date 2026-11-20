@@ -57,6 +57,7 @@ const messages={...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX_ADVICE_MESSAGES,..
  INVALID_CODE_WINDOW:'Choose a start and end time with a validity of up to 48 hours.',
  CARD_CODE_NOT_STARTED:'This card code is not active yet.',CARD_CODE_BLOCKED:'This card is blocked or expired.',
  INVALID_CARD_PIN:'Enter a PIN containing four to six digits.',IDENTITY_ALREADY_BOUND:'This login is already linked to another account holder.',
+ BUSINESS_IDENTITY_EXISTS:'AVISPay PLC already has a business identity. Add currencies from its existing account.',
  INVALID_CARD_NUMBER:'Check the card number.',INVALID_CARD_EXPIRY:'Enter a valid expiry as MM/YYYY.',
  SELECT_EXTERNAL_CARD:'Select a registered external card.',OFFLINE_INTERNAL_CARD:'Select an AVIS card for offline debit.',
  CRYPTO_HOLDING_REQUIRED:'Select this account holder’s crypto holding.',AG_PURCHASE_REQUIRED:'Purchase AG before transferring it.',
@@ -83,6 +84,7 @@ const messages={...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX_ADVICE_MESSAGES,..
  PAYMENT_REQUEST_NOT_FOUND:'Select an existing payment request.',PAYMENT_REQUEST_CLOSED:'This request is already closed.',
  ABIQ_ACCOUNT_ORDER_COUNT:'Request one identifier when opening a currency account.',
  ABIQ_UNSUPPORTED_CURRENCY:'Select an accepted account currency.',ABIQ_INVALID_CURRENCIES:'Select at least one account currency.',
+ ABIQ_CURRENCY_ALREADY_HELD:'This currency already has an account under the business identity.',
  ABIQ_CUSTOMER_NOT_FOUND:'Select an existing account holder.',ABIQ_INVALID_CUSTOMER:'Select a valid account holder.',
  ABIQ_ACCOUNT_NOT_ACTIVE:'Select an active account.',ABIQ_IDEMPOTENCY_CONFLICT:'This request reference has already been used for different currencies.',
  FX_ACCOUNT_PAIR:'Select two different currency accounts belonging to the same customer.',FX_RATE_REQUIRED:'Refresh rates or select a currency with a current quote.',
@@ -195,22 +197,24 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     if(attempts.size>=10000&&!previous)fault('TOO_MANY_ATTEMPTS',null,429);
     attempts.set(bucket,previous&&now-previous.since<60000?{since:previous.since,count:previous.count+1}:{since:now,count:1});
     const actor=await authenticate(username,password);if(!actor?.id)fault('FORBIDDEN',null,403);
-    const binding=actor.admin?null:(await pool.query('SELECT user_id FROM avis_core_v2.customer_logins WHERE principal_id=$1',[actor.id])).rows[0];
+    const binding=actor.admin?null:(await pool.query('SELECT l.user_id,h.user_id AS identity_user_id FROM avis_core_v2.customer_logins l JOIN avis_core_v2.holder_identities h ON h.record_user_id=l.user_id WHERE l.principal_id=$1',[actor.id])).rows[0];
     if(!actor.admin&&!binding)fault('FORBIDDEN',null,403);
     const token=randomBytes(32).toString('base64url'),csrf=sessionCsrf(token);
     await pool.query('DELETE FROM avis_core_v2.operator_sessions WHERE expires_at<now()');
     await pool.query("INSERT INTO avis_core_v2.operator_sessions(token_hash,csrf_hash,actor_id,username,is_admin,customer_user_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,now()+interval '1 hour')",[digest(token),digest(csrf),actor.id,actor.username,actor.admin===true,binding?.user_id||null]);
     res.setHeader('Set-Cookie',`avis_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600${secureCookies?'; Secure':''}`);
-    return send(res,200,{username:actor.username,csrf,admin:actor.admin===true,customerUserId:binding?String(binding.user_id):null,canSwitchWorkspace:actor.admin===true});
+    return send(res,200,{username:actor.username,csrf,admin:actor.admin===true,customerUserId:binding?String(binding.identity_user_id):null,canSwitchWorkspace:actor.admin===true});
    }
    const token=/(?:^|;\s*)avis_session=([A-Za-z0-9_-]+)/.exec(req.headers.cookie||'')?.[1];
    if(!token)fault('UNAUTHORIZED',null,401);
-   const session=(await pool.query('SELECT * FROM avis_core_v2.operator_sessions WHERE token_hash=$1 AND expires_at>now()',[digest(token)])).rows[0];
+   const session=(await pool.query(`SELECT s.*,h.user_id AS identity_user_id FROM avis_core_v2.operator_sessions s
+    LEFT JOIN avis_core_v2.holder_identities h ON h.record_user_id=CASE WHEN s.is_admin THEN s.workspace_user_id ELSE s.customer_user_id END
+    WHERE s.token_hash=$1 AND s.expires_at>now()`,[digest(token)])).rows[0];
    if(!session)fault('UNAUTHORIZED',null,401);
    const holder=session.is_admin?session.workspace_user_id:session.customer_user_id;
    if(!session.is_admin){const binding=(await pool.query('SELECT user_id FROM avis_core_v2.customer_logins WHERE principal_id=$1',[session.actor_id])).rows[0];if(!binding||String(binding.user_id)!==String(holder))fault('FORBIDDEN',null,403);}
-   const actor={id:session.actor_id+(session.is_admin&&holder?':customer:'+holder:''),username:session.username,admin:session.is_admin&&!holder,customerUserId:holder?String(holder):null};
-   const sessionData=()=>({username:actor.username,csrf:sessionCsrf(token),admin:actor.admin,customerUserId:actor.customerUserId,canSwitchWorkspace:session.is_admin});
+   const actor={id:session.actor_id+(session.is_admin&&holder?':customer:'+holder:''),username:session.username,admin:session.is_admin&&!holder,customerUserId:holder?String(holder):null,identityUserId:holder?String(session.identity_user_id):null};
+   const sessionData=()=>({username:actor.username,csrf:sessionCsrf(token),admin:actor.admin,customerUserId:actor.identityUserId,canSwitchWorkspace:session.is_admin});
    const invoke=(method,input,key,...extra)=>actor.admin?core[method](actor,input,key,...extra):customerAccess.invoke(actor,method,input,key,...extra);
    if(path==='/api/session'&&req.method==='GET'){
     // Restore the same token in every tab. Adopt sessions issued before this
@@ -219,7 +223,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     if(session.csrf_hash!==digest(csrf))await pool.query('UPDATE avis_core_v2.operator_sessions SET csrf_hash=$2 WHERE token_hash=$1',[digest(token),digest(csrf)]);
     return send(res,200,sessionData());
    }
-   if(path==='/api/workspaces'&&req.method==='GET'){if(!session.is_admin)fault('FORBIDDEN',null,403);return send(res,200,{rows:(await pool.query("SELECT user_id,full_name FROM avis_core_v2.sovereign_users WHERE account_role='CUSTOMER' ORDER BY user_id")).rows});}
+   if(path==='/api/workspaces'&&req.method==='GET'){if(!session.is_admin)fault('FORBIDDEN',null,403);return send(res,200,{rows:(await pool.query("SELECT DISTINCT user_id,full_name FROM avis_core_v2.holder_identities WHERE record_role='CUSTOMER' ORDER BY user_id")).rows});}
    if(req.method==='GET'&&/^\/api\/portfolio\/orders\/[0-9a-f-]{36}$/.test(path))return send(res,200,await invoke('securityOrderDetails',{orderId:path.split('/').at(-1)}));
    if(req.method==='GET'&&/^\/api\/accounts\/[0-9a-f-]{36}$/.test(path))return send(res,200,await invoke('accountDetails',{accountId:path.split('/').at(-1),before:url.searchParams.get('before')}));
    if(req.method==='GET'&&/^\/api\/accounts\/[0-9a-f-]{36}\/movements\/[0-9]+$/.test(path))return send(res,200,await invoke('movementDetails',{accountId:path.split('/').at(-3),entryId:path.split('/').at(-1)}));
@@ -252,9 +256,10 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(path==='/api/workspace'){
     if(!session.is_admin)fault('FORBIDDEN',null,403);
     const id=body.userId||null;
-    if(id&&!(await pool.query("SELECT user_id FROM avis_core_v2.sovereign_users WHERE user_id=$1 AND account_role='CUSTOMER'",[id])).rows.length)fault('ABIQ_CUSTOMER_NOT_FOUND','userId');
-    await pool.query('UPDATE avis_core_v2.operator_sessions SET workspace_user_id=$2 WHERE token_hash=$1',[digest(token),id]);
-    return send(res,200,{...sessionData(),admin:!id,customerUserId:id?String(id):null});
+    const workspace=id?await core.customerWorkspace(pool,id):null;
+    if(id&&!workspace)fault('ABIQ_CUSTOMER_NOT_FOUND','userId');
+    await pool.query('UPDATE avis_core_v2.operator_sessions SET workspace_user_id=$2 WHERE token_hash=$1',[digest(token),workspace?.record_user_id??null]);
+    return send(res,200,{...sessionData(),admin:!id,customerUserId:workspace?String(workspace.user_id):null});
    }
    if(path==='/api/payments/crypto-receiver'){
     const r=(await pool.query('SELECT full_name FROM avis_core_v2.sovereign_users WHERE user_id=$1',[body.receiverUserId])).rows[0];if(!r)fault('ABIQ_CUSTOMER_NOT_FOUND','receiverUserId');return send(res,200,{receiverName:r.full_name});

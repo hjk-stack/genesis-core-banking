@@ -18,7 +18,9 @@ export class PaymentRegister extends FxBankingServer {
  async saveCustomerProfile(actor,input,key){
   const address=postalAddress(input.address);
   return this.operation(actor,'SAVE_CUSTOMER_ADDRESS',input,key,async db=>{
-   const r=await db.query('UPDATE avis_core_v2.sovereign_users SET postal_address=$2 WHERE user_id=$1 RETURNING user_id',[input.userId,JSON.stringify(address)]);
+   const r=await db.query(`UPDATE avis_core_v2.sovereign_users u SET postal_address=$2 FROM avis_core_v2.holder_identities h
+    WHERE h.record_user_id=$1 AND u.user_id=CASE WHEN $3::boolean THEN h.record_user_id ELSE h.user_id END
+    RETURNING h.user_id`,[input.userId,JSON.stringify(address),Boolean(actor.customerUserId)]);
    if(!r.rows.length)fault('ABIQ_CUSTOMER_NOT_FOUND','userId');return {userId:String(r.rows[0].user_id)};
   });
  }

@@ -1,6 +1,6 @@
 import {readFile,readdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
-export async function migrate(db) {
+export async function migrate(db,directory=new URL('../migrations/',import.meta.url)) {
  await db.query('BEGIN');
  try {
   await db.query("SELECT pg_advisory_xact_lock(hashtextextended('avis_core_v2:migration',0))");
@@ -9,8 +9,8 @@ export async function migrate(db) {
    RAISE EXCEPTION 'UNMANAGED_CORE_SCHEMA'; END IF; END $$`);
   await db.query('CREATE SCHEMA IF NOT EXISTS avis_core_v2');
   await db.query('CREATE TABLE IF NOT EXISTS avis_core_v2.schema_migrations(version text PRIMARY KEY,checksum text NOT NULL,applied_at timestamptz NOT NULL DEFAULT now())');
-  for(const name of (await readdir(new URL('../migrations/',import.meta.url))).filter(n=>/^\d{3}_[a-z_]+\.sql$/.test(n)).sort()) {
-   const sql=await readFile(new URL('../migrations/'+name,import.meta.url),'utf8');
+  for(const name of (await readdir(directory)).filter(n=>/^\d{3}_[a-z_]+\.sql$/.test(n)).sort()) {
+   const sql=await readFile(new URL(name,directory),'utf8');
    const checksum=createHash('sha256').update(sql).digest('hex');
    const existing=(await db.query('SELECT checksum FROM avis_core_v2.schema_migrations WHERE version=$1',[name])).rows[0];
    if(existing&&existing.checksum!==checksum) throw new Error('MIGRATION_CHECKSUM_MISMATCH: '+name);

@@ -72,6 +72,36 @@ export async function provisionAbiqAccounts(db,{userId,participantCode,currencie
  const result=await db.query('SELECT avis_core_v2.provision_abiq_accounts($1::bigint,$2::text,$3::text[],$4::text) AS accounts',args);
  return result.rows[0].accounts;
 }
+// An issued account keeps its original book owner. New currencies use the primary holder,
+// or the customer's existing restricted book when requested through a customer login.
+export async function provisionHolderAccounts(db,{userId,participantCode,currencies,idempotencyKey,scopedUserId=null}){
+ if(!Array.isArray(currencies)||!currencies.length||currencies.length>14)fail('ABIQ_INVALID_CURRENCIES');
+ const requested=[...new Set(currencies.map(currencyCode))].sort(),node=nodeCode(participantCode);
+ const id=customerId(userId);
+ const holder=(await db.query(`SELECT u.user_id FROM avis_core_v2.sovereign_users u
+  JOIN avis_core_v2.holder_identities h ON h.user_id=u.user_id
+  WHERE h.record_user_id=$1 FOR UPDATE OF u`,[id])).rows[0];
+ if(!holder)fail('ABIQ_CUSTOMER_NOT_FOUND');
+ const scoped=scopedUserId==null?null:customerId(scopedUserId);
+ if(scoped&&scoped!==id)fail('ABIQ_ROUTE_OWNER_MISMATCH');
+ const routes=(await db.query(`SELECT b.currency_code,b.user_id FROM avis_core_v2.abiq_routing_bridge b
+  JOIN avis_core_v2.holder_identities h ON h.record_user_id=b.user_id
+  WHERE h.user_id=$1 AND b.participant_code=$2 AND b.currency_code=ANY($3::text[])
+  ORDER BY (b.user_id=$4) DESC,b.user_id`,[holder.user_id,node,requested,id])).rows;
+ const owners=new Map();
+ for(const currency of requested){
+  const route=routes.find(row=>row.currency_code===currency);
+  if(scoped&&route&&String(route.user_id)!==scoped)fail('ABIQ_CURRENCY_ALREADY_HELD');
+  const owner=String(route?.user_id??scoped??holder.user_id);
+  if(!owners.has(owner))owners.set(owner,[]);
+  owners.get(owner).push(currency);
+ }
+ const accounts=[];
+ for(const [owner,group] of owners){
+  accounts.push(...await provisionAbiqAccounts(db,{userId:owner,participantCode:node,currencies:group,idempotencyKey}));
+ }
+ return accounts;
+}
 export async function ensureLedgerAbiq(db,accountId) {
  const result=await db.query('SELECT avis_core_v2.ensure_ledger_abiq($1::uuid) AS abiq_iban',[accountId]);
  return result.rows[0].abiq_iban;

@@ -1,6 +1,12 @@
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {PGlite} from '@electric-sql/pglite';
+import {mkdtemp,readdir,copyFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join,sep} from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {AccountManagement} from '../src/account-management.mjs';
+import {CustomerAccess} from '../src/customer-access.mjs';
 import pg from 'pg';
 import {migrate} from '../src/migrate.mjs';
 import {SovereignCore} from '../src/core.mjs';
@@ -12,7 +18,18 @@ const accounts=async()=>(await pool.query('SELECT account_id,available_balance::
 before(async()=>{
  if(process.env.TEST_DATABASE_URL){const url=new URL(process.env.TEST_DATABASE_URL);assert.equal(url.pathname,'/avispay_ci');pool=new pg.Pool({connectionString:url.href});await pool.query('DROP SCHEMA IF EXISTS avis_core_v2 CASCADE');}
  else{db=new PGlite();pool={query:(...a)=>db.query(...a),connect:async()=>({query:(...a)=>db.query(...a),exec:s=>db.exec(s),release(){}})};}
- const c=await pool.connect();try{await migrate(c);}finally{c.release();}core=new SovereignCore(pool);await core.openCustomer(actor,{fullName:'AVISPay PLC',accountType:'BUSINESS',currencies:['CHF']},'existing-chf-holder');original=await accounts();
+ const migrations=new URL('../migrations/',import.meta.url),dir=await mkdtemp(join(tmpdir(),'bank-before-identity-'));
+ try{
+  for(const name of (await readdir(migrations)).filter(n=>n<'032_'&&n.endsWith('.sql'))){
+   await copyFile(new URL(name,migrations),join(dir,name));
+  }
+  const c=await pool.connect();
+  try{await migrate(c,pathToFileURL(dir+sep));}finally{c.release();}
+ }finally{await rm(dir,{recursive:true,force:true});}
+ core=new SovereignCore(pool);
+ await core.openCustomer(actor,{fullName:'AVISPay PLC',accountType:'BUSINESS',currencies:['CHF']},'existing-chf-holder');
+ original=await accounts();
+ const c=await pool.connect();try{await migrate(c);await migrate(c);}finally{c.release();}
 });
 after(async()=>{if(db)await db.close();else await pool.end();});
 test('opening operation rejects any other application, environment or database without posting',async()=>{
@@ -47,4 +64,37 @@ test('replay after a customer transfer does not replenish, reset or duplicate th
 test('PostgreSQL concurrent opening replays retain one journal',{skip:!process.env.TEST_DATABASE_URL},async()=>{
  const before=await accounts(),results=await Promise.all([applyAuthorizedUatOpening(pool,env),applyAuthorizedUatOpening(pool,env)]);
  assert.deepEqual(results,[receipt,receipt]);assert.deepEqual(await accounts(),before);
+});
+
+test('the two historical AVISPay records share one identity and keep their original accounts and permissions',async()=>{
+ const management=new AccountManagement(pool),customer=new CustomerAccess(management);
+ const holders=(await core.list(actor,'customers')).filter(h=>h.full_name==='AVISPay PLC');
+ assert.equal(holders.length,1);
+ assert.equal(String(holders[0].user_id),'1');
+ assert.equal(holders[0].customer_workspace,true);
+ const corporate=(await management.list(actor,'accountsummaries')).filter(r=>r.full_name==='AVISPay PLC');
+ assert.equal(corporate.length,12);
+ assert.ok(corporate.every(r=>String(r.user_id)==='1'));
+ const linked=await management.customerWorkspace(pool,'1');
+ assert.equal(String(linked.record_user_id),'3');
+ const scoped={id:'existing-customer',customerUserId:'3',identityUserId:'1'};
+ const scopedRows=await customer.list(scoped,'accountsummaries');
+ assert.equal(scopedRows.length,3);
+ assert.ok(scopedRows.every(r=>r.currency_code==='CHF'&&String(r.user_id)==='1'));
+ const institution=corporate.find(r=>r.currency_code==='EUR');
+ await assert.rejects(customer.invoke(scoped,'accountDetails',{accountId:institution.account_id}),/FORBIDDEN/);
+ const customerAccount=await customer.invoke(scoped,'accountDetails',{accountId:scopedRows[0].account_id});
+ assert.equal(String(customerAccount.account.user_id),'1');
+ const originalChf=corporate.find(r=>r.currency_code==='CHF'&&r.wallet_scope==='FUNDING');
+ const result=await core.addCurrencies(actor,{userId:'1',currencies:['CHF']},'retain-merged-chf');
+ assert.equal(result.accounts[0].abiqIban,originalChf.abiq_iban);
+ const after=await management.list(actor,'accountsummaries');
+ assert.equal(after.filter(r=>r.full_name==='AVISPay PLC').length,12);
+ const bound=await management.bindCustomerLogin(actor,{userId:'1',fineractUserId:'6501'},'bind-canonical');
+ assert.equal(bound.userId,'1');
+ const binding=(await pool.query("SELECT user_id FROM avis_core_v2.customer_logins WHERE principal_id='fineract:6501'")).rows[0];
+ assert.equal(String(binding.user_id),'3');
+ await assert.rejects(core.openCustomer(actor,{fullName:' avispay plc ',accountType:'BUSINESS',currencies:['EUR']},'duplicate-company'),/BUSINESS_IDENTITY_EXISTS/);
+ const audit=await pool.query("SELECT resource_id FROM avis_core_v2.operation_audit WHERE operation='MERGE_BUSINESS_IDENTITY'");
+ assert.deepEqual(audit.rows,[{resource_id:'3->1'}]);
 });
