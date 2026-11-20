@@ -137,13 +137,13 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     }
     return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    }
-   if(req.method==='GET'&&path==='/readyz'){await pool.query('SELECT 1');return send(res,200,{status:'ready',release});
+   if(req.method==='GET'&&path==='/readyz'){await pool.query('SELECT 1');return send(res,200,{status:'ready',release});}
    // Stripe sends signed raw events without browser cookies or CSRF tokens.
    if(path==='/api/stripe/webpos/webhook'&&req.method==='POST'){
     if(!req.headers['content-type']?.startsWith('application/json'))fault('STRIPE_SIGNATURE',null,415);
     const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>512*1024)fault('STRIPE_SIGNATURE',null,413);chunks.push(chunk);}
     return send(res,200,await stripePos.receiveWebhook(Buffer.concat(chunks),req.headers['stripe-signature']));
-   }}
+   }
    const ingress=/^\/network\/([A-Z0-9_]{1,35})\/(iso20022|iso8583|offline-batch)$/.exec(path);
    if(ingress&&req.method==='POST'){
     const contentType={iso20022:'application/xml',iso8583:'application/octet-stream','offline-batch':'application/json'}[ingress[2]];
