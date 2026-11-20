@@ -93,7 +93,8 @@ before(async()=>{
 after(async()=>{if(db)await db.close();else await pool.end();});
 
 test('populated upgrade adds identifiers without creating accounts or changing financial and securities history',async()=>{
- assert.deepEqual(await financialSnapshot(),snapshot);
+ const expected={...snapshot,sovereign_users:snapshot.sovereign_users.map(user=>({...user,merged_into_user_id:null}))};
+ assert.deepEqual(await financialSnapshot(),expected);
  const eligible=await rows(`SELECT a.account_id,a.currency_code FROM avis_core_v2.ledger_accounts a
   JOIN avis_core_v2.abiq_currencies c USING(currency_code) WHERE a.network IS NULL ORDER BY a.account_id`);
  const identifiers=await rows('SELECT * FROM avis_core_v2.abiq_account_identifiers ORDER BY ledger_account_id');
