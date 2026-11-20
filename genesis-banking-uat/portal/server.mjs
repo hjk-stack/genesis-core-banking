@@ -20,6 +20,7 @@ import {scanFinalizedEthereumDeposits} from './src/crypto-deposit-monitor.mjs';
 import {CRYPTO_MESSAGES} from './src/crypto-workspace.mjs';
 import {CustomerAccess} from './src/customer-access.mjs';
 import {processAvis8583} from './src/pos-switch.mjs';
+import {StoreWallet} from './src/checkout-store-wallet.mjs';
 import {CryptoBasket,BASKET_MESSAGES} from './src/crypto-basket.mjs';
 import {StripeWebPos} from './src/stripe-pos.mjs';
 import {authenticateMessage,connectorCredentials,dispatchPayment,recoverPaymentDeliveries} from './src/payment-transport.mjs';
@@ -120,7 +121,7 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
 export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={}}) {
  const core=new TradingRobotCore(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map(),indexService=new IndexServiceAuthenticator(pool,{env:core.secretEnv,fetcher:transferOptions.indexServiceFetcher||core.cryptoFetch});
  const stripePos=transferOptions.stripePos||new StripeWebPos(pool,{env:transferOptions.secretEnv||process.env,fetcher:transferOptions.stripeFetch||fetch});
- const basket=new CryptoBasket(core,stripePos);
+ const basket=new CryptoBasket(core,stripePos),storeWallet=new StoreWallet(basket);
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  return http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
@@ -142,13 +143,17 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    }
    if(req.method==='GET'&&path==='/readyz'){await pool.query('SELECT 1');return send(res,200,{status:'ready',release});}
-   const bridge=/^\/api\/basket-bridge\/(state|quote|card|transfer)$/.exec(path);
+   const bridge=/^\/api\/basket-bridge\/(state|quote|card|transfer|price|store-open|store-quote|store-receipt)$/.exec(path);
    if(bridge&&req.method==='POST'){
     if(!req.headers['content-type']?.startsWith('application/json'))fault('INVALID_FIELD',null,415);
     const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>4096)fault('INVALID_FIELD',null,413);chunks.push(chunk);}
     let b;try{b=JSON.parse(Buffer.concat(chunks));}catch{fault('INVALID_FIELD',null,400);}
     if(!b||typeof b!=='object')fault('INVALID_FIELD',null,400);
     const token=(req.headers.authorization||'').replace(/^Bearer /,'');
+    if(bridge[1]==='store-open')return send(res,200,await storeWallet.claim(token,b));
+    if(bridge[1]==='store-quote')return send(res,200,await storeWallet.quote(token,b));
+    if(bridge[1]==='store-receipt')return send(res,200,await storeWallet.receipt(b));
+    if(bridge[1]==='price')return send(res,200,await basket.market(token,b));
     if(bridge[1]==='state')return send(res,200,await basket.state(token));
     if(bridge[1]==='quote')return send(res,200,await basket.quote(token,b));
     if(bridge[1]==='transfer')return send(res,200,await basket.transfer(token,b.id));
@@ -255,10 +260,12 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(req.method==='GET'&&path==='/api/crypto/trading/live')return send(res,200,await invoke('tradingLiveSnapshot',{robotId:url.searchParams.get('robotId')??undefined}));
    if(req.method==='GET'&&path==='/api/crypto/trading/live/liquidity')return send(res,200,await invoke('tradingLiveLiquidity',{robotId:url.searchParams.get('robotId')}));
    if(req.method==='GET'&&path==='/api/crypto/trading/robot-instructions')return send(res,200,await invoke('robotInstructions',{robotId:url.searchParams.get('robotId')}));
+   if(req.method==='GET'&&path.startsWith('/api/crypto/basket/store/'))return send(res,200,await storeWallet.details(actor,path.split('/').at(-1)));
    if(req.method==='GET'&&path.startsWith('/api/crypto/basket/orders/'))return send(res,200,await basket.orderForBuyer(actor,path.split('/').at(-1)));
    if(req.method==='GET'&&path==='/api/stripe/webpos/connection')return send(res,200,await stripePos.connection(actor));
    if(req.method==='GET'&&path==='/api/stripe/webpos/status')return send(res,200,await stripePos.status(actor,url.searchParams.get('sessionId')));
    if(req.method==='GET'&&path.startsWith('/api/views/')){
+    if(path==='/api/views/checkouttenders')return send(res,200,{rows:await basket.tender.catalog(actor)});
     if(path==='/api/views/cryptobasketpolicy')return send(res,200,{rows:[await basket.policy(actor)]});
     if(path==='/api/views/stripepayments')return send(res,200,{rows:await stripePos.list(actor)});
     return send(res,200,{rows:await (actor.admin?core:customerAccess).list(actor,path.split('/').at(-1))});
@@ -266,6 +273,9 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
    if(path==='/api/crypto/basket/start')return send(res,200,await basket.start(actor));
+   if(path==='/api/crypto/basket/store-confirm')return send(res,200,await storeWallet.confirm(actor,body));
+   if(path==='/api/crypto/basket/tender')return send(res,200,await basket.tender.configure(actor,body,req.headers['idempotency-key']));
+   if(path==='/api/crypto/basket/price')return send(res,200,await basket.market(null,body,actor));
    if(path==='/api/crypto/basket/confirm')return send(res,200,await basket.confirmAccount(actor,body));
    if(path==='/api/crypto/basket/policy')return send(res,200,await basket.setPolicy(actor,body,req.headers['idempotency-key']));
    if(path==='/api/crypto/basket/lot')return send(res,200,await basket.registerLot(actor,body,req.headers['idempotency-key']));
@@ -332,8 +342,8 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
    console.error(JSON.stringify({operation:'COINAPI_INDEX_RESEARCH',indexId:item.id,code:item.currentError||item.historyError}));
  }).catch(error=>console.error(JSON.stringify({operation:'COINAPI_INDEX_RESEARCH',code:error.message||'INDEX_RESEARCH'})));
  void pollCoinApiResearch();setInterval(pollCoinApiResearch,120000).unref();
- const checkoutRecovery=new CryptoBasket(robotCore,new StripeWebPos(pool));let recoveringCheckout=false;
- const recoverCheckout=async()=>{if(recoveringCheckout)return;recoveringCheckout=true;try{await checkoutRecovery.recover();}catch(e){console.error(JSON.stringify({operation:'CRYPTO_BASKET_RECOVERY',code:e.code||'CHECKOUT_RECOVERY'}));}finally{recoveringCheckout=false;}};
+ const checkoutRecovery=new CryptoBasket(robotCore,new StripeWebPos(pool));const storeRecovery=new StoreWallet(checkoutRecovery);let recoveringCheckout=false;
+ const recoverCheckout=async()=>{if(recoveringCheckout)return;recoveringCheckout=true;try{await storeRecovery.notify();await checkoutRecovery.recover();}catch(e){console.error(JSON.stringify({operation:'CRYPTO_BASKET_RECOVERY',code:e.code||'CHECKOUT_RECOVERY'}));}finally{recoveringCheckout=false;}};
  setInterval(recoverCheckout,60000).unref();
  let scanningDeposits=false;
  const scanDeposits=async()=>{if(scanningDeposits)return;scanningDeposits=true;try{

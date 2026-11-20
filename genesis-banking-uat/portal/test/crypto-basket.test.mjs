@@ -16,7 +16,7 @@ const stripe={env:{STRIPE_WEBHOOK_SECRET:'whsec_ExampleOnly'},secretKey:()=>'rk_
 const order=(token,method='ACCOUNT',quantity='0.2')=>engine.quote(token,{requestKey:key(),asset:'ETH',network:'ETHEREUM',quantity,fiat:'EUR',method});
 before(async()=>{
  db=new PGlite();const pool={query:(...args)=>db.query(...args),connect:async()=>({query:(...args)=>db.query(...args),exec:s=>db.exec(s),release(){}})};
- await migrate(await pool.connect());core=new TransferMethods(pool);engine=new CryptoBasket(core,stripe);
+ await migrate(await pool.connect());core=new TransferMethods(pool);engine=new CryptoBasket(core,stripe,{pricing:{spot:async()=>({rate:'100',observedAt:Date.now()})}});
  issuer={userId:'1',accounts:[{accountId:await core.userFunding(db,'1','EUR')}]};
  const customer=await core.openCustomer(admin,{fullName:'Basket buyer',accountType:'PERSONAL',currencies:['EUR']},key());
  buyer={id:'customer-basket',customerUserId:customer.userId};other={id:'other',customerUserId:issuer.userId};
@@ -44,9 +44,9 @@ test('unpriced external inventory and incomplete receipts produce no payable quo
  await assert.rejects(order(token,'WIRE'),/BASKET_METHOD/);
  await assert.rejects(engine.registerLot(buyer,{},key()),/FORBIDDEN/);
  await assert.rejects(engine.setPolicy(buyer,{markupBps:9000,participationBps:9000},key()),/FORBIDDEN/);
- await assert.rejects(engine.registerLot(admin,{journalId:key(),fiat:'EUR',cost:'100.00',providerReference:'test'},key()),/BASKET_COST/);
+ await assert.rejects(engine.registerLot(admin,{journalId:key(),fiat:'EUR',cost:'100.00',gasCost:'0.00',providerReference:'test'},key()),/BASKET_COST/);
  await assert.rejects(order(token,'CARD'),/BASKET_CARD/);
- const result=await engine.registerLot(admin,{journalId:deposit,fiat:'EUR',cost:'100.00',providerReference:'provider-order-1'},key());offer=result.id;
+ const result=await engine.registerLot(admin,{journalId:deposit,fiat:'EUR',cost:'100.00',gasCost:'0.00',providerReference:'provider-order-1'},key());offer=result.id;
  await engine.setPolicy(admin,{markupBps:500,participationBps:2500},key());
  const quote=await engine.quote(token,{requestKey:inquiry.requestKey,asset:'ETH',network:'ETHEREUM',quantity:'0.2',fiat:'EUR',method:'ACCOUNT'});assert.equal(quote.id,inquiry.id);assert.equal(quote.total,'21.00');assert.equal(quote.markupBps,undefined);
  await assert.rejects(engine.confirmAccount(other,{id:quote.id,total:'21.00'}),/BASKET_ORDER/);
@@ -98,4 +98,40 @@ test('a wire delivers crypto only after the matched ISO 20022 transfer is credit
  const r=(await db.query('SELECT * FROM avis_core_v2.crypto_basket_orders WHERE order_id=$1',[quoted.id])).rows[0];
  assert.equal(r.status,'PAID');assert.ok(r.funding_journal);
  assert.equal((await db.query('SELECT count(*)::int n FROM avis_core_v2.ledger_entries WHERE journal_id=$1',[r.settlement_journal])).rows[0].n,2);
+});
+test('POS acceptance applies to a particular network and only the owner can authorize a purchase with that wallet',async()=>{
+ const asset=(await db.query("SELECT asset_id FROM avis_core_v2.crypto_assets WHERE currency_code='AG'")).rows[0];
+ await db.query("UPDATE avis_core_v2.crypto_asset_networks SET approved=true,verified_at=now(),decimals=18 WHERE asset_id=$1 AND network='ETHEREUM'",[asset.asset_id]);
+ await assert.rejects(engine.tender.configure(buyer,{assetId:asset.asset_id,network:'ETHEREUM',accepted:true},key()),/FORBIDDEN/);
+ await engine.tender.configure(admin,{assetId:asset.asset_id,network:'ETHEREUM',accepted:true},key());
+ const source=await core.networkAccount(db,'USER','AG','ETHEREUM','CRYPTO',buyer.customerUserId);
+ const supply=await core.networkAccount(db,'HOT_WALLET','AG','ETHEREUM','TEST_AG');
+ await core.post(db,admin,key(),'FIXTURE_AG','test',[entry(supply,'DEBIT','100'),entry(source,'CREDIT','100')]);
+ const company=await core.networkAccount(db,'USER','AG','ETHEREUM','CRYPTO','1');
+ await db.query('INSERT INTO avis_core_v2.crypto_sale_offers(offer_id,stock_account_id,proceeds_account_id,unit_price) VALUES($1,$2,$3,1)',[key(),company,proceeds]);
+ const {token}=await engine.start(buyer);assert.equal((await engine.state(token)).wallets.some(w=>w.id===source),true);
+ const input={requestKey:key(),asset:'ETH',network:'ETHEREUM',quantity:'0.01',fiat:'EUR',method:'CRYPTO',walletId:source};
+ const quote=await engine.quote(token,input);assert.equal(quote.pay.asset,'AG');assert.ok(quote.fee);assert.ok(quote.principal);
+ await engine.tender.configure(admin,{assetId:asset.asset_id,network:'ETHEREUM',accepted:false},key());
+ await assert.rejects(engine.confirmAccount(buyer,{id:quote.id,total:quote.total,quantity:quote.pay.quantity,walletId:source}),/BASKET_WALLET/);
+ await engine.tender.configure(admin,{assetId:asset.asset_id,network:'ETHEREUM',accepted:true},key());
+ const paid=await engine.confirmAccount(buyer,{id:quote.id,total:quote.total,quantity:quote.pay.quantity,walletId:source});assert.equal(paid.status,'PAID');
+});
+test('MetaMask quotes identify the token by network and contract, cache briefly, and show gas once in one fee',async()=>{
+ const {MetaMaskPricing}=await import('../src/metamask-pricing.mjs'),{breakdown}=await import('../src/checkout-crypto-tender.mjs');
+ let calls=0,t=1000;const pricing=new MetaMaskPricing({now:()=>t,fetcher:async url=>{calls++;assert.equal(url.origin,'https://price.api.cx.metamask.io');const id=url.searchParams.get('assetIds');return Response.json({[id]:{price:100}});}});
+ const first=await pricing.spot({network:'ETHEREUM'},'EUR');assert.equal(first.assetId,'eip155:1/slip44:60');await pricing.spot({network:'ETHEREUM'},'EUR');assert.equal(calls,1);t+=11000;await pricing.spot({network:'ETHEREUM'},'EUR');assert.equal(calls,2);
+ const b=breakdown('1','1','10300','300','100',1000,0,0);assert.equal(b.principal,'100.00');assert.equal(b.fee,'13.30');assert.equal(b.total,'113.30');
+});
+test('a storefront invoice is priced by the issuing store and cannot be marked paid before wallet authorization',async()=>{
+ const {StoreWallet}=await import('../src/checkout-store-wallet.mjs'),{createHash}=await import('node:crypto');
+ const invoice={id:key(),ref:'store-order-test',kind:'RETAIL',title:'Basket',fiat:'EUR',amountMinor:'125',expiresAt:new Date(Date.now()+3600000).toISOString()};
+ const secret='9'.repeat(64),lookup=createHash('sha256').update(secret).digest('hex'),store=new StoreWallet(engine,{fetcher:async url=>Response.json(url.endsWith('terms')?invoice:{paid:true})});
+ const {token}=await engine.start(buyer),claim={id:invoice.id,secret},session=await store.claim(token,claim),wallet=session.wallets.find(w=>w.asset==='AG');
+ assert.ok(wallet);const quote=await store.quote(token,{...claim,amountMinor:'1',walletId:wallet.id});assert.equal(quote.principal,'1.25');assert.equal(quote.fee,'0.07');assert.equal(quote.total,'1.32');
+ assert.equal((await store.receipt({id:invoice.id,lookup})).paid,false);
+ const request={id:invoice.id,total:quote.total,quantity:quote.pay.quantity,walletId:wallet.id};
+ await assert.rejects(store.confirm(other,request),/BASKET_ORDER/);await assert.rejects(store.confirm(buyer,{...request,quantity:'0.01'}),/BASKET_REVIEW/);
+ await store.confirm(buyer,request);const paid=await store.receipt({id:invoice.id,lookup});assert.equal(paid.paid,true);assert.equal(paid.amountMinor,'125');
+ await store.confirm(buyer,request);assert.equal((await store.receipt({id:invoice.id,lookup})).journal,paid.journal);
 });
