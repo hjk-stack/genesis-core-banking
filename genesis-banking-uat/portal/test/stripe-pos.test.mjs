@@ -130,3 +130,25 @@ test('Stripe webhook is accessible without browser CSRF/session; authenticated A
   assert.equal(checkout.status,403,'browser mutations remain behind the existing origin and session requirements');
  }finally{await new Promise(resolve=>bank.close(resolve));}
 });
+
+test('admin checks deployed Checkout access without creating or returning a session',async()=>{
+ const env={STRIPE_SECRET_KEY:'rk_live_probeonly',STRIPE_WEBHOOK_SECRET:'whsec_probeonly'};
+ const actor={id:'operator',admin:true};
+ let calls=0,providerStatus=200;
+ const service=new StripeWebPos(null,{env,fetcher:async(url,options)=>{
+  calls++;
+  assert.equal(url,'https://api.stripe.com/v1/checkout/sessions?limit=1');
+  assert.equal(options.method,'GET');
+  assert.equal(options.redirect,'error');
+  assert.equal(options.headers.authorization,'Bearer '+env.STRIPE_SECRET_KEY);
+  return new Response('{}',{status:providerStatus});
+ }});
+ await assert.rejects(service.connection({id:'customer',admin:false}),/FORBIDDEN/);
+ assert.equal(calls,0);
+ assert.deepEqual(await service.connection(actor),{mode:'live',checkoutAccess:true,webhookConfigured:true});
+ providerStatus=403;
+ await assert.rejects(service.connection(actor),/STRIPE_PROVIDER_RESPONSE/);
+ delete env.STRIPE_WEBHOOK_SECRET;
+ await assert.rejects(service.connection(actor),/STRIPE_CONFIGURATION/);
+ assert.equal(calls,2);
+});

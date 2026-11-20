@@ -41,6 +41,25 @@ function cleanOrigin(value){
 }
 export class StripeWebPos {
  constructor(pool,{env=process.env,fetcher=fetch,now=Date.now}={}){this.pool=pool;this.env=env;this.fetcher=fetcher;this.now=now;}
+ secretKey(){
+  const secret=this.env.STRIPE_SECRET_KEY;
+  if(!/^(sk|rk)_(live|test)_[A-Za-z0-9]+$/.test(secret||''))fault('STRIPE_CONFIGURATION',null,503);
+  return secret;
+ }
+ async connection(actor){
+  requireAdministrator(actor);
+  const secret=this.secretKey();
+  if(!/^whsec_[A-Za-z0-9]+$/.test(this.env.STRIPE_WEBHOOK_SECRET||''))fault('STRIPE_CONFIGURATION',null,503);
+  let response;
+  try{
+   response=await this.fetcher(STRIPE_API+'?limit=1',{
+    method:'GET',redirect:'error',headers:{authorization:'Bearer '+secret},signal:AbortSignal.timeout(12000)
+   });
+   await response.body?.cancel();
+  }catch{fault('STRIPE_PROVIDER_RESPONSE',null,503);}
+  if(response.status!==200||response.redirected)fault('STRIPE_PROVIDER_RESPONSE',null,503);
+  return {mode:secret.split('_')[1],checkoutAccess:true,webhookConfigured:true};
+ }
  async createCheckout(actor,input,idempotencyKey){
   requireAdministrator(actor);
   const terminalId=text(input?.terminalId,'terminalId',32),reference=text(input?.reference,'reference',100);
@@ -62,8 +81,7 @@ export class StripeWebPos {
   if(row.actor_id!==actor.id||row.terminal_id!==terminalId||row.reference!==reference||
     row.currency_code!==currency||Number(row.amount_minor)!==amountMinor)fault('IDEMPOTENCY_CONFLICT','idempotencyKey',409);
   if(row.session_id)return {id:row.payment_id,checkoutUrl:row.checkout_url,status:row.status,sessionId:row.session_id};
-  const secret=this.env.STRIPE_SECRET_KEY;
-  if(!/^(sk|rk)_(live|test)_[A-Za-z0-9]+$/.test(secret||''))fault('STRIPE_CONFIGURATION',null,503);
+  const secret=this.secretKey();
   const origin=cleanOrigin(this.env.AVIS_STRIPE_RETURN_ORIGIN);
   const form=new URLSearchParams();
   for(const [name,value] of Object.entries({
@@ -142,14 +160,14 @@ export class StripeWebPos {
   requireAdministrator(actor);
   if(typeof sessionId!=='string'||!/^cs_(live|test)_[A-Za-z0-9]+$/.test(sessionId))fault('INVALID_FIELD','sessionId');
   const row=(await this.pool.query(`SELECT payment_id AS id,terminal_id,merchant_id,reference,currency_code,
-   (amount_minor::numeric/100)::text AS amount,status,session_id,created_at,paid_at
+   (amount_minor::numeric/100)::numeric(12,2)::text AS amount,status,session_id,created_at,paid_at
    FROM avis_core_v2.stripe_pos_payments WHERE session_id=$1`,[sessionId])).rows[0];
   if(!row)fault('INVALID_REFERENCE','sessionId',404);return row;
  }
  async list(actor){
   requireAdministrator(actor);
   return (await this.pool.query(`SELECT payment_id,merchant_id,terminal_id,reference,currency_code,
-     (amount_minor::numeric/100)::text AS amount,status,session_id,payment_intent_id,created_at,paid_at
+     (amount_minor::numeric/100)::numeric(12,2)::text AS amount,status,session_id,payment_intent_id,created_at,paid_at
      FROM avis_core_v2.stripe_pos_payments ORDER BY created_at DESC LIMIT 150`)).rows;
  }
 }

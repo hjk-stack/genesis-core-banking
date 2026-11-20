@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
 import pg from 'pg';
 import {migrate} from '../src/migrate.mjs';
+import {StripeWebPos} from '../src/stripe-pos.mjs';
 import {SovereignCore,money,decimal} from '../src/core.mjs';
 import {ABIQ_PARTITIONS,parseAbiqIban} from '../src/avispay-core-accounts.mjs';
 import {createBankServer,authenticateFineract} from '../server.mjs';
@@ -125,4 +126,39 @@ test('operational UI has no integration placeholders and dialogs have close cont
  const html=await readFile(new URL('../index.html',import.meta.url),'utf8'),js=await readFile(new URL('../public/app.mjs',import.meta.url),'utf8');
  assert.doesNotMatch(html+js,/External integrations not connected|integration pending|onboarding pending|no transactions|UAT ONLY|sandbox|simulator/i);
  assert.match(html,/<dialog/);assert.match(html,/aria-label="Close"/);assert.match(js,/api\('views\/'/);assert.match(js,/ABIQ/);
+});
+
+test('migrated PostgreSQL stores Stripe Web POS checkouts and webhook receipts idempotently',async()=>{
+ const owner=await customer('Stripe database merchant','BUSINESS');
+ await core.registerShop(actor,{merchantId:'stripe-db-shop',shopName:'Stripe database shop',
+  ownerUserId:owner.userId,commissionBps:0},key());
+ await core.registerTerminal(actor,{terminalId:'STRIPE-DB-POS',merchantId:'stripe-db-shop',terminalType:'WEB_POS'},key());
+ const id='cs_test_database1',intent='pi_database1';
+ let checkoutCalls=0;
+ const service=new StripeWebPos(pool,{
+  env:{STRIPE_SECRET_KEY:'rk_test_database',AVIS_STRIPE_RETURN_ORIGIN:'https://bank.example'},
+  fetcher:async()=>{
+   checkoutCalls++;
+   return Response.json({id,url:'https://checkout.stripe.com/c/pay/'+id});
+  }
+ });
+ const input={terminalId:'STRIPE-DB-POS',reference:'database receipt',currency:'EUR',amount:'12.34'};
+ const request=key(),created=await service.createCheckout(actor,input,request);
+ assert.equal(created.status,'CHECKOUT_CREATED');
+ assert.deepEqual(await service.createCheckout(actor,input,request),created);
+ assert.equal(checkoutCalls,1);
+ const event={id:'evt_database1',type:'checkout.session.completed',data:{object:{
+  id,mode:'payment',currency:'eur',amount_total:1234,payment_status:'paid',payment_intent:intent,
+  metadata:{source:'AVISPAY_WEB_POS',paymentId:created.id,merchantId:'stripe-db-shop'}
+ }}};
+ assert.equal((await service.applyEvent(event)).status,'PAID');
+ assert.equal((await service.applyEvent(event)).duplicate,true);
+ const receipt=await service.status(actor,id);
+ assert.equal(receipt.amount,'12.34');
+ assert.equal(receipt.status,'PAID');
+ assert.ok(receipt.paid_at);
+ const rows=await service.list(actor);
+ assert.equal(rows.filter(row=>row.payment_id===created.id&&row.payment_intent_id===intent).length,1);
+ const events=await pool.query('SELECT stripe_event_id FROM avis_core_v2.stripe_pos_webhook_events WHERE payment_id=$1',[created.id]);
+ assert.deepEqual(events.rows,[{stripe_event_id:event.id}]);
 });
