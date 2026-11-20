@@ -118,10 +118,20 @@ test('POS acceptance applies to a particular network and only the owner can auth
  const paid=await engine.confirmAccount(buyer,{id:quote.id,total:quote.total,quantity:quote.pay.quantity,walletId:source});assert.equal(paid.status,'PAID');
 });
 test('MetaMask quotes identify the token by network and contract, cache briefly, and show gas once in one fee',async()=>{
- const {MetaMaskPricing}=await import('../src/metamask-pricing.mjs'),{breakdown}=await import('../src/checkout-crypto-tender.mjs');
+ const {MetaMaskPricing,metaAsset}=await import('../src/metamask-pricing.mjs'),{breakdown}=await import('../src/checkout-crypto-tender.mjs');
+ for(const [network,id] of Object.entries({BSC:'eip155:56/slip44:714',POLYGON:'eip155:137/slip44:966',AVALANCHE:'eip155:43114/slip44:9005',GNOSIS:'eip155:100/slip44:700',TRON:'tron:728126428/slip44:195'}))assert.equal(metaAsset(network),id);
+ assert.equal(metaAsset('ETHEREUM','invalid'),null);
  let calls=0,t=1000;const pricing=new MetaMaskPricing({now:()=>t,fetcher:async url=>{calls++;assert.equal(url.origin,'https://price.api.cx.metamask.io');const id=url.searchParams.get('assetIds');return Response.json({[id]:{eur:100}});}});
  const first=await pricing.spot({network:'ETHEREUM'},'EUR');assert.equal(first.assetId,'eip155:1/slip44:60');await pricing.spot({network:'ETHEREUM'},'EUR');assert.equal(calls,1);t+=11000;await pricing.spot({network:'ETHEREUM'},'EUR');assert.equal(calls,2);
  const b=breakdown('1','1','10300','300','100',1000,0,0);assert.equal(b.principal,'100.00');assert.equal(b.fee,'13.30');assert.equal(b.total,'113.30');
+});
+test('the displayed fee uses the selected method and agrees with the binding treasury quote',async()=>{
+ const {token}=await engine.start(buyer),input={asset:'ETH',network:'ETHEREUM',quantity:'0.01',fiat:'EUR'};
+ for(const method of ['ACCOUNT','CARD']){
+  const {preview}=await engine.market(token,{...input,method});
+  const quote=await engine.quote(token,{...input,method,requestKey:key()});
+  assert.equal(preview.fee,quote.fee);assert.equal(preview.total,quote.total);
+ }
 });
 test('a storefront invoice is priced by the issuing store and cannot be marked paid before wallet authorization',async()=>{
  const {StoreWallet}=await import('../src/checkout-store-wallet.mjs'),{createHash}=await import('node:crypto');

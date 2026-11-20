@@ -122,7 +122,7 @@ export class CryptoBasket {
   if(!asset)fault('CRYPTO_APPROVAL_REQUIRED','asset');const price=await this.tender.rate(this.pool,asset,input.fiat);
   const gas=adminActor?await this.pricing.networkGas(asset.network).catch(()=>null):null;
   const policy=(await this.pool.query('SELECT * FROM '+S+'crypto_basket_policy')).rows[0];
-  const card=(await this.pool.query('SELECT fee_bps,fixed_minor FROM '+S+'crypto_basket_card_terms WHERE fiat=$1',[input.fiat])).rows[0];
+  const card=input.method==='CARD'?(await this.pool.query('SELECT fee_bps,fixed_minor FROM '+S+'crypto_basket_card_terms WHERE fiat=$1',[input.fiat])).rows[0]:null;
   let supplier=null,preview=null,budget=input.budget||'',quantity=input.quantity||'',supplierStatus=null;
   if(quantity){const q=money(quantity);if(!budget)budget=decimal(ceil(q*money(price.rate)*100n,unit*unit),2);
    const lot=(await this.pool.query(offerSql+' AND s.currency_code=$1 AND s.network=$2 AND p.currency_code=$3 AND l.gas_minor IS NOT NULL AND l.remaining >= $4 AND s.available_balance-s.locked_balance >= $4 ORDER BY o.created_at LIMIT 1',[asset.asset,asset.network,input.fiat,quantity])).rows[0];

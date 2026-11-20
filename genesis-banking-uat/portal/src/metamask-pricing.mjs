@@ -4,12 +4,17 @@ const U=10n**18n;
 const networks={
  BITCOIN:['bip122:000000000019d6689c085ae165831e93','slip44:0'],
  SOLANA:['solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp','slip44:501'],
- TRON:['tron:0x2b6653dc','slip44:195'],XRPL:['xrpl:0','slip44:144']
+ TRON:['tron:728126428','slip44:195'],XRPL:['xrpl:0','slip44:144']
 };
+const nativeCoinTypes={ETH:60,BNB:714,POL:966,AVAX:9005,XDAI:700};
 const spotUrl='https://price.api.cx.metamask.io/v3/spot-prices';
 export function metaAsset(network,contract){
  const n=NETWORKS[network];if(!n)return null;
- if(n.kind==='EVM')return 'eip155:'+n.chainId+'/'+(contract&&/^0x[0-9a-f]{40}$/i.test(contract)?'erc20:'+contract.toLowerCase():contract? '': 'slip44:60');
+ if(n.kind==='EVM'){
+  const chain='eip155:'+n.chainId+'/';
+  if(contract)return /^0x[0-9a-f]{40}$/i.test(contract)?chain+'erc20:'+contract.toLowerCase():null;
+  const coin=nativeCoinTypes[n.native];return coin===undefined?null:chain+'slip44:'+coin;
+ }
  const pair=networks[network];if(!pair)return null;if(!contract)return pair.join('/');
  if(network==='SOLANA')return pair[0]+'/token:'+contract;if(network==='TRON')return pair[0]+'/trc20:'+contract;return null;
 }
@@ -25,14 +30,14 @@ export class MetaMaskPricing {
   const currency=fiat.toLowerCase(),key=assetId+'|'+currency,saved=this.cache.get(key);
   if(saved&&this.now()-saved.observedAt<10000)return saved;
   const url=new URL(spotUrl);url.search=new URLSearchParams({assetIds:assetId,vsCurrency:currency,includeMarketData:'false'}).toString();
-  const body=await this.read(url,{'X-Client-Id':'avispay-checkout'}),rate=positive(body[assetId]?.[currency]??body[assetId]?.price);
+  const body=await this.read(url),rate=positive(body[assetId]?.[currency]??body[assetId]?.price);
   if(!rate)fault('METAMASK_PRICE','asset',503);
   const value={assetId,rate,observedAt:this.now(),source:'MetaMask'};if(this.cache.size>512)this.cache.clear();this.cache.set(key,value);return value;
  }
  async networkGas(network){
   const chain=NETWORKS[network];if(chain?.kind!=='EVM')return null;
   const key='gas:'+chain.chainId,prior=this.cache.get(key);if(prior&&this.now()-prior.observedAt<10000)return prior;
-  let result;try{result=await this.read(new URL('https://gas.api.cx.metamask.io/networks/'+chain.chainId+'/suggestedGasFees'),{'X-Client-Id':'avispay-checkout'});}
+  let result;try{result=await this.read(new URL('https://gas.api.cx.metamask.io/networks/'+chain.chainId+'/suggestedGasFees'));}
   catch(error){if(!this.rpcFees)throw error;const fee=await this.rpcFees(network);const max=fee.maxFeePerGas||fee.gasPrice;if(!max)throw error;
    const live={maxGwei:decimal(max,9),baseGwei:null,source:'Blockchain RPC',unit:'gwei',observedAt:this.now()};this.cache.set(key,live);return live;}
   const maxGwei=positive(result.medium?.suggestedMaxFeePerGas),baseGwei=positive(result.estimatedBaseFee);
