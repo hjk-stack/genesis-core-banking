@@ -6,7 +6,7 @@ import {mountIndexAdvice} from '../public/index-advice.mjs';
 
 const first={robotId:'10000000-0000-4000-8000-000000000001',name:'Treasury W',venue:'AVIS',symbol:'aAVISP',baseAsset:'aAVISP',quoteAsset:'CHF'},second={robotId:'10000000-0000-4000-8000-000000000002',name:'Spot W',venue:'BINANCE',symbol:'BTCUSDT',baseAsset:'BTC',quoteAsset:'USDT'};
 const instructions=JSON.stringify({maxNotional:'1000',dailyNotional:'10000',maxLoss:'1000',minimumIndex:0,trailingBps:50,notes:'Use the recorded strategy.'},null,2);
-const policy=(profile=first,extra={})=>({robotId:profile.robotId,version:2,instructions,updatedAt:'2026-11-15T20:00:00Z',...extra});
+const policy=(profile=first,extra={})=>({robotId:profile.robotId,version:2,instructionVersion:1,instructions,updatedAt:'2026-11-15T20:00:00Z',...extra});
 const windows=[],controllers=[];
 afterEach(()=>{controllers.splice(0).forEach(controller=>controller?.close());windows.splice(0).forEach(dom=>dom.window.close());});
 function setup(){const dom=new JSDOM('<!doctype html><main><div id="host"></div><div id="evidence"></div></main>',{url:'https://bank.invalid'});windows.push(dom);return dom.window.document.querySelector('#host');}
@@ -36,13 +36,33 @@ test('bounded activity history keeps still-visible fills without replaying them 
 });
 
 test('robot instructions require a selected saved profile and persist exact versioned execution settings',async()=>{
- const host=setup(),calls=[],saved=[];const controller=mount(host,async(path,input,key)=>{calls.push({path,input,key});return input?policy(first,{version:3,instructions:input.instructions,enabled:false}):policy();},{onSaved:async result=>saved.push(result)});
+ const host=setup(),calls=[],saved=[];const controller=mount(host,async(path,input,key)=>{calls.push({path,input,key});return input?policy(first,{version:3,instructionVersion:2,instructions:input.instructions,enabled:false}):policy();},{onSaved:async result=>saved.push(result)});
  assert.equal(host.querySelector('textarea').disabled,true);assert.equal(calls.length,0);await controller.select(first);
- assert.equal(host.querySelector('textarea').value,instructions);assert.equal(host.querySelector('[data-robot-instruction-version]').textContent,'Version 2');
+ assert.equal(host.querySelector('textarea').value,instructions);assert.equal(host.querySelector('[data-robot-instruction-version]').textContent,'Saved instructions v1 · configuration v2');
  const edited=JSON.parse(instructions);edited.maxNotional='250.123456789012345678';edited.notes='<script>bad()</script>';host.querySelector('textarea').value=JSON.stringify(edited,null,2);await submit(host);
  assert.deepEqual(calls[0],{path:'crypto/trading/robot-instructions?robotId='+first.robotId,input:undefined,key:undefined});
  const write=calls[1];assert.equal(write.path,'crypto/trading/robot-instructions');assert.equal(write.input.robotId,first.robotId);assert.equal(write.input.expectedVersion,2);assert.equal(JSON.parse(write.input.instructions).maxNotional,'250.123456789012345678');assert.match(write.key,/^[a-f0-9-]{36}$/);
  assert.equal(saved.length,1);assert.equal(saved[0].enabled,false);assert.equal(host.querySelector('script'),null);assert.match(host.textContent,/entries paused/);assert.equal(calls.some(call=>/toggle|order/.test(call.path)),false);
+});
+
+test('first robot instruction save reports unsaved state and persists existing controls without creating trading orders',async()=>{
+ const host=setup(),calls=[];
+ const controller=mount(host,async(path,input,key)=>{
+  calls.push({path,input,key});
+  return input?policy(first,{version:3,instructionVersion:1,instructions:input.instructions,enabled:false}):policy(first,{instructionVersion:0,updatedAt:null});
+ });
+ await controller.select(first);
+ assert.equal(host.querySelector('[data-robot-instruction-version]').textContent,'Not saved · configuration v2');
+ assert.equal(host.querySelector('[type=submit]').textContent,'Save first instruction version');
+ assert.match(host.querySelector('[data-robot-instruction-saved]').textContent,/Current execution settings loaded/);
+ assert.equal(host.querySelector('textarea').value,instructions);
+ await submit(host);
+ assert.equal(calls.filter(c=>c.path==='crypto/trading/robot-instructions').length,1);
+ assert.equal(calls.find(c=>c.input)?.input.instructions,instructions);
+ assert.equal(host.querySelector('[data-robot-instruction-version]').textContent,'Saved instructions v1 · configuration v3');
+ assert.equal(host.querySelector('[type=submit]').textContent,'Save robot instructions');
+ assert.match(host.querySelector('[data-robot-instruction-saved]').textContent,/Saved instruction version 1/);
+ assert.equal(calls.some(c=>/toggle|order/.test(c.path)),false);
 });
 
 test('instruction failures remain beside the editor and identical retries keep their key',async()=>{
