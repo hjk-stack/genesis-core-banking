@@ -213,20 +213,22 @@ export async function mountTradingLive({api,host,isCurrent=()=>host?.isConnected
 
 export function mountRobotInstructions({api,host,isCurrent=()=>host?.isConnected,onSaved=async()=>{}}){
  const current=()=>host?.isConnected&&isCurrent();if(!current())return;
- let selected=null,selectedProfile=null,version=null,epoch=0,loading=false,writing=false,pending=null,closed=false;
+ let selected=null,selectedProfile=null,version=null,instructionVersion=0,epoch=0,loading=false,writing=false,pending=null,closed=false;
  const live=()=>!closed&&current();
- host.innerHTML=`<section class="robot-instructions"><div class="crypto-section-heading"><h3>Trading robot instructions</h3><span data-robot-instruction-version>—</span></div><p class="crypto-source">Execution values feed the W-effect strategy and its limits. Notes accompany the audit.</p><p class="crypto-source" data-robot-instruction-profile>Select a saved robot in the live view.</p><form data-robot-instruction-form><label for="robot-execution-instructions">Execution instructions</label><textarea id="robot-execution-instructions" name="instructions" rows="10" maxlength="24000" spellcheck="false" required disabled></textarea><div class="crypto-inline-actions"><button type="submit" class="primary" disabled>Save robot instructions</button><button type="button" data-reload-robot-instructions disabled>Reload</button><span data-robot-instruction-saved role="status"></span></div><p class="form-error" role="alert" data-robot-instruction-error></p></form></section>`;
+ host.innerHTML=`<section class="robot-instructions"><div class="crypto-section-heading"><h3>Trading robot instructions</h3><span data-robot-instruction-version>—</span></div><p class="crypto-source">INDEX analysis instructions are saved separately. This record preserves the selected robot's existing execution limits and optional audit notes.</p><p class="crypto-source" data-robot-instruction-profile>Select a saved robot in the live view to load its execution settings.</p><form data-robot-instruction-form><label for="robot-execution-instructions">Execution instructions</label><textarea id="robot-execution-instructions" name="instructions" rows="10" maxlength="24000" spellcheck="false" required disabled></textarea><div class="crypto-inline-actions"><button type="submit" class="primary" disabled>Save robot instructions</button><button type="button" data-reload-robot-instructions disabled>Reload</button><span data-robot-instruction-saved role="status"></span></div><p class="form-error" role="alert" data-robot-instruction-error></p></form></section>`;
  const query=selector=>host.querySelector(selector),form=query('form'),input=form.elements.instructions,save=form.querySelector('[type=submit]'),reload=query('[data-reload-robot-instructions]'),issue=query('[data-robot-instruction-error]'),output=query('[data-robot-instruction-saved]');
- function sync(){if(!live())return;input.disabled=loading||writing||version===null;save.disabled=loading||writing||version===null;reload.disabled=loading||writing||!selected;}
+ function sync(){if(!live())return;input.disabled=loading||writing||version===null;save.disabled=loading||writing||version===null;reload.disabled=loading||writing||!selected;save.textContent=version!==null&&instructionVersion===0?'Save first instruction version':'Save robot instructions';}
  async function select(profile,{force=false}={}){
   if(!live())return;const id=profile?.robotId||null;if(id===selected&&!force)return;
-  selected=id;selectedProfile=profile;version=null;pending=null;const serial=++epoch;input.value='';issue.textContent='';output.textContent='';query('[data-robot-instruction-version]').textContent='—';
+  selected=id;selectedProfile=profile;version=null;instructionVersion=0;pending=null;const serial=++epoch;input.value='';issue.textContent='';output.textContent='';query('[data-robot-instruction-version]').textContent='—';
   query('[data-robot-instruction-profile]').textContent=profile?profile.name+' · '+profile.venue+' · '+profile.symbol:'Select a saved robot in the live view.';
   loading=!!id;sync();if(!id)return;
   try{
    const policy=await api('crypto/trading/robot-instructions?robotId='+encodeURIComponent(id));if(!live()||serial!==epoch||selected!==id)return;
-   if(policy?.robotId!==id||!Number.isSafeInteger(policy.version)||policy.version<0||typeof policy.instructions!=='string')throw Error('The robot instructions could not be read. Reload to try again.');
-   version=policy.version;input.value=policy.instructions;query('[data-robot-instruction-version]').textContent='Version '+version;
+   if(policy?.robotId!==id||!Number.isSafeInteger(policy.version)||policy.version<0||!Number.isSafeInteger(policy.instructionVersion)||policy.instructionVersion<0||typeof policy.instructions!=='string')throw Error('The robot instructions could not be read. Reload to try again.');
+   version=policy.version;instructionVersion=policy.instructionVersion;input.value=policy.instructions;
+   query('[data-robot-instruction-version]').textContent=instructionVersion?'Saved instructions v'+instructionVersion+' · configuration v'+version:'Not saved · configuration v'+version;
+   if(instructionVersion===0)output.textContent='Current execution settings loaded. Save the first instruction version to record them.';
   }catch(error){if(live()&&serial===epoch)issue.textContent=error.message;}finally{if(serial===epoch){loading=false;sync();}}
  }
  reload.onclick=()=>{if(selected)void select(selectedProfile,{force:true});};
@@ -241,8 +243,8 @@ export function mountRobotInstructions({api,host,isCurrent=()=>host?.isConnected
   writing=true;issue.textContent='';output.textContent='';sync();
   try{
    const saved=await api('crypto/trading/robot-instructions',body,pending.key);if(!live()||serial!==epoch||selected!==robotId)return;
-   if(saved?.robotId!==robotId||!Number.isSafeInteger(saved.version)||typeof saved.instructions!=='string'||saved.enabled!==false)throw Error('Reload the current robot instruction version.');
-   version=saved.version;pending=null;input.value=saved.instructions;query('[data-robot-instruction-version]').textContent='Version '+version;output.textContent='Saved · entries paused. Review a new replay before starting.';await onSaved(saved);
+   if(saved?.robotId!==robotId||!Number.isSafeInteger(saved.version)||!Number.isSafeInteger(saved.instructionVersion)||saved.instructionVersion<1||typeof saved.instructions!=='string'||saved.enabled!==false)throw Error('Reload the current robot instruction version.');
+   version=saved.version;instructionVersion=saved.instructionVersion;pending=null;input.value=saved.instructions;query('[data-robot-instruction-version]').textContent='Saved instructions v'+instructionVersion+' · configuration v'+version;output.textContent='Saved instruction version '+instructionVersion+' · entries paused. Review a new replay before starting.';await onSaved(saved);
   }catch(error){if(live()&&serial===epoch)issue.textContent=error.message;}finally{writing=false;sync();}
  };
  return {select,close(){closed=true;epoch++;}};
