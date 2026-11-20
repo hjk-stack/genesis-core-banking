@@ -250,3 +250,15 @@
   width:100%;-webkit-overflow-scrolling:touch;
  }
 }
+
+.basket-policy,.basket-treasury form{display:flex;flex-wrap:wrap;align-items:end;gap:.65rem}
+.basket-policy[hidden]{display:none}.basket-policy label,.basket-treasury label{display:grid;gap:.2rem;font-size:.85rem;font-weight:600}
+.basket-policy input{width:7rem}.basket-policy output{align-self:center}.basket-treasury{margin-top:1rem}
+.basket-treasury summary{cursor:pointer}.basket-treasury form{padding:1rem 0}.basket-treasury form h3{flex-basis:100%;margin:0}
+.basket-treasury input,.basket-treasury select{max-width:min(32rem,80vw)}.basket-treasury button{white-space:normal}
+.checkout-management{width:min(640px,92vw);max-height:86dvh;overflow:auto;border:1px solid #b7c5c0;border-radius:14px;padding:1.5rem}
+.checkout-management header{display:flex;align-items:center;justify-content:space-between}.checkout-management header h2{margin:0}
+.checkout-management [data-list]{max-height:35dvh;overflow:auto;display:grid;gap:.35rem;margin:1rem 0}
+.checkout-management [data-list] label{display:flex;align-items:center;gap:.45rem}
+.checkout-management form{display:flex;align-items:end;flex-wrap:wrap;gap:.65rem}.checkout-management form label{display:grid;gap:.25rem}
+.checkout-management output{display:block;margin-top:1rem}

@@ -299,7 +299,7 @@ export class TransferMethods extends PaymentRegister {
    const offer=(await db.query(`SELECT o.*,s.currency_code AS asset,s.network,s.user_id AS seller_id,p.currency_code AS fiat
     FROM avis_core_v2.crypto_sale_offers o JOIN avis_core_v2.ledger_accounts s ON s.account_id=o.stock_account_id
     JOIN avis_core_v2.ledger_accounts p ON p.account_id=o.proceeds_account_id WHERE offer_id=$1 AND is_active FOR SHARE OF o`,[input.offerId])).rows[0];
-   if(!offer)fault('CRYPTO_OFFER_REQUIRED','offerId');if(money(input.unitPrice)!==money(offer.unit_price))fault('CRYPTO_PRICE_CHANGED','offerId');
+   if(!offer)fault('CRYPTO_OFFER_REQUIRED','offerId');if(!['AG','AGi'].includes(offer.asset))fault('BASKET_CHECKOUT','offerId',409);if(money(input.unitPrice)!==money(offer.unit_price))fault('CRYPTO_PRICE_CHANGED','offerId');
    const source=await this.route(db,input.from,offer.fiat,'from');if(String(source.user_id)===String(offer.seller_id))fault('SAME_ACCOUNT','from');
    const quantum=offer.fiat==='JPY'?10n**18n:10n**16n,raw=quantity*money(offer.unit_price),divisor=10n**18n*quantum,total=((raw+divisor-1n)/divisor)*quantum;
    if(money(input.total)!==total)fault('CRYPTO_PRICE_CHANGED','amount');

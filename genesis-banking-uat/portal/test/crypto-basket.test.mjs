@@ -1,0 +1,147 @@
+import {test,before,after} from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {PGlite} from '@electric-sql/pglite';
+import {migrate} from '../src/migrate.mjs';
+import {TransferMethods} from '../src/transfer-methods.mjs';
+import {CryptoBasket,priceBasket} from '../src/crypto-basket.mjs';
+
+let engine,db,core,buyer,other,stock,proceeds,offer,address,deposit;
+const admin={id:'basket-test-admin',admin:true},key=()=>randomUUID(),entry=(accountId,direction,amount)=>({accountId,direction,amount});
+let form,session,issuer;
+const stripe={env:{STRIPE_WEBHOOK_SECRET:'whsec_ExampleOnly'},secretKey:()=>'rk_test_ExampleOnly',async fetcher(url,options){
+ assert.match(url,/^https:\/\/api\.stripe\.com\/v1\/checkout\/sessions/);form=new URLSearchParams(options.body);
+ session={id:'cs_test_Basket123',livemode:false,client_reference_id:form.get('client_reference_id'),metadata:{source:'AVISPAY_CRYPTO_BASKET',order_id:form.get('metadata[order_id]')},mode:'payment',currency:'eur',amount_total:Number(form.get('line_items[0][price_data][unit_amount]')),status:'open',url:'https://checkout.stripe.com/c/pay/cs_test_Basket123'};
+ return {ok:true,json:async()=>session};}};
+const order=(token,method='ACCOUNT',quantity='0.2')=>engine.quote(token,{requestKey:key(),asset:'ETH',network:'ETHEREUM',quantity,fiat:'EUR',method});
+before(async()=>{
+ db=new PGlite();const pool={query:(...args)=>db.query(...args),connect:async()=>({query:(...args)=>db.query(...args),exec:s=>db.exec(s),release(){}})};
+ await migrate(await pool.connect());core=new TransferMethods(pool);engine=new CryptoBasket(core,stripe,{pricing:{spot:async()=>({rate:'100',observedAt:Date.now()})}});
+ issuer={userId:'1',accounts:[{accountId:await core.userFunding(db,'1','EUR')}]};
+ const customer=await core.openCustomer(admin,{fullName:'Basket buyer',accountType:'PERSONAL',currencies:['EUR']},key());
+ buyer={id:'customer-basket',customerUserId:customer.userId};other={id:'other',customerUserId:issuer.userId};
+ stock=await core.networkAccount(db,'USER','ETH','ETHEREUM','CRYPTO',issuer.userId);proceeds=issuer.accounts[0].accountId;
+ await db.query("INSERT INTO avis_core_v2.crypto_assets(asset_id,currency_code,name,source) VALUES('basket-eth','ETH','Ethereum','TEST') ON CONFLICT(currency_code) DO NOTHING");
+ const asset=(await db.query("SELECT asset_id FROM avis_core_v2.crypto_assets WHERE currency_code='ETH'")).rows[0].asset_id;
+ await db.query("INSERT INTO avis_core_v2.crypto_asset_networks(asset_id,network,decimals,approved,verified_at) VALUES($1,'ETHEREUM',18,true,now()) ON CONFLICT(asset_id,network) DO UPDATE SET approved=true,verified_at=now(),decimals=18",[asset]);
+ await core.post(db,admin,key(),'FIXTURE_CASH','test',[entry(await core.system(db,'CORRESPONDENT_NOSTRO','EUR','TEST','ASSET'),'DEBIT','500'),entry(customer.accounts[0].accountId,'CREDIT','500')]);
+ const backing=await core.networkAccount(db,'HOT_WALLET','ETH','ETHEREUM','TEST');
+ deposit=await core.post(db,admin,key(),'WALLET_DEPOSIT','confirmed test receipt',[entry(backing,'DEBIT','1'),entry(stock,'CREDIT','1')]);
+ await db.query("INSERT INTO avis_core_v2.crypto_sale_offers(offer_id,stock_account_id,proceeds_account_id,unit_price) VALUES($1,$2,$3,100)",[key(),stock,proceeds]);
+ const result=await db.query("INSERT INTO avis_core_v2.user_deposit_addresses(user_id,network,public_address,is_primary) VALUES($1,'ETHEREUM',$2,false) RETURNING address_id",[issuer.userId,'0x'+'a'.repeat(40)]);
+ address=result.rows[0].address_id;
+ const tx='0x'+'a'.repeat(64),hash='0x'+'b'.repeat(64);
+ await db.query("INSERT INTO avis_core_v2.onchain_transactions(user_id,journal_id,tx_type,network,tx_hash,event_index,from_address,to_address,currency_code,amount,status,block_timestamp) VALUES($1,$2,'WALLET_DEPOSIT','ETHEREUM',$3,0,'sender','receiver','ETH',1,'CONFIRMED',now())",[issuer.userId,deposit,tx]);
+ await db.query(`INSERT INTO avis_core_v2.crypto_wallet_deposits(user_id,account_id,address_id,asset_id,network,tx_hash,asset_key,currency_code,wallet_scope,decimals,amount,block_number,block_hash,finalized_block_number,finalized_block_hash,confirmations,receipt_digest,event_proofs,journal_id)
+ VALUES($1,$2,$3,$4,'ETHEREUM',$5,'NATIVE','ETH','FUNDING',18,1,1,$6,20,$6,20,$7,'[{}]'::jsonb,$8)`,[issuer.userId,stock,address,asset,tx,hash,'a'.repeat(64),deposit]);
+});
+after(async()=>{await db?.close();});
+test('exact acquisition cost and markup round up to the settlement cent',()=>{
+ assert.deepEqual(priceBasket({quantity:'0.35',lotQuantity:'1',lotCost:'10000',markup:500,cardBps:200,fixedMinor:30}),{costMinor:'3500',markupMinor:'175',collectionCostMinor:'106',totalMinor:'3781',total:'37.81'});
+});
+test('unpriced external inventory and incomplete receipts produce no payable quote; only admins may configure cost',async()=>{
+ const {token}=await engine.start(buyer);const inquiry=await order(token);assert.equal(inquiry.status,'SOURCING');
+ await assert.rejects(order(token,'WIRE'),/BASKET_METHOD/);
+ await assert.rejects(engine.registerLot(buyer,{},key()),/FORBIDDEN/);
+ await assert.rejects(engine.setPolicy(buyer,{markupBps:9000,participationBps:9000},key()),/FORBIDDEN/);
+ await assert.rejects(engine.registerLot(admin,{journalId:key(),fiat:'EUR',cost:'100.00',gasCost:'0.00',providerReference:'test'},key()),/BASKET_COST/);
+ await assert.rejects(order(token,'CARD'),/BASKET_CARD/);
+ const result=await engine.registerLot(admin,{journalId:deposit,fiat:'EUR',cost:'100.00',gasCost:'0.00',providerReference:'provider-order-1'},key());offer=result.id;
+ await engine.setPolicy(admin,{markupBps:500,participationBps:2500},key());
+ const quote=await engine.quote(token,{requestKey:inquiry.requestKey,asset:'ETH',network:'ETHEREUM',quantity:'0.2',fiat:'EUR',method:'ACCOUNT'});assert.equal(quote.id,inquiry.id);assert.equal(quote.total,'21.00');assert.equal(quote.markupBps,undefined);
+ await assert.rejects(engine.confirmAccount(other,{id:quote.id,total:'21.00'}),/BASKET_ORDER/);
+ const paid=await engine.confirmAccount(buyer,{id:quote.id,total:'21.00'});assert.equal(paid.status,'PAID');
+ assert.equal((await engine.confirmAccount(buyer,{id:quote.id,total:'21.00'})).journalId,paid.journalId);
+ assert.equal(Number((await db.query('SELECT remaining FROM avis_core_v2.crypto_basket_lots WHERE offer_id=$1',[offer])).rows[0].remaining),0.8);
+ assert.equal((await order(token,'ACCOUNT','0.9')).status,'SOURCING');
+ assert.equal((await db.query('SELECT count(*)::int AS n FROM avis_core_v2.wallet_trading_delegations')).rows[0].n,0);
+});
+test('card funds a reserved wallet delivery exactly once, independent of a browser return',async()=>{
+ await engine.setCard(admin,{fiat:'EUR',approvalReference:'test-only approved merchant',feeBps:100,fixedMinor:0},key());
+ const {token}=await engine.start(buyer),r=await order(token,'CARD');
+ await assert.rejects(engine.card((await engine.start(other)).token,r.id),/BASKET_ORDER/);
+ assert.match((await engine.card(token,r.id)).checkoutUrl,/checkout\.stripe\.com/);
+ const read=async()=>(await db.query('SELECT * FROM avis_core_v2.crypto_basket_orders WHERE order_id=$1',[r.id])).rows[0];
+ assert.equal((await read()).settlement_journal,null);
+ const event={id:'evt_cardbasket1',type:'checkout.session.completed',livemode:false,data:{object:{...session,payment_status:'paid',payment_intent:'pi_basket1'}}};
+ await assert.rejects(engine.event({...event,data:{object:{...event.data.object,amount_total:1}}}),/STRIPE_EVENT_MISMATCH/);
+ await engine.event(event);assert.equal((await read()).status,'PAID');const journal=(await read()).settlement_journal;
+ assert.equal((await engine.event(event)).duplicate,true);assert.equal((await read()).settlement_journal,journal);
+ await engine.event({id:'evt_dispute1',type:'charge.dispute.created',livemode:false,data:{object:{payment_intent:'pi_basket1'}}});assert.equal((await read()).status,'REVIEW');
+});
+
+test('an expired Stripe session releases only its reserved quantity and permits another sale',async()=>{
+ const {token}=await engine.start(buyer),r=await order(token,'CARD','0.1');
+ const original=stripe.fetcher;stripe.fetcher=async(url,options)=>{const response=await original(url,options);session.id='cs_test_Expired456';return response;};
+ try{await engine.card(token,r.id);const before=(await db.query('SELECT remaining FROM avis_core_v2.crypto_basket_lots WHERE offer_id=$1',[offer])).rows[0].remaining;
+  const expired={id:'evt_closed456',type:'checkout.session.expired',livemode:false,data:{object:{...session,payment_status:'unpaid'}}};
+  await engine.event(expired);await engine.event(expired);
+  const after=(await db.query('SELECT remaining FROM avis_core_v2.crypto_basket_lots WHERE offer_id=$1',[offer])).rows[0].remaining;
+  assert.equal((Number(after)-Number(before)).toFixed(1),'0.1');assert.equal((await engine.orderForBuyer(buyer,r.id)).status,'EXPIRED');
+ }finally{stripe.fetcher=original;}
+});
+test('a wire delivers crypto only after the matched ISO 20022 transfer is credited to the designated proceeds account',async()=>{
+ const {buildPacs008,buildPacs002}=await import('../src/iso20022.mjs');
+ const acct=(await db.query('SELECT abiq_iban FROM avis_core_v2.abiq_routing_bridge WHERE ledger_account_id=$1',[proceeds])).rows[0];
+ const cash=await core.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Wire test',bic:'TESTGB2LXXX',accountNumber:'TEST-123',currency:'EUR'},key());
+ const profile=await core.registerBankConnector(admin,{profileId:'CRYPTO_WIRE_TEST',name:'Wire test',cashAccountId:cash.id,protocol:'SWIFT_ISO20022',localBic:'TESTDEFFXXX',peerBic:'TESTGB2LXXX',endpoint:'https://bank.invalid/iso20022',credentialReference:'AVIS_CONNECTOR_FIXTURE'},key());
+ const account='DE89370400440532013000';
+ await core.linkBankAccount(admin,{abiqIban:acct.abiq_iban,currency:'EUR',bankRoute:{accountType:'IBAN',accountNumber:account,country:'DE',bic:'TESTDEFFXXX',connectorCode:profile.id,providerAccountId:'wire-test',providerReference:'test-reference'}},key());
+ const {token}=await engine.start(buyer),quoted=await order(token,'WIRE','0.05'),reserved=await engine.transfer(token,quoted.id);
+ assert.equal(reserved.status,'AWAITING_TRANSFER');assert.equal(reserved.transfer.account,account);
+ const reference=quoted.id.replaceAll('-','').toUpperCase(),uetr=key();
+ const message={messageId:'basket-wire-1',uetr,endToEndId:reference,amount:quoted.total,currency:'EUR',senderBic:'TESTGB2LXXX',receiverBic:'TESTDEFFXXX',debtorName:'Buyer',debtorIban:'GB82WEST12345698765432',creditorName:'AVISPay PLC',creditorIban:account,reference};
+ await core.receive(profile.id,await buildPacs008(message));await engine.recoverTransfers();
+ assert.equal((await engine.orderForBuyer(buyer,quoted.id)).status,'AWAITING_TRANSFER');
+ await core.receive(profile.id,await buildPacs002({...message,messageId:'basket-wire-2',status:'ACCC',bankReference:'WIRE-SETTLED'}));
+ await engine.recoverTransfers();await engine.recoverTransfers();
+ const r=(await db.query('SELECT * FROM avis_core_v2.crypto_basket_orders WHERE order_id=$1',[quoted.id])).rows[0];
+ assert.equal(r.status,'PAID');assert.ok(r.funding_journal);
+ assert.equal((await db.query('SELECT count(*)::int n FROM avis_core_v2.ledger_entries WHERE journal_id=$1',[r.settlement_journal])).rows[0].n,2);
+});
+test('POS acceptance applies to a particular network and only the owner can authorize a purchase with that wallet',async()=>{
+ const asset=(await db.query("SELECT asset_id FROM avis_core_v2.crypto_assets WHERE currency_code='AG'")).rows[0];
+ await db.query("UPDATE avis_core_v2.crypto_asset_networks SET approved=true,verified_at=now(),decimals=18 WHERE asset_id=$1 AND network='ETHEREUM'",[asset.asset_id]);
+ await assert.rejects(engine.tender.configure(buyer,{assetId:asset.asset_id,network:'ETHEREUM',accepted:true},key()),/FORBIDDEN/);
+ await engine.tender.configure(admin,{assetId:asset.asset_id,network:'ETHEREUM',accepted:true},key());
+ const source=await core.networkAccount(db,'USER','AG','ETHEREUM','CRYPTO',buyer.customerUserId);
+ const supply=await core.networkAccount(db,'HOT_WALLET','AG','ETHEREUM','TEST_AG');
+ await core.post(db,admin,key(),'FIXTURE_AG','test',[entry(supply,'DEBIT','100'),entry(source,'CREDIT','100')]);
+ const company=await core.networkAccount(db,'USER','AG','ETHEREUM','CRYPTO','1');
+ await db.query('INSERT INTO avis_core_v2.crypto_sale_offers(offer_id,stock_account_id,proceeds_account_id,unit_price) VALUES($1,$2,$3,1)',[key(),company,proceeds]);
+ const {token}=await engine.start(buyer);assert.equal((await engine.state(token)).wallets.some(w=>w.id===source),true);
+ const input={requestKey:key(),asset:'ETH',network:'ETHEREUM',quantity:'0.01',fiat:'EUR',method:'CRYPTO',walletId:source};
+ const quote=await engine.quote(token,input);assert.equal(quote.pay.asset,'AG');assert.ok(quote.fee);assert.ok(quote.principal);
+ await engine.tender.configure(admin,{assetId:asset.asset_id,network:'ETHEREUM',accepted:false},key());
+ await assert.rejects(engine.confirmAccount(buyer,{id:quote.id,total:quote.total,quantity:quote.pay.quantity,walletId:source}),/BASKET_WALLET/);
+ await engine.tender.configure(admin,{assetId:asset.asset_id,network:'ETHEREUM',accepted:true},key());
+ const paid=await engine.confirmAccount(buyer,{id:quote.id,total:quote.total,quantity:quote.pay.quantity,walletId:source});assert.equal(paid.status,'PAID');
+});
+test('MetaMask quotes identify the token by network and contract, cache briefly, and show gas once in one fee',async()=>{
+ const {MetaMaskPricing,metaAsset}=await import('../src/metamask-pricing.mjs'),{breakdown}=await import('../src/checkout-crypto-tender.mjs');
+ for(const [network,id] of Object.entries({BSC:'eip155:56/slip44:714',POLYGON:'eip155:137/slip44:966',AVALANCHE:'eip155:43114/slip44:9005',GNOSIS:'eip155:100/slip44:700',TRON:'tron:728126428/slip44:195'}))assert.equal(metaAsset(network),id);
+ assert.equal(metaAsset('ETHEREUM','invalid'),null);
+ let calls=0,t=1000;const pricing=new MetaMaskPricing({now:()=>t,fetcher:async url=>{calls++;assert.equal(url.origin,'https://price.api.cx.metamask.io');const id=url.searchParams.get('assetIds');return Response.json({[id]:{eur:100}});}});
+ const first=await pricing.spot({network:'ETHEREUM'},'EUR');assert.equal(first.assetId,'eip155:1/slip44:60');await pricing.spot({network:'ETHEREUM'},'EUR');assert.equal(calls,1);t+=11000;await pricing.spot({network:'ETHEREUM'},'EUR');assert.equal(calls,2);
+ const b=breakdown('1','1','10300','300','100',1000,0,0);assert.equal(b.principal,'100.00');assert.equal(b.fee,'13.30');assert.equal(b.total,'113.30');
+});
+test('the displayed fee uses the selected method and agrees with the binding treasury quote',async()=>{
+ const {token}=await engine.start(buyer),input={asset:'ETH',network:'ETHEREUM',quantity:'0.01',fiat:'EUR'};
+ for(const method of ['ACCOUNT','CARD']){
+  const {preview}=await engine.market(token,{...input,method});
+  const quote=await engine.quote(token,{...input,method,requestKey:key()});
+  assert.equal(preview.fee,quote.fee);assert.equal(preview.total,quote.total);
+ }
+});
+test('a storefront invoice is priced by the issuing store and cannot be marked paid before wallet authorization',async()=>{
+ const {StoreWallet}=await import('../src/checkout-store-wallet.mjs'),{createHash}=await import('node:crypto');
+ const invoice={id:key(),ref:'store-order-test',kind:'RETAIL',title:'Basket',fiat:'EUR',amountMinor:'125',expiresAt:new Date(Date.now()+3600000).toISOString()};
+ const secret='9'.repeat(64),lookup=createHash('sha256').update(secret).digest('hex'),store=new StoreWallet(engine,{fetcher:async url=>Response.json(url.endsWith('terms')?invoice:{paid:true})});
+ const {token}=await engine.start(buyer),claim={id:invoice.id,secret},session=await store.claim(token,claim),wallet=session.wallets.find(w=>w.asset==='AG');
+ assert.ok(wallet);const quote=await store.quote(token,{...claim,amountMinor:'1',walletId:wallet.id});assert.equal(quote.principal,'1.25');assert.equal(quote.fee,'0.07');assert.equal(quote.total,'1.32');
+ assert.equal((await store.receipt({id:invoice.id,lookup})).paid,false);
+ const request={id:invoice.id,total:quote.total,quantity:quote.pay.quantity,walletId:wallet.id};
+ await assert.rejects(store.confirm(other,request),/BASKET_ORDER/);await assert.rejects(store.confirm(buyer,{...request,quantity:'0.01'}),/BASKET_REVIEW/);
+ await store.confirm(buyer,request);const paid=await store.receipt({id:invoice.id,lookup});assert.equal(paid.paid,true);assert.equal(paid.amountMinor,'125');
+ await store.confirm(buyer,request);assert.equal((await store.receipt({id:invoice.id,lookup})).journal,paid.journal);
+});

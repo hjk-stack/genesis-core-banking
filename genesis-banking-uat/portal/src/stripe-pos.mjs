@@ -155,7 +155,10 @@ export class StripeWebPos {
    await client.query('COMMIT');return {received:true,paymentId:row.payment_id,status:next};
   }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
  }
- async receiveWebhook(raw,signature){return this.applyEvent(verifyStripePosEvent(raw,signature,this.env.STRIPE_WEBHOOK_SECRET,{now:this.now}));}
+ async receiveWebhook(raw,signature,other){
+  const event=verifyStripePosEvent(raw,signature,this.env.STRIPE_WEBHOOK_SECRET,{now:this.now});
+  const result=await this.applyEvent(event);return result.ignored&&other?other(event):result;
+ }
  async status(actor,sessionId){
   requireAdministrator(actor);
   if(typeof sessionId!=='string'||!/^cs_(live|test)_[A-Za-z0-9]+$/.test(sessionId))fault('INVALID_FIELD','sessionId');
