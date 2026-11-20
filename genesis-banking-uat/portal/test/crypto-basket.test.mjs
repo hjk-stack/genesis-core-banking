@@ -119,7 +119,7 @@ test('POS acceptance applies to a particular network and only the owner can auth
 });
 test('MetaMask quotes identify the token by network and contract, cache briefly, and show gas once in one fee',async()=>{
  const {MetaMaskPricing}=await import('../src/metamask-pricing.mjs'),{breakdown}=await import('../src/checkout-crypto-tender.mjs');
- let calls=0,t=1000;const pricing=new MetaMaskPricing({now:()=>t,fetcher:async url=>{calls++;assert.equal(url.origin,'https://price.api.cx.metamask.io');const id=url.searchParams.get('assetIds');return Response.json({[id]:{price:100}});}});
+ let calls=0,t=1000;const pricing=new MetaMaskPricing({now:()=>t,fetcher:async url=>{calls++;assert.equal(url.origin,'https://price.api.cx.metamask.io');const id=url.searchParams.get('assetIds');return Response.json({[id]:{eur:100}});}});
  const first=await pricing.spot({network:'ETHEREUM'},'EUR');assert.equal(first.assetId,'eip155:1/slip44:60');await pricing.spot({network:'ETHEREUM'},'EUR');assert.equal(calls,1);t+=11000;await pricing.spot({network:'ETHEREUM'},'EUR');assert.equal(calls,2);
  const b=breakdown('1','1','10300','300','100',1000,0,0);assert.equal(b.principal,'100.00');assert.equal(b.fee,'13.30');assert.equal(b.total,'113.30');
 });

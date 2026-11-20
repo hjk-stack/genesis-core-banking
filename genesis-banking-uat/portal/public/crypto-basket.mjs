@@ -59,10 +59,11 @@ export async function resumeBasketAuthorization(api,container){
 export async function openCheckoutManagement(api){
  document.querySelector('[data-checkout-management]')?.remove();
  const d=document.createElement('dialog');d.dataset.checkoutManagement='';d.className='checkout-management';
- d.innerHTML='<header><h2>Checkout management</h2><button aria-label="Close" type="button">×</button></header><label>Find a currency or network<input type="search"></label><div data-list></div><h3>MetaMask pricing</h3><form><label>Currency and blockchain<select name="asset" required></select></label><label>Fiat<select name="fiat"><option>EUR</option><option>USD</option><option>GBP</option><option>CHF</option></select></label><label>Purchase budget<input name="budget" type="number" min=".01" step=".01"></label><button>Refresh price and gas</button></form><output aria-live="polite"></output>';
+ d.innerHTML='<header><h2>Checkout management</h2><button aria-label="Close" type="button">×</button></header><label>Find a currency or network<input type="search"></label><div data-list></div><h3>MetaMask pricing</h3><form><label>Currency and blockchain<select name="asset" required></select></label><label>Fiat<select name="fiat"><option>EUR</option><option>USD</option><option>GBP</option><option>CHF</option></select></label><label>Purchase budget<input name="budget" type="number" min=".01" step=".01"></label><button>Refresh price and gas</button></form><details><summary>Treasury supplier settings</summary><form data-procurement><label>MetaMask purchasing region<input name="region" required placeholder="Country or region code"></label><label>MetaMask payment method ID<input name="payment" required></label><button>Save supplier settings</button></form></details><output aria-live="polite"></output>';
  document.body.append(d);d.querySelector('header button').onclick=()=>d.close();d.addEventListener('close',()=>d.remove(),{once:true});d.showModal();
  const out=d.querySelector('output'),list=d.querySelector('[data-list]'),filter=d.querySelector('input[type=search]'),form=d.querySelector('form');
- try{const {rows}=await api('views/checkouttenders');if(!d.isConnected)return;
+ try{const [{rows},settings]=await Promise.all([api('views/checkouttenders'),api('views/cryptobasketpolicy')]);if(!d.isConnected)return;
+  const route=d.querySelector('[data-procurement]');if(route){const current=settings.rows?.[0];route.elements.region.value=current?.procurement_region||'';route.elements.payment.value=current?.procurement_method||'';route.onsubmit=async e=>{e.preventDefault();try{await api('crypto/basket/procurement',Object.fromEntries(new FormData(route)));out.textContent='MetaMask supplier settings saved.';}catch(err){out.textContent=err.message;}};}
   const draw=()=>{const match=filter.value.toLowerCase().trim();list.replaceChildren();
    for(const row of rows.filter(r=>(r.name+' '+r.asset+' '+r.network).toLowerCase().includes(match))){
     const label=document.createElement('label'),box=document.createElement('input');box.type='checkbox';box.checked=row.accepted;label.append(box,document.createTextNode(row.name+' ('+row.asset+') · '+row.network));list.append(label);
@@ -74,8 +75,8 @@ export async function openCheckoutManagement(api){
    try{const market=await api('crypto/basket/price',{asset:row.asset,network:row.network,fiat:form.elements.fiat.value,budget:form.elements.budget.value});
     const value=Number(market.rate).toLocaleString(undefined,{maximumSignificantDigits:12});
     out.textContent=market.source+' · '+value+' '+market.fiat+' per '+market.asset+' · '+new Date(market.observedAt).toLocaleTimeString()+
-     (market.gas?' · Network estimate '+Number(market.gas.maxGwei)+' gwei per gas':'')+
-     (market.supplier?' · '+market.supplier.provider+' quote '+(Number(market.supplier.totalMinor)/100).toFixed(2)+' '+market.fiat+' including '+(Number(market.supplier.gasMinor)/100).toFixed(2)+' in gas':'');
+     (market.gas?' · '+market.gas.source+' estimate '+Number(market.gas.maxGwei)+' gwei per gas':'')+
+     (market.supplier?' · '+market.supplier.provider+' quote '+(Number(market.supplier.totalMinor)/100).toFixed(2)+' '+market.fiat+' including '+(Number(market.supplier.gasMinor)/100).toFixed(2)+' in gas':market.supplierStatus?' · '+market.supplierStatus:'');
    }catch(err){out.textContent=err.message;}finally{button.disabled=false;}
   };
  }catch(err){out.textContent=err.message;}

@@ -16,7 +16,7 @@ export function metaAsset(network,contract){
 const positive=value=>{const s=typeof value==='number'&&Number.isFinite(value)?value.toLocaleString('en-US',{useGrouping:false,maximumFractionDigits:18}):String(value??'');try{return decimal(money(s));}catch{return null;}};
 const cents=s=>{const n=positive(s);if(n)return (money(n)*100n+U-1n)/U;if(Number(s)===0&&s!==null&&s!==undefined&&s!=='')return 0n;return null;};
 export class MetaMaskPricing {
- constructor({fetcher=fetch,env=process.env,now=Date.now}={}){this.fetcher=fetcher;this.env=env;this.now=now;this.cache=new Map();}
+ constructor({fetcher=fetch,env=process.env,now=Date.now,rpcFees}={}){this.rpcFees=rpcFees;this.fetcher=fetcher;this.env=env;this.now=now;this.cache=new Map();}
  async read(url,headers={}){
   let response;try{response=await this.fetcher(url,{headers:{accept:'application/json',...headers},redirect:'error',signal:AbortSignal.timeout(6500)});if(!response.ok)throw Error('quote service');return await response.json();}catch{fault('METAMASK_PRICE','asset',503);}
  }
@@ -25,21 +25,23 @@ export class MetaMaskPricing {
   const currency=fiat.toLowerCase(),key=assetId+'|'+currency,saved=this.cache.get(key);
   if(saved&&this.now()-saved.observedAt<10000)return saved;
   const url=new URL(spotUrl);url.search=new URLSearchParams({assetIds:assetId,vsCurrency:currency,includeMarketData:'false'}).toString();
-  const body=await this.read(url,{'X-Client-Id':'avispay-checkout'}),rate=positive(body[assetId]?.price);
+  const body=await this.read(url,{'X-Client-Id':'avispay-checkout'}),rate=positive(body[assetId]?.[currency]??body[assetId]?.price);
   if(!rate)fault('METAMASK_PRICE','asset',503);
   const value={assetId,rate,observedAt:this.now(),source:'MetaMask'};if(this.cache.size>512)this.cache.clear();this.cache.set(key,value);return value;
  }
  async networkGas(network){
   const chain=NETWORKS[network];if(chain?.kind!=='EVM')return null;
   const key='gas:'+chain.chainId,prior=this.cache.get(key);if(prior&&this.now()-prior.observedAt<10000)return prior;
-  const result=await this.read(new URL('https://gas.api.cx.metamask.io/networks/'+chain.chainId+'/suggestedGasFees'),{'X-Client-Id':'avispay-checkout'});
+  let result;try{result=await this.read(new URL('https://gas.api.cx.metamask.io/networks/'+chain.chainId+'/suggestedGasFees'),{'X-Client-Id':'avispay-checkout'});}
+  catch(error){if(!this.rpcFees)throw error;const fee=await this.rpcFees(network);const max=fee.maxFeePerGas||fee.gasPrice;if(!max)throw error;
+   const live={maxGwei:decimal(max,9),baseGwei:null,source:'Blockchain RPC',unit:'gwei',observedAt:this.now()};this.cache.set(key,live);return live;}
   const maxGwei=positive(result.medium?.suggestedMaxFeePerGas),baseGwei=positive(result.estimatedBaseFee);
-  if(!maxGwei)return null;const value={maxGwei,baseGwei,unit:'gwei',observedAt:this.now()};this.cache.set(key,value);return value;
+  if(!maxGwei)return null;const value={maxGwei,baseGwei,source:'MetaMask Gas API',unit:'gwei',observedAt:this.now()};this.cache.set(key,value);return value;
  }
- async acquisition({assetId,fiat,budget,address}){
-  if(!this.env.AVIS_METAMASK_RAMPS_REGION||!address||!this.env.AVIS_METAMASK_RAMPS_PAYMENT_METHOD)return null;
+ async acquisition({assetId,fiat,budget,address,region=this.env.AVIS_METAMASK_RAMPS_REGION,payment=this.env.AVIS_METAMASK_RAMPS_PAYMENT_METHOD}){
+  if(!region||!address||!payment)return null;
   const url=new URL('https://on-ramp.api.cx.metamask.io/v2/quotes');
-  url.search=new URLSearchParams({action:'buy',context:'avispay-checkout',region:this.env.AVIS_METAMASK_RAMPS_REGION,fiat:fiat.toLowerCase(),crypto:assetId,amount:budget,walletAddress:address,payments:this.env.AVIS_METAMASK_RAMPS_PAYMENT_METHOD}).toString();
+  url.search=new URLSearchParams({action:'buy',context:'avispay-checkout',region,fiat:fiat.toLowerCase(),crypto:assetId,amount:budget,walletAddress:address,payments:payment}).toString();
   const data=await this.read(url,this.env.AVIS_METAMASK_RAMPS_TOKEN?{authorization:'Bearer '+this.env.AVIS_METAMASK_RAMPS_TOKEN}:{});
   const quotes=(data.success||[]).map(r=>({provider:r.provider,quantity:positive(r.quote?.amountOut),gross:cents(r.quote?.amountIn),gas:cents(r.quote?.networkFee),fees:cents(r.quote?.totalFees)}))
    .filter(r=>r.quantity&&r.gross>0n&&r.gas!==null&&r.fees!==null&&r.gas<=r.fees&&r.fees<r.gross);

@@ -25,6 +25,11 @@ export class CheckoutTender {
    const value=(await db.query(`SELECT o.unit_price::text FROM avis_core_v2.crypto_sale_offers o JOIN avis_core_v2.ledger_accounts stock ON stock.account_id=o.stock_account_id
     JOIN avis_core_v2.holder_identities h ON h.record_user_id=stock.user_id AND h.account_role='INSTITUTION'
     JOIN avis_core_v2.ledger_accounts p ON p.account_id=o.proceeds_account_id WHERE o.is_active AND stock.currency_code=$1 AND stock.network=$2 AND p.currency_code=$3 ORDER BY o.created_at DESC LIMIT 1`,[asset.asset,asset.network,fiat])).rows[0];
+   if(!value&&asset.asset==='AG'){
+    const rows=(await db.query("SELECT currency_code,units_per_eur::text,source_date FROM avis_core_v2.fx_reference_rates WHERE currency_code=ANY($1::text[]) AND source_date>=current_date-7",[['USD',fiat]])).rows;
+    const usd=rows.find(r=>r.currency_code==='USD'),target=rows.find(r=>r.currency_code===fiat);
+    if(usd&&(target||fiat==='EUR')&&(!target||String(usd.source_date)===String(target.source_date)))return {rate:decimal((target?money(target.units_per_eur):unit)*unit/money(usd.units_per_eur)),source:'AVIS treasury / ECB',observedAt:new Date(usd.source_date).getTime()};
+   }
    if(!value)fault('BASKET_PRICE','wallet');return {rate:value.unit_price,source:'AVIS treasury',observedAt:Date.now()};
   }
   return this.pricing.spot(asset,fiat);

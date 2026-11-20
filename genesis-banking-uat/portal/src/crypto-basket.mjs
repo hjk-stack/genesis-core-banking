@@ -47,7 +47,7 @@ const offerSql=`SELECT o.offer_id,o.stock_account_id,o.proceeds_account_id,o.uni
  (SELECT 1 FROM avis_core_v2.crypto_wallet_deposits d WHERE d.journal_id=l.deposit_journal AND d.reorg_detected_at IS NOT NULL)
  AND NOT EXISTS (SELECT 1 FROM avis_core_v2.ledger_journals j WHERE j.reverses_journal_id=l.deposit_journal)))`;
 export class CryptoBasket {
- constructor(core,stripe,{pricing=new MetaMaskPricing({env:core.secretEnv||process.env})}={}){this.core=core;this.pool=core.pool;this.stripe=stripe;this.pricing=pricing;this.tender=new CheckoutTender(core,pricing);}
+ constructor(core,stripe,{pricing=new MetaMaskPricing({env:core.secretEnv||process.env,rpcFees:network=>core.chain.provider(network).getFeeData()})}={}){this.core=core;this.pool=core.pool;this.stripe=stripe;this.pricing=pricing;this.tender=new CheckoutTender(core,pricing);}
  async transaction(fn){const db=await this.pool.connect();try{await db.query('BEGIN');const result=await fn(db);await db.query('COMMIT');return result;}catch(e){await db.query('ROLLBACK');throw e;}finally{db.release();}}
  async buyer(db,actor){if(!actor?.id)fault('UNAUTHORIZED',null,401);
   if(actor.customerUserId)return String(actor.identityUserId||actor.customerUserId);
@@ -62,7 +62,7 @@ export class CryptoBasket {
   const row=(await db.query('SELECT * FROM '+S+'crypto_basket_sessions WHERE token_hash=$1 AND expires_at>now()',[digest(token)])).rows[0];
   if(!row)reject('BASKET_SESSION',null,401);return row;}
  async policy(actor){admin(actor);const db=this.pool;
-  const policy=(await db.query('SELECT markup_bps,participation_bps FROM '+S+'crypto_basket_policy')).rows[0];
+  const policy=(await db.query('SELECT markup_bps,participation_bps,procurement_region,procurement_method FROM '+S+'crypto_basket_policy')).rows[0];
   const requests=(await db.query("SELECT order_id,status,asset,network,quantity::text,created_at FROM avis_core_v2.crypto_basket_orders WHERE status IN ('SOURCING','REVIEW') ORDER BY created_at DESC LIMIT 40")).rows;
   const receipts=(await db.query(`SELECT DISTINCT j.journal_id,s.currency_code,s.network,t.tx_hash,e.amount::text,j.created_at
    FROM avis_core_v2.onchain_transactions t JOIN avis_core_v2.ledger_journals j ON j.journal_id=t.journal_id
@@ -110,21 +110,36 @@ export class CryptoBasket {
    await db.query('INSERT INTO '+S+'crypto_basket_lots(offer_id,deposit_journal,provider_reference,cost_minor,quantity,remaining,registered_by,gas_minor) VALUES($1,$2,$3,$4,$5,$5,$6,$7)',[id,input.journalId,ref,String(cost),r.amount,actor.id,String(gas)]);
    return {id,asset:r.currency_code,quantity:r.amount};});
  }
+ async procurement(actor,input,key){
+  admin(actor);const region=String(input.region||'').toLowerCase().trim(),method=String(input.payment||'').trim();
+  if(!/^[a-z]{2}(?:-[a-z0-9]{1,4})?$/.test(region)||!/^[/a-zA-Z0-9_-]{1,100}$/.test(method))fault('INVALID_FIELD','region');
+  return this.core.operation(actor,'CHECKOUT_METAMASK_ROUTE',{region,method},key,async db=>{await db.query('UPDATE '+S+'crypto_basket_policy SET procurement_region=$1,procurement_method=$2,updated_by=$3,updated_at=now()',[region,method,actor.id]);return {region,method};});
+ }
  async market(token,input,adminActor=null){
   if(adminActor)admin(adminActor);else await this.session(this.pool,token);
   if(!currencies.has(input.fiat))fault('INVALID_FIELD','fiat');
   const asset=(await this.pool.query(`SELECT a.currency_code AS asset,n.* FROM avis_core_v2.crypto_assets a JOIN avis_core_v2.crypto_asset_networks n USING(asset_id) WHERE a.currency_code=$1 AND n.network=$2 AND n.approved AND n.verified_at IS NOT NULL`,[input.asset,input.network])).rows[0];
   if(!asset)fault('CRYPTO_APPROVAL_REQUIRED','asset');const price=await this.tender.rate(this.pool,asset,input.fiat);
   const gas=adminActor?await this.pricing.networkGas(asset.network).catch(()=>null):null;
-  let supplier=null;
-  if(adminActor&&input.budget&&price.assetId){
-   money(input.budget,2);
-   const address=(await this.pool.query(`SELECT a.public_address FROM avis_core_v2.crypto_asset_wallet_routes r JOIN avis_core_v2.user_deposit_addresses a USING(address_id)
-    JOIN avis_core_v2.holder_identities h ON h.record_user_id=r.user_id AND h.account_role='INSTITUTION'
-    WHERE r.asset_id=$1 AND r.network=$2 ORDER BY a.address_id LIMIT 1`,[asset.asset_id,asset.network])).rows[0]?.public_address;
-   supplier=await this.pricing.acquisition({assetId:price.assetId,fiat:input.fiat,budget:input.budget,address});
+  const policy=(await this.pool.query('SELECT * FROM '+S+'crypto_basket_policy')).rows[0];
+  const card=(await this.pool.query('SELECT fee_bps,fixed_minor FROM '+S+'crypto_basket_card_terms WHERE fiat=$1',[input.fiat])).rows[0];
+  let supplier=null,preview=null,budget=input.budget||'',quantity=input.quantity||'',supplierStatus=null;
+  if(quantity){const q=money(quantity);if(!budget)budget=decimal(ceil(q*money(price.rate)*100n,unit*unit),2);
+   const lot=(await this.pool.query(offerSql+' AND s.currency_code=$1 AND s.network=$2 AND p.currency_code=$3 AND l.gas_minor IS NOT NULL AND l.remaining >= $4 AND s.available_balance-s.locked_balance >= $4 ORDER BY o.created_at LIMIT 1',[asset.asset,asset.network,input.fiat,quantity])).rows[0];
+   if(lot&&policy.markup_bps>0)preview=breakdown(quantity,lot.lot_quantity,lot.cost_minor,lot.gas_minor,price.rate,policy.markup_bps,card?.fee_bps||0,card?.fixed_minor||0);
   }
-  return {asset:asset.asset,network:asset.network,fiat:input.fiat,...price,gas,supplier};
+  if(budget&&price.assetId&&(adminActor||!preview)){
+   money(budget,2);
+   const address=(await this.pool.query(`SELECT COALESCE(specific.public_address,main.public_address) AS public_address
+    FROM avis_core_v2.sovereign_users u LEFT JOIN avis_core_v2.crypto_asset_wallet_routes r ON r.user_id=u.user_id AND r.asset_id=$1 AND r.network=$2
+    LEFT JOIN avis_core_v2.user_deposit_addresses specific ON specific.address_id=r.address_id
+    LEFT JOIN avis_core_v2.user_deposit_addresses main ON main.user_id=u.user_id AND main.network=$2 AND main.is_primary
+    WHERE u.account_role='INSTITUTION' AND u.full_name='AVISPay PLC' AND u.merged_into_user_id IS NULL`,[asset.asset_id,asset.network])).rows[0]?.public_address;
+   try{supplier=await this.pricing.acquisition({assetId:price.assetId,fiat:input.fiat,budget,address,region:policy.procurement_region||undefined,payment:policy.procurement_method||undefined});}
+   catch{supplierStatus='The MetaMask supplier quote could not be refreshed.';}
+   if(!preview&&supplier&&quantity&&policy.markup_bps>0)preview=breakdown(quantity,supplier.quantity,supplier.totalMinor,supplier.gasMinor,price.rate,policy.markup_bps,card?.fee_bps||0,card?.fixed_minor||0);
+  }
+  return {asset:asset.asset,network:asset.network,fiat:input.fiat,...price,...(adminActor?{gas,supplier,supplierStatus}:{}),preview:preview?{principal:preview.principal,fee:preview.fee,total:preview.total}:null};
  }
  async state(token){
   const session=await this.session(this.pool,token);

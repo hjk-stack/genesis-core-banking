@@ -275,6 +275,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(path==='/api/crypto/basket/start')return send(res,200,await basket.start(actor));
    if(path==='/api/crypto/basket/store-confirm')return send(res,200,await storeWallet.confirm(actor,body));
    if(path==='/api/crypto/basket/tender')return send(res,200,await basket.tender.configure(actor,body,req.headers['idempotency-key']));
+   if(path==='/api/crypto/basket/procurement')return send(res,200,await basket.procurement(actor,body,req.headers['idempotency-key']));
    if(path==='/api/crypto/basket/price')return send(res,200,await basket.market(null,body,actor));
    if(path==='/api/crypto/basket/confirm')return send(res,200,await basket.confirmAccount(actor,body));
    if(path==='/api/crypto/basket/policy')return send(res,200,await basket.setPolicy(actor,body,req.headers['idempotency-key']));

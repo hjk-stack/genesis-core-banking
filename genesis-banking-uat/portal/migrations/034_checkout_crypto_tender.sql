@@ -12,3 +12,4 @@ CREATE TABLE avis_core_v2.checkout_store_payments (
  quoted_until timestamptz,journal_id uuid UNIQUE REFERENCES avis_core_v2.ledger_journals,created_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE avis_core_v2.checkout_store_payments ADD COLUMN notified_at timestamptz,ADD COLUMN notify_attempt timestamptz;
+ALTER TABLE avis_core_v2.crypto_basket_policy ADD COLUMN procurement_region text,ADD COLUMN procurement_method text;

@@ -53,7 +53,7 @@ export class StoreWallet {
  }
  async receipt(input){
   if(!uuid(input.id)||!proof(input.lookup))fault('BASKET_ORDER',null,404);
-  const r=(await this.pool.query('SELECT * FROM '+s+'checkout_store_payments WHERE invoice_id=$1 AND store_key=$2',[input.id,input.lookup])).rows[0];
+  const r=await this.basket.transaction(async db=>(await db.query('SELECT * FROM '+s+'checkout_store_payments WHERE invoice_id=$1 AND store_key=$2 FOR SHARE',[input.id,input.lookup])).rows[0]);
   if(!r?.journal_id)return {id:input.id,paid:false};return {id:r.invoice_id,paid:true,journal:r.journal_id,ref:r.terms.ref,fiat:r.terms.fiat,amountMinor:r.terms.amountMinor};
  }
  async notify(){
