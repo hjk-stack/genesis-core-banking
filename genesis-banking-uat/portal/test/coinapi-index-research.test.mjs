@@ -56,4 +56,8 @@ test('missing credentials cause no network calls; malformed configured index ids
  assert.deepEqual(await t.collector.poll(),{configured:false,indices:[]});assert.equal(t.calls.length,0);
  assert.throws(()=>configuredCoinApiIndexes({AVIS_INDEX_BENCHMARKS:'../traversal'}),/COINAPI_INDEX_IDENTIFIERS/);
  assert.deepEqual(configuredCoinApiIndexes({AVIS_INDEX_BENCHMARKS:''}),[]);
+ t.env.COINAPI_INDEXES_API_KEY='unit-secret';t.env.AVIS_INDEX_BENCHMARKS='bad/path';
+ await assert.rejects(t.collector.poll(),/COINAPI_INDEX_IDENTIFIERS/);
+ t.env.AVIS_INDEX_BENCHMARKS=ids.join(',');
+ assert.equal((await t.collector.poll()).configured,true,'configuration mistakes cannot leave research polling locked');
 });
