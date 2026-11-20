@@ -26,12 +26,13 @@ CREATE TABLE avis_core_v2.crypto_basket_orders (
  order_id uuid PRIMARY KEY, session_id uuid NOT NULL REFERENCES avis_core_v2.crypto_basket_sessions,
  buyer_id bigint NOT NULL REFERENCES avis_core_v2.sovereign_users, request_key uuid NOT NULL,
  asset varchar(25) NOT NULL, network varchar(32) NOT NULL, quantity numeric(36,18) NOT NULL CHECK(quantity>0),
- fiat varchar(3), method text NOT NULL CHECK(method IN ('ACCOUNT','CARD')),
+ fiat varchar(3), method text NOT NULL CHECK(method IN ('ACCOUNT','CARD','WIRE','INTERBANK')),
  offer_id uuid REFERENCES avis_core_v2.crypto_sale_offers, terms jsonb,
- status text NOT NULL CHECK(status IN ('SOURCING','QUOTED','RESERVED','CARD_OPEN','PAID','EXPIRED','FAILED','REVIEW')),
+ status text NOT NULL CHECK(status IN ('SOURCING','QUOTED','RESERVED','CARD_OPEN','AWAITING_TRANSFER','PAID','EXPIRED','FAILED','REVIEW')),
  expires_at timestamptz, reserved_journal uuid UNIQUE REFERENCES avis_core_v2.ledger_journals,
+ funding_journal uuid UNIQUE REFERENCES avis_core_v2.ledger_journals,
  settlement_journal uuid UNIQUE REFERENCES avis_core_v2.ledger_journals,
- stripe_session text UNIQUE, stripe_intent text UNIQUE, stripe_mode text, created_at timestamptz NOT NULL DEFAULT now(),
+ last_checked timestamptz, stripe_session text UNIQUE, stripe_intent text UNIQUE, stripe_mode text, created_at timestamptz NOT NULL DEFAULT now(),
  UNIQUE(session_id,request_key)
 );
 CREATE INDEX crypto_basket_active ON avis_core_v2.crypto_basket_orders(buyer_id,status);

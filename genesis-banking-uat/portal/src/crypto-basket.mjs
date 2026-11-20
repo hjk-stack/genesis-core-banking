@@ -1,8 +1,10 @@
+import {transferRoutesSql,transferMethod,matchTransfer} from './crypto-basket-transfer.mjs';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {decimal,fault,money,text} from './core.mjs';
 
 const S='avis_core_v2.', unit=10n**18n, bps=10000n;
 const currencies=new Set(['EUR','USD','GBP','CHF']);
+const bankTransfer=method=>method==='WIRE'||method==='INTERBANK';
 const own=asset=>asset==='AG'||asset==='AGi';
 const ceil=(n,d)=>(n+d-1n)/d;
 const digest=s=>createHash('sha256').update(s).digest('hex');
@@ -15,7 +17,7 @@ const integer=(v,max,field)=>{if(!Number.isInteger(v)||v<0||v>max)fault('INVALID
 const sameQty=(a,b)=>money(a)===money(b);
 const lines=(order,from,to)=>[entry(from,'DEBIT',order.quantity),entry(to,'CREDIT',order.quantity)];
 export const BASKET_MESSAGES={
- BASKET_SESSION:'Open Purchase crypto from your AVISPay wallet.',BASKET_ORDER:'Open the order from its AVISPay checkout.',
+ BASKET_METHOD:'Select a payment method offered for this order.',BASKET_SESSION:'Open Purchase crypto from your AVISPay wallet.',BASKET_ORDER:'Open the order from its AVISPay checkout.',
  BASKET_STOCK:'This quantity needs a new treasury quote.',BASKET_COST:'Select a confirmed treasury deposit and its MetaMask provider purchase receipt.',
  BASKET_CARD:'Select a payment method available for this currency.',BASKET_REVIEW:'Review a new quote for this purchase.',
  BASKET_SELF:'Select the purchasing customer workspace to complete this order.',BASKET_LIMIT:'Complete an existing checkout before opening another.',
@@ -60,10 +62,15 @@ export class CryptoBasket {
  async policy(actor){admin(actor);const db=this.pool;
   const policy=(await db.query('SELECT markup_bps,participation_bps FROM '+S+'crypto_basket_policy')).rows[0];
   const requests=(await db.query("SELECT order_id,asset,network,quantity::text,created_at FROM avis_core_v2.crypto_basket_orders WHERE status='SOURCING' ORDER BY created_at DESC LIMIT 40")).rows;
-  const receipts=(await db.query(`SELECT d.journal_id,d.currency_code,d.network,d.tx_hash,d.amount::text
-   FROM avis_core_v2.crypto_wallet_deposits d JOIN avis_core_v2.holder_identities h ON h.record_user_id=d.user_id
-   WHERE h.account_role='INSTITUTION' AND d.wallet_scope='FUNDING' AND d.reorg_detected_at IS NULL AND NOT EXISTS
-   (SELECT 1 FROM avis_core_v2.crypto_basket_lots l WHERE l.deposit_journal=d.journal_id) ORDER BY d.created_at DESC LIMIT 100`)).rows;
+  const receipts=(await db.query(`SELECT DISTINCT j.journal_id,s.currency_code,s.network,t.tx_hash,e.amount::text,j.created_at
+   FROM avis_core_v2.onchain_transactions t JOIN avis_core_v2.ledger_journals j ON j.journal_id=t.journal_id
+   JOIN avis_core_v2.ledger_entries e ON e.journal_id=j.journal_id AND e.direction='CREDIT'
+   JOIN avis_core_v2.ledger_accounts s ON s.account_id=e.account_id AND s.user_id=t.user_id AND s.network=t.network AND s.currency_code=t.currency_code
+   JOIN avis_core_v2.holder_identities h ON h.record_user_id=s.user_id AND h.account_role='INSTITUTION'
+   WHERE s.wallet_scope='FUNDING' AND s.currency_code NOT IN ('AG','AGi') AND t.tx_type='WALLET_DEPOSIT' AND t.status='CONFIRMED'
+   AND (s.network<>'ETHEREUM' OR EXISTS(SELECT 1 FROM avis_core_v2.crypto_wallet_deposits d WHERE d.journal_id=j.journal_id AND d.reorg_detected_at IS NULL))
+   AND NOT EXISTS(SELECT 1 FROM avis_core_v2.crypto_basket_lots l WHERE l.deposit_journal=j.journal_id)
+   AND NOT EXISTS(SELECT 1 FROM avis_core_v2.ledger_journals rev WHERE rev.reverses_journal_id=j.journal_id) ORDER BY j.created_at DESC LIMIT 100`)).rows;
   return {...policy,requests,receipts,cardCurrencies:(await db.query('SELECT fiat FROM '+S+'crypto_basket_card_terms ORDER BY fiat')).rows.map(r=>r.fiat)};
  }
  async setPolicy(actor,input,key){admin(actor);const markup=integer(input.markupBps,10000,'markupBps'),part=integer(input.participationBps,10000,'participationBps');
@@ -102,18 +109,19 @@ export class CryptoBasket {
    WHERE n.approved AND n.verified_at IS NOT NULL ORDER BY a.market_rank NULLS LAST,a.name,n.network`)).rows;
   const offers=(await this.pool.query(offerSql+' ORDER BY o.created_at')).rows;
   const card=(await this.pool.query('SELECT fiat FROM '+S+'crypto_basket_card_terms')).rows;
-  const orders=(await this.pool.query(`SELECT order_id AS id,status,asset,network,quantity::text,fiat,method,expires_at AS "expiresAt",terms->>'total' AS total FROM avis_core_v2.crypto_basket_orders
+  const routes=(await this.pool.query(transferRoutesSql)).rows;
+  const orders=(await this.pool.query(`SELECT order_id AS id,status,asset,network,quantity::text,fiat,method,request_key AS "requestKey",expires_at AS "expiresAt",terms->>'total' AS total,CASE WHEN status='AWAITING_TRANSFER' THEN terms->'bankRoute' END AS transfer FROM avis_core_v2.crypto_basket_orders
    WHERE session_id=$1 ORDER BY created_at DESC LIMIT 8`,[session.session_id])).rows;
-  return {assets,offers:offers.filter(r=>Number(r.available)>0).map(r=>({id:r.offer_id,asset:r.asset,network:r.network,fiat:r.fiat,available:r.available})),cardCurrencies:card.map(r=>r.fiat),orders};
+  return {assets,offers:offers.filter(r=>Number(r.available)>0).map(r=>({id:r.offer_id,asset:r.asset,network:r.network,fiat:r.fiat,available:r.available})),cardCurrencies:card.map(r=>r.fiat),transferMethods:routes.map(r=>({fiat:r.fiat,method:transferMethod(r.protocol)})),orders};
  }
  async quote(token,input){
-  if(!uuid(input.requestKey)||!['ACCOUNT','CARD'].includes(input.method)||!currencies.has(input.fiat))fault('INVALID_FIELD','method');
+  if(!uuid(input.requestKey)||!['ACCOUNT','CARD','WIRE','INTERBANK'].includes(input.method)||!currencies.has(input.fiat))fault('INVALID_FIELD','method');
   const qty=money(input.quantity),asset=text(input.asset,'asset',25),network=text(input.network,'network',32);
   return this.transaction(async db=>{
    const s=await this.session(db,token);
    await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['basket-buyer:'+s.buyer_id]);
    const prior=(await db.query('SELECT * FROM '+S+'crypto_basket_orders WHERE session_id=$1 AND request_key=$2',[s.session_id,input.requestKey])).rows[0];
-   if(prior){if(prior.method!==input.method||prior.fiat!==input.fiat||prior.asset!==asset||prior.network!==network||!sameQty(prior.quantity,input.quantity))fault('IDEMPOTENCY_CONFLICT',null,409);return this.publicOrder(prior);}
+   if(prior){if(prior.method!==input.method||prior.fiat!==input.fiat||prior.asset!==asset||prior.network!==network||!sameQty(prior.quantity,input.quantity))fault('IDEMPOTENCY_CONFLICT',null,409);if(prior.status!=='SOURCING')return this.publicOrder(prior);}
    const accepted=(await db.query('SELECT n.decimals FROM '+S+'crypto_assets a JOIN '+S+'crypto_asset_networks n USING(asset_id) WHERE a.currency_code=$1 AND n.network=$2 AND n.approved AND n.verified_at IS NOT NULL',[asset,network])).rows[0];
    if(!accepted||accepted.decimals===null||qty%10n**BigInt(18-accepted.decimals)!==0n)fault('CRYPTO_AMOUNT_PRECISION','quantity');
    const card=(await db.query('SELECT * FROM '+S+'crypto_basket_card_terms WHERE fiat=$1',[input.fiat])).rows[0];
@@ -121,16 +129,25 @@ export class CryptoBasket {
    const policy=(await db.query('SELECT * FROM '+S+'crypto_basket_policy')).rows[0];
    const rows=(await db.query(offerSql+' AND s.currency_code=$1 AND s.network=$2 AND p.currency_code=$3 AND s.available_balance-s.locked_balance >= $4 AND (l.remaining IS NULL OR l.remaining >= $4) ORDER BY o.created_at,o.offer_id LIMIT 1',[asset,network,input.fiat,decimal(qty)])).rows;
    const offer=rows[0],available=offer&&(own(asset)||policy.markup_bps>0);
-   const recent=await db.query("SELECT count(*)::int AS n FROM avis_core_v2.crypto_basket_orders WHERE buyer_id=$1 AND created_at>now()-interval '1 hour'",[s.buyer_id]);if(recent.rows[0].n>=60)reject('BASKET_LIMIT');
+   let bankRoute=null;
+   if(bankTransfer(input.method)){
+    const routes=(await db.query(transferRoutesSql+' AND b.currency_code=$1 ORDER BY b.bridge_id',[input.fiat])).rows;
+    const route=routes.find(r=>transferMethod(r.protocol)===input.method&&(!offer||r.ledger_account_id===offer.proceeds_account_id));
+    if(!route)reject('BASKET_METHOD','method');
+    bankRoute={account:route.account,bic:route.bic,beneficiary:route.beneficiary,profile:route.profile};
+   }
+   if(prior&&!available)return this.publicOrder(prior);
+   const recent=await db.query("SELECT count(*)::int AS n FROM avis_core_v2.crypto_basket_orders WHERE buyer_id=$1 AND created_at>now()-interval '1 hour'",[s.buyer_id]);if(!prior&&recent.rows[0].n>=60)reject('BASKET_LIMIT');
    let terms=null;
    if(available){const external=!own(asset);terms={...priceBasket({quantity:input.quantity,lotQuantity:offer.lot_quantity,lotCost:offer.cost_minor,unitPrice:offer.unit_price,markup:external?policy.markup_bps:0,cardBps:card?.fee_bps||0,fixedMinor:card?.fixed_minor||0}),
     markupBps:external?policy.markup_bps:0,participationBps:external?policy.participation_bps:0,
-    publishableKey:card?.publishable_key||null,stock:offer.stock_account_id,proceeds:offer.proceeds_account_id,seller:String(offer.seller),source:external?'METAMASK':'TREASURY'};}
+    bankRoute,publishableKey:card?.publishable_key||null,stock:offer.stock_account_id,proceeds:offer.proceeds_account_id,seller:String(offer.seller),source:external?'METAMASK':'TREASURY'};}
+   if(prior){const renewed=(await db.query("UPDATE avis_core_v2.crypto_basket_orders SET status='QUOTED',offer_id=$2,terms=$3,expires_at=now()+interval '10 minutes' WHERE order_id=$1 RETURNING *",[prior.order_id,offer.offer_id,JSON.stringify(terms)])).rows[0];return this.publicOrder(renewed);}
    const row=(await db.query(`INSERT INTO avis_core_v2.crypto_basket_orders(order_id,session_id,buyer_id,request_key,asset,network,quantity,fiat,method,offer_id,terms,status,expires_at)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now()+interval '10 minutes') RETURNING *`,[randomUUID(),s.session_id,s.buyer_id,input.requestKey,asset,network,decimal(qty),input.fiat,input.method,available?offer.offer_id:null,terms?JSON.stringify(terms):null,available?'QUOTED':'SOURCING'])).rows[0];
    return this.publicOrder(row);});
  }
- publicOrder(r){return {id:r.order_id,status:r.status,asset:r.asset,network:r.network,quantity:r.quantity,fiat:r.fiat,method:r.method,total:r.terms?.total,expiresAt:r.expires_at};}
+ publicOrder(r){return {id:r.order_id,status:r.status,asset:r.asset,network:r.network,quantity:r.quantity,fiat:r.fiat,method:r.method,requestKey:r.request_key,total:r.terms?.total,expiresAt:r.expires_at,...(r.status==='AWAITING_TRANSFER'?{transfer:r.terms.bankRoute}:{})};}
  async orderForBuyer(actor,id){if(!uuid(id))reject('BASKET_ORDER',null,404);
   const buyer=await this.buyer(this.pool,actor);
   const r=(await this.pool.query('SELECT * FROM '+S+'crypto_basket_orders WHERE order_id=$1 AND buyer_id=$2',[id,buyer])).rows[0];
@@ -152,7 +169,7 @@ export class CryptoBasket {
   const escrow=await this.core.networkAccount(db,'MARKETPLACE_ESCROW',r.asset,r.network,'CRYPTO_BASKET');
   const target=await this.core.networkAccount(db,'USER',r.asset,r.network,'CRYPTO',r.buyer_id);
   const journal=await this.core.post(db,{id:'system:crypto-basket'},'basket-sale:'+r.order_id,'CRYPTO_BASKET_PURCHASE',r.order_id,
-   [entry(source,'DEBIT',r.terms.total),entry(r.terms.proceeds,'CREDIT',r.terms.total),...lines(r,escrow,target)]);
+   [...(source?[entry(source,'DEBIT',r.terms.total),entry(r.terms.proceeds,'CREDIT',r.terms.total)]:[]),...lines(r,escrow,target)]);
   await db.query("UPDATE avis_core_v2.crypto_basket_orders SET status='PAID',settlement_journal=$2 WHERE order_id=$1",[r.order_id,journal]);
   return {id:r.order_id,status:'PAID',journalId:journal};}
  async confirmAccount(actor,input){
@@ -165,11 +182,38 @@ export class CryptoBasket {
    const source=await this.core.userFunding(db,buyer,r.fiat);
    await this.reserve(db,r);return this.settle(db,r,source);});}
  async release(db,r,status){
-  if(r.settlement_journal||!['RESERVED','CARD_OPEN'].includes(r.status))return;
+  if(r.settlement_journal||!['RESERVED','CARD_OPEN','AWAITING_TRANSFER'].includes(r.status))return;
   const escrow=await this.core.networkAccount(db,'MARKETPLACE_ESCROW',r.asset,r.network,'CRYPTO_BASKET');
   await this.core.post(db,{id:'system:crypto-basket'},'basket-release:'+r.order_id,'CRYPTO_BASKET_RELEASE',r.order_id,lines(r,escrow,r.terms.stock));
   await db.query('UPDATE '+S+'crypto_basket_lots SET remaining=remaining+$2 WHERE offer_id=$1',[r.offer_id,r.quantity]);
   await db.query('UPDATE '+S+'crypto_basket_orders SET status=$2 WHERE order_id=$1',[r.order_id,status]);}
+ async transfer(token,id){
+  if(!uuid(id))reject('BASKET_ORDER',null,404);
+  return this.transaction(async db=>{
+   const session=await this.session(db,token);
+   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['basket-buyer:'+session.buyer_id]);
+   const r=(await db.query('SELECT * FROM '+S+'crypto_basket_orders WHERE order_id=$1 AND session_id=$2 FOR UPDATE',[id,session.session_id])).rows[0];
+   if(!r||!bankTransfer(r.method))reject('BASKET_ORDER',null,404);
+   if(r.status==='QUOTED'){
+    const open=await db.query("SELECT count(*)::int n FROM avis_core_v2.crypto_basket_orders WHERE buyer_id=$1 AND status='AWAITING_TRANSFER'",[r.buyer_id]);if(open.rows[0].n>=3)reject('BASKET_LIMIT');
+    await this.reserve(db,r);
+    const fresh=(await db.query("UPDATE avis_core_v2.crypto_basket_orders SET status='AWAITING_TRANSFER',expires_at=now()+interval '48 hours' WHERE order_id=$1 RETURNING *",[id])).rows[0];return this.publicOrder(fresh);
+   }
+   return this.publicOrder(r);
+  });
+ }
+ async recoverTransfers(){
+  // Rotate the scan through all due records, including orders without an incoming payment.
+  const rows=(await this.pool.query("SELECT order_id FROM avis_core_v2.crypto_basket_orders WHERE status='AWAITING_TRANSFER' ORDER BY last_checked NULLS FIRST,created_at LIMIT 40")).rows;
+  for(const row of rows)await this.transaction(async db=>{
+   const r=(await db.query("SELECT * FROM avis_core_v2.crypto_basket_orders WHERE order_id=$1 AND status='AWAITING_TRANSFER' FOR UPDATE SKIP LOCKED",[row.order_id])).rows[0];
+   if(!r)return;
+   const jid=await matchTransfer(db,r);
+   if(jid){await db.query('UPDATE '+S+'crypto_basket_orders SET funding_journal=$2 WHERE order_id=$1',[r.order_id,jid]);await this.settle(db,r,null);}
+   else if(Date.parse(r.expires_at)<=Date.now())await this.release(db,r,'EXPIRED');
+   else await db.query('UPDATE '+S+'crypto_basket_orders SET last_checked=now() WHERE order_id=$1',[r.order_id]);
+  });
+ }
  stripeMode(publicKey){
   const k=this.stripe.secretKey(),pk=publicKey||this.stripe.env.STRIPE_PUBLISHABLE_KEY;
   if(!/^whsec_[A-Za-z0-9]+$/.test(this.stripe.env.STRIPE_WEBHOOK_SECRET||''))fault('STRIPE_CONFIGURATION',null,503);
@@ -232,6 +276,7 @@ export class CryptoBasket {
   return {id:r.order_id,checkoutUrl:url.href};
  }
  async recover(){
+  await this.recoverTransfers();
   const pending=(await this.pool.query("SELECT * FROM avis_core_v2.crypto_basket_orders WHERE (status='RESERVED' AND expires_at<now()+interval '58 minutes') OR (status='CARD_OPEN' AND expires_at<now()) ORDER BY expires_at LIMIT 20")).rows;
   for(const row of pending){try{await this.providerSession(row);}catch(e){console.error(JSON.stringify({operation:'CRYPTO_BASKET_RECOVERY',order:row.order_id,code:e.code||'STRIPE_PROVIDER_RESPONSE'}));}}
  }

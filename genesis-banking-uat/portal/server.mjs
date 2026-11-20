@@ -142,7 +142,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    }
    if(req.method==='GET'&&path==='/readyz'){await pool.query('SELECT 1');return send(res,200,{status:'ready',release});}
-   const bridge=/^\/api\/basket-bridge\/(state|quote|card)$/.exec(path);
+   const bridge=/^\/api\/basket-bridge\/(state|quote|card|transfer)$/.exec(path);
    if(bridge&&req.method==='POST'){
     if(!req.headers['content-type']?.startsWith('application/json'))fault('INVALID_FIELD',null,415);
     const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>4096)fault('INVALID_FIELD',null,413);chunks.push(chunk);}
@@ -151,6 +151,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const token=(req.headers.authorization||'').replace(/^Bearer /,'');
     if(bridge[1]==='state')return send(res,200,await basket.state(token));
     if(bridge[1]==='quote')return send(res,200,await basket.quote(token,b));
+    if(bridge[1]==='transfer')return send(res,200,await basket.transfer(token,b.id));
     return send(res,200,await basket.card(token,b.id));
    }
    // Stripe sends signed raw events without browser cookies or CSRF tokens.

@@ -40,14 +40,15 @@ test('exact acquisition cost and markup round up to the settlement cent',()=>{
  assert.deepEqual(priceBasket({quantity:'0.35',lotQuantity:'1',lotCost:'10000',markup:500,cardBps:200,fixedMinor:30}),{costMinor:'3500',markupMinor:'175',collectionCostMinor:'106',totalMinor:'3781',total:'37.81'});
 });
 test('unpriced external inventory and incomplete receipts produce no payable quote; only admins may configure cost',async()=>{
- const {token}=await engine.start(buyer);assert.equal((await order(token)).status,'SOURCING');
+ const {token}=await engine.start(buyer);const inquiry=await order(token);assert.equal(inquiry.status,'SOURCING');
+ await assert.rejects(order(token,'WIRE'),/BASKET_METHOD/);
  await assert.rejects(engine.registerLot(buyer,{},key()),/FORBIDDEN/);
  await assert.rejects(engine.setPolicy(buyer,{markupBps:9000,participationBps:9000},key()),/FORBIDDEN/);
  await assert.rejects(engine.registerLot(admin,{journalId:key(),fiat:'EUR',cost:'100.00',providerReference:'test'},key()),/BASKET_COST/);
  await assert.rejects(order(token,'CARD'),/BASKET_CARD/);
  const result=await engine.registerLot(admin,{journalId:deposit,fiat:'EUR',cost:'100.00',providerReference:'provider-order-1'},key());offer=result.id;
  await engine.setPolicy(admin,{markupBps:500,participationBps:2500},key());
- const quote=await order(token);assert.equal(quote.total,'21.00');assert.equal(quote.markupBps,undefined);
+ const quote=await engine.quote(token,{requestKey:inquiry.requestKey,asset:'ETH',network:'ETHEREUM',quantity:'0.2',fiat:'EUR',method:'ACCOUNT'});assert.equal(quote.id,inquiry.id);assert.equal(quote.total,'21.00');assert.equal(quote.markupBps,undefined);
  await assert.rejects(engine.confirmAccount(other,{id:quote.id,total:'21.00'}),/BASKET_ORDER/);
  const paid=await engine.confirmAccount(buyer,{id:quote.id,total:'21.00'});assert.equal(paid.status,'PAID');
  assert.equal((await engine.confirmAccount(buyer,{id:quote.id,total:'21.00'})).journalId,paid.journalId);
@@ -67,4 +68,15 @@ test('card funds a reserved wallet delivery exactly once, independent of a brows
  await engine.event(event);assert.equal((await read()).status,'PAID');const journal=(await read()).settlement_journal;
  assert.equal((await engine.event(event)).duplicate,true);assert.equal((await read()).settlement_journal,journal);
  await engine.event({id:'evt_dispute1',type:'charge.dispute.created',livemode:false,data:{object:{payment_intent:'pi_basket1'}}});assert.equal((await read()).status,'REVIEW');
+});
+
+test('an expired Stripe session releases only its reserved quantity and permits another sale',async()=>{
+ const {token}=await engine.start(buyer),r=await order(token,'CARD','0.1');
+ const original=stripe.fetcher;stripe.fetcher=async(url,options)=>{const response=await original(url,options);session.id='cs_test_Expired456';return response;};
+ try{await engine.card(token,r.id);const before=(await db.query('SELECT remaining FROM avis_core_v2.crypto_basket_lots WHERE offer_id=$1',[offer])).rows[0].remaining;
+  const expired={id:'evt_closed456',type:'checkout.session.expired',livemode:false,data:{object:{...session,payment_status:'unpaid'}}};
+  await engine.event(expired);await engine.event(expired);
+  const after=(await db.query('SELECT remaining FROM avis_core_v2.crypto_basket_lots WHERE offer_id=$1',[offer])).rows[0].remaining;
+  assert.equal((Number(after)-Number(before)).toFixed(1),'0.1');assert.equal((await engine.orderForBuyer(buyer,r.id)).status,'EXPIRED');
+ }finally{stripe.fetcher=original;}
 });
