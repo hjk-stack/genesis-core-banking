@@ -63,7 +63,7 @@ export async function checkBeneficiary(db,actor,input,{env=process.env,fetcher=f
  }
  const saved=(await db.query('SELECT bic,full_name,postal_address FROM avis_core_v2.payment_beneficiaries WHERE actor_id=$1 AND account_number=$2',[actor.id,account.number])).rows[0];
  if(saved&&receivingBic(saved.bic)!==bic)fault('RECEIVER_BIC_MISMATCH','receiverBic');
- const owner=holder?(await db.query('SELECT full_name,postal_address FROM avis_core_v2.sovereign_users WHERE user_id=$1',[holder.user_id])).rows[0]:null;
+ const owner=holder?(await db.query('SELECT full_name,postal_address FROM avis_core_v2.holder_identities WHERE record_user_id=$1',[holder.user_id])).rows[0]:null;
  const name=owner?.full_name||saved?.full_name||'';
  return {account:account.number,accountType:account.type,bic,validationSource:source,
   receiverName:name,address:owner?.postal_address||saved?.postal_address||null,addressSource:owner?.postal_address?'REGISTERED':saved?.postal_address?'SAVED':null,receiverBridgeId:holder?.bridge_id||null};

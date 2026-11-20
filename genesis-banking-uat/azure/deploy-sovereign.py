@@ -765,6 +765,8 @@ def main():
         holders = {str(row['user_id']): row for row in api(opener, base, '/api/views/customers')['rows']}
         if holders.get('1', {}).get('full_name') != 'AVISPay PLC' or holders.get('1', {}).get('account_role') != 'INSTITUTION':
             raise RuntimeError('Corporate account identity mismatch')
+        if '3' in holders or sum(h['full_name'] == 'AVISPay PLC' for h in holders.values()) != 1:
+            raise RuntimeError('AVISPay corporate identity was not consolidated')
         if holders.get('2', {}).get('full_name') != 'Frontend user':
             raise RuntimeError('Frontend account identity mismatch')
         accounts = api(opener, base, '/api/views/accounts')['rows']
@@ -776,11 +778,20 @@ def main():
                 identifier = account['abiq_iban']
                 if not re.fullmatch(r'TN[0-9]{2}AVIP000[0-9]{15}', identifier) or account['abiq_bic'] != 'AVIPTN64XXX':
                     raise RuntimeError('ABIQ account format mismatch')
-                if identifier[-7:] != holders[uid]['customer_number'] or identifier[-12:] != account['account_number']:
+                routing_holder = str(account.get('routing_user_id', uid))
+                if routing_holder != uid and (uid, routing_holder) != ('1', '3'):
+                    raise RuntimeError('ABIQ routing holder differs from the registered corporate identity')
+                if routing_holder == uid and account['customer_number'] != holders[uid]['customer_number']:
+                    raise RuntimeError('ABIQ primary customer number mismatch')
+                if identifier[-7:] != account['customer_number'] or identifier[-12:] != account['account_number']:
                     raise RuntimeError('ABIQ customer number mismatch')
                 expanded = ''.join(str(ord(c) - 55) if c.isalpha() else c for c in identifier[4:] + identifier[:4])
                 if int(expanded) % 97 != 1:
                     raise RuntimeError('ABIQ checksum mismatch')
+        if not any(str(a['user_id']) == '1' and str(a.get('routing_user_id')) == '3'
+                   and a['currency_code'] == 'CHF' for a in accounts):
+            raise RuntimeError('Historical CHF account missing from the corporate identity')
+        print('Verified one AVISPay PLC identity with the original CHF, EUR, GBP and USD routes')
         print('Verified ABIQ issuer, corporate user 1, frontend user 2 and EUR/USD/GBP customer numbering and checksums')
         stage = 'ledger account details verification'
         ledger = api(opener, base, '/api/views/ledger')['rows']

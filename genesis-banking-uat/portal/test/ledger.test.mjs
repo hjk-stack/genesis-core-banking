@@ -20,8 +20,10 @@ before(async()=>{
  }
  const client=await pool.connect();try{await migrate(client);}finally{client.release();}
  core=new SovereignCore(pool);
- // A name is not an institution role. Keep ordinary businesses classified by their record.
- sameName=await core.openCustomer(actor,{fullName:'AVISPay PLC',accountType:'BUSINESS',currencies:['EUR']},'same-name');
+ // Independent businesses can share a name and retain separate account roles.
+ const otherInstitution=await core.openCustomer(actor,{fullName:'Harbour Cooperative',accountType:'BUSINESS',currencies:['EUR']},'other-institution');
+ await pool.query("UPDATE avis_core_v2.sovereign_users SET account_role='INSTITUTION' WHERE user_id=$1",[otherInstitution.userId]);
+ sameName=await core.openCustomer(actor,{fullName:'Harbour Cooperative',accountType:'BUSINESS',currencies:['EUR']},'same-name');
  await core.addCurrencies(actor,{userId:'1',participantCode:'AVIS',currencies:['EUR']},'legacy-participant');
  treasury=await core.system(pool,'TREASURY','EUR','CORPORATE_CAPITAL','ASSET');
  unmapped=(await rows(`INSERT INTO avis_core_v2.ledger_accounts(owner_type,user_id,sub_account_code,currency_code,network,wallet_scope,account_category)

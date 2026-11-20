@@ -81,14 +81,19 @@ export class CardManagement extends TransferMethods {
    return {journalId:await this.post(db,actor,k,'ACCOUNT_SUSPENSE',input.reference,[entry(source.ledger_account_id,'DEBIT',amount),entry(hold,'CREDIT',amount)])};
   });
  }
+ async customerWorkspace(db,id){
+  return (await db.query(`SELECT record_user_id,user_id FROM avis_core_v2.holder_identities
+   WHERE record_role='CUSTOMER' AND (user_id=$1 OR record_user_id=$1)
+   ORDER BY (record_user_id=$1) DESC,record_user_id LIMIT 1`,[id])).rows[0];
+ }
  async bindCustomerLogin(actor,input,key){
   if(!/^\d{1,16}$/.test(input.fineractUserId||''))fault('INVALID_FIELD','fineractUserId');
   return this.operation(actor,'BIND_CUSTOMER_LOGIN',input,key,async db=>{
-   const u=(await db.query("SELECT user_id FROM avis_core_v2.sovereign_users WHERE user_id=$1 AND account_role='CUSTOMER'",[input.userId])).rows[0];
+   const u=await this.customerWorkspace(db,input.userId);
    if(!u)fault('ABIQ_CUSTOMER_NOT_FOUND','userId');
    const principal='fineract:'+input.fineractUserId,existing=(await db.query('SELECT user_id FROM avis_core_v2.customer_logins WHERE principal_id=$1',[principal])).rows[0];
-   if(existing&&String(existing.user_id)!==String(u.user_id))fault('IDENTITY_ALREADY_BOUND','fineractUserId');
-   await db.query('INSERT INTO avis_core_v2.customer_logins(principal_id,user_id,created_by) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[principal,u.user_id,actor.id]);return {userId:String(u.user_id)};
+   if(existing&&String(existing.user_id)!==String(u.record_user_id))fault('IDENTITY_ALREADY_BOUND','fineractUserId');
+   await db.query('INSERT INTO avis_core_v2.customer_logins(principal_id,user_id,created_by) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[principal,u.record_user_id,actor.id]);return {userId:String(u.user_id)};
   });
  }
  async sellCrypto(actor,input,key){

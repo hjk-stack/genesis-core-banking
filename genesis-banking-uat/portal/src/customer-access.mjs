@@ -19,7 +19,10 @@ export class CustomerAccess {
   const operator=this.operator(actor);
   if(['delegateWalletTrading','selectWalletTrading'].includes(method))await this.owns(actor,'ledger_accounts',input.accountId);
   else if(method==='revokeWalletTrading')await this.owns(actor,'wallet_trading_delegations',input.delegationId,'user_id','delegation_id');
-  else if(method==='activateCrypto'){if(String(input.userId)!==String(actor.customerUserId))fault('FORBIDDEN','userId',403);}
+  else if(['activateCrypto','addCurrencies','saveCustomerProfile'].includes(method)){
+   if(String(input.userId)!==String(actor.customerUserId)&&String(input.userId)!==String(actor.identityUserId??actor.customerUserId))fault('FORBIDDEN','userId',403);
+   input={...input,userId:actor.customerUserId};
+  }
   else if(['cryptoWallet','cryptoChainBalance','cryptoSecurityDetails'].includes(method)){}
   else if(method==='reconcileCryptoDeposit')await this.owns(actor,'ledger_accounts',input.accountId);
   else if(method==='reviewSecurityOrder')await this.owns(actor,'ledger_accounts',input.accountId);
@@ -33,7 +36,6 @@ export class CustomerAccess {
   }else if(['confirmPayment','cancelPayment','cancelCodedDebit','cardDelivery'].includes(method))await this.ownsRequest(actor,input.requestId);
   else if(['setCardStatus','resetCardPin','managedCardDelivery','managedCardDetails'].includes(method))await this.owns(actor,'avis_cards',input.cardId,'user_id','card_id');
   else if(method==='sellCrypto'){await this.owns(actor,'ledger_accounts',input.cryptoAccount);const r=await this.pool.query(`SELECT p.currency_code FROM avis_core_v2.crypto_sale_offers o JOIN avis_core_v2.ledger_accounts p ON p.account_id=o.proceeds_account_id WHERE offer_id=$1`,[input.offerId]);await this.ownsBank(actor,input.to,r.rows[0]?.currency_code);}
-  else if(['addCurrencies','saveCustomerProfile'].includes(method)){if(String(input.userId)!==String(actor.customerUserId))fault('FORBIDDEN','userId',403);}
   else if(method==='redeemCode')await this.ownsBank(actor,input.to,input.currency);
   else if(['accountDetails','movementDetails'].includes(method))await this.owns(actor,'ledger_accounts',input.accountId);
   else if(!['checkReceiver','resolveExchangeSecurity'].includes(method))fault('FORBIDDEN',null,403);
@@ -44,8 +46,8 @@ export class CustomerAccess {
   const operator=this.operator(actor),id=actor.customerUserId;
   if(['walletdelegations','tradingallowances','cryptocatalogue','cryptomarkets','cryptowallets','cryptosecurities','cryptonetworks','cryptorobots','cryptoactions','cards','transfercards','cardaccounts','cryptooffers','fxrates','currencies','issuer','portfolio','accountsummaries','securities','securitypositions','securityorders','exchangebook'].includes(view))return this.core.list(operator,view);
   const queries={
-   accounts:`SELECT b.abiq_iban,b.currency_code,b.user_id,u.full_name,u.account_type,u.account_role,b.status,p.abiq_bic,a.available_balance::text,a.locked_balance::text FROM avis_core_v2.abiq_routing_bridge b JOIN avis_core_v2.sovereign_users u USING(user_id) JOIN avis_core_v2.abiq_network_participants p USING(participant_code) JOIN avis_core_v2.ledger_accounts a ON a.account_id=b.ledger_account_id WHERE b.user_id=$1 ORDER BY b.account_series LIMIT 300`,
-   customers:`SELECT user_id,full_name,account_type,account_role,postal_address FROM avis_core_v2.sovereign_users WHERE user_id=$1`,
+   accounts:`SELECT b.abiq_iban,b.currency_code,u.user_id,u.full_name,u.account_type,u.record_role AS account_role,b.status,p.abiq_bic,a.available_balance::text,a.locked_balance::text FROM avis_core_v2.abiq_routing_bridge b JOIN avis_core_v2.holder_identities u ON u.record_user_id=b.user_id JOIN avis_core_v2.abiq_network_participants p USING(participant_code) JOIN avis_core_v2.ledger_accounts a ON a.account_id=b.ledger_account_id WHERE b.user_id=$1 ORDER BY b.account_series LIMIT 300`,
+   customers:`SELECT h.user_id,h.full_name,h.account_type,h.record_role AS account_role,r.postal_address FROM avis_core_v2.holder_identities h JOIN avis_core_v2.sovereign_users r ON r.user_id=h.record_user_id WHERE h.record_user_id=$1`,
    cryptoholdings:`SELECT a.account_id,a.user_id,u.full_name,u.account_role,a.currency_code,a.network,a.available_balance::text,a.locked_balance::text FROM avis_core_v2.ledger_accounts a JOIN avis_core_v2.sovereign_users u USING(user_id) WHERE a.user_id=$1 AND a.owner_type='USER' AND a.network IS NOT NULL AND a.wallet_scope='FUNDING' AND a.account_category='LIABILITY' ORDER BY a.currency_code,a.network LIMIT 300`,
    wallets:`SELECT user_id,network,public_address,destination_tag FROM avis_core_v2.user_deposit_addresses WHERE user_id=$1 ORDER BY network`,
    externalcards:`SELECT card_id,user_id,holder_name,last_four FROM avis_core_v2.external_payment_cards WHERE user_id=$1`,
