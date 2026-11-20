@@ -23,7 +23,7 @@ const safeReason=error=>/^COINAPI_INDEX_(SCHEMA|HTTP_\d{3}|TRANSPORT)$/.test(err
 
 export class CoinApiIndexResearch {
  constructor({pool,env=process.env,fetcher=fetch,now=Date.now}){
-  this.pool=pool;this.env=env;this.fetcher=fetcher;this.now=now;this.backfilled=new Set();this.busy=false;
+  this.pool=pool;this.env=env;this.fetcher=fetcher;this.now=now;this.historyCheckedAt=new Map();this.busy=false;
  }
  async request(id,kind,query=''){
   if(!validId(id)||!['current','timeseries'].includes(kind))throw Error('COINAPI_INDEX_SCHEMA');
@@ -72,7 +72,7 @@ export class CoinApiIndexResearch {
   try{
    for(const id of ids){
     const item={id};
-    if(!this.backfilled.has(id)){try{item.newBars=await this.history(id,this.now());this.backfilled.add(id);}
+    if(!this.historyCheckedAt.has(id)||this.now()-this.historyCheckedAt.get(id)>=24*60*60*1000){try{item.newBars=await this.history(id,this.now());this.historyCheckedAt.set(id,this.now());}
      catch(error){item.historyError=safeReason(error);}}
     try{item.latest=await this.current(id,this.now());}
     catch(error){item.currentError=safeReason(error);}
