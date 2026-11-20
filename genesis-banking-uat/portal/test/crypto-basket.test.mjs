@@ -80,3 +80,22 @@ test('an expired Stripe session releases only its reserved quantity and permits 
   assert.equal((Number(after)-Number(before)).toFixed(1),'0.1');assert.equal((await engine.orderForBuyer(buyer,r.id)).status,'EXPIRED');
  }finally{stripe.fetcher=original;}
 });
+test('a wire delivers crypto only after the matched ISO 20022 transfer is credited to the designated proceeds account',async()=>{
+ const {buildPacs008,buildPacs002}=await import('../src/iso20022.mjs');
+ const acct=(await db.query('SELECT abiq_iban FROM avis_core_v2.abiq_routing_bridge WHERE ledger_account_id=$1',[proceeds])).rows[0];
+ const cash=await core.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Wire test',bic:'TESTGB2LXXX',accountNumber:'TEST-123',currency:'EUR'},key());
+ const profile=await core.registerBankConnector(admin,{profileId:'CRYPTO_WIRE_TEST',name:'Wire test',cashAccountId:cash.id,protocol:'SWIFT_ISO20022',localBic:'TESTDEFFXXX',peerBic:'TESTGB2LXXX',endpoint:'https://bank.invalid/iso20022',credentialReference:'AVIS_CONNECTOR_FIXTURE'},key());
+ const account='DE89370400440532013000';
+ await core.linkBankAccount(admin,{abiqIban:acct.abiq_iban,currency:'EUR',bankRoute:{accountType:'IBAN',accountNumber:account,country:'DE',bic:'TESTDEFFXXX',connectorCode:profile.id,providerAccountId:'wire-test',providerReference:'test-reference'}},key());
+ const {token}=await engine.start(buyer),quoted=await order(token,'WIRE','0.05'),reserved=await engine.transfer(token,quoted.id);
+ assert.equal(reserved.status,'AWAITING_TRANSFER');assert.equal(reserved.transfer.account,account);
+ const reference=quoted.id.replaceAll('-','').toUpperCase(),uetr=key();
+ const message={messageId:'basket-wire-1',uetr,endToEndId:reference,amount:quoted.total,currency:'EUR',senderBic:'TESTGB2LXXX',receiverBic:'TESTDEFFXXX',debtorName:'Buyer',debtorIban:'GB82WEST12345698765432',creditorName:'AVISPay PLC',creditorIban:account,reference};
+ await core.receive(profile.id,await buildPacs008(message));await engine.recoverTransfers();
+ assert.equal((await engine.orderForBuyer(buyer,quoted.id)).status,'AWAITING_TRANSFER');
+ await core.receive(profile.id,await buildPacs002({...message,messageId:'basket-wire-2',status:'ACCC',bankReference:'WIRE-SETTLED'}));
+ await engine.recoverTransfers();await engine.recoverTransfers();
+ const r=(await db.query('SELECT * FROM avis_core_v2.crypto_basket_orders WHERE order_id=$1',[quoted.id])).rows[0];
+ assert.equal(r.status,'PAID');assert.ok(r.funding_journal);
+ assert.equal((await db.query('SELECT count(*)::int n FROM avis_core_v2.ledger_entries WHERE journal_id=$1',[r.settlement_journal])).rows[0].n,2);
+});

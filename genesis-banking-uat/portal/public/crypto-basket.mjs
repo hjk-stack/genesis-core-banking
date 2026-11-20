@@ -19,7 +19,7 @@ export async function mountBasketPolicy(host,api,registerOffer){
  const msg=pane.querySelector('[role=status]'),content=pane.querySelector('[data-treasury]');
  const currency='<select name="fiat" required>'+['EUR','USD','GBP','CHF'].map(c=>'<option>'+c+'</option>').join('')+'</select>';
  const refresh=async()=>{
-  try{const data=await api('crypto/basket/policy');if(!form.isConnected)return;
+  try{const {rows}=await api('views/cryptobasketpolicy');const data=rows?.[0];if(!data||!form.isConnected)return;
    form.hidden=false;form.elements.markup.value=percentage(data.markup_bps);form.elements.participation.value=percentage(data.participation_bps);
    content.innerHTML=`<p><a href="https://portfolio.metamask.io/buy" target="_blank" rel="noopener noreferrer">Buy for treasury in MetaMask</a> <button type="button" data-native-offer>Set treasury offer</button></p>
     ${data.requests.length?'<h3>Requested quotes</h3><ul>'+data.requests.map(r=>'<li>'+esc(r.quantity.replace(/\.?0+$/,''))+' '+esc(r.asset)+' · '+esc(r.network)+' · '+esc(r.order_id)+'</li>').join('')+'</ul>':''}
