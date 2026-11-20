@@ -31,7 +31,7 @@ test('Stop-and-Hold N+1 settles N, preserves escrow, and final close returns the
  const own=await admin.getAddress(),treasuryAddress=await treasury.getAddress(),before=await ag.balanceOf(own);
  await receipt(token.executeRollingTradeStep(1,ag.target,n('1000'),n('1000')));assert.equal((await token.channelTrades(1,1)).status,1n);assert.equal(await ag.balanceOf(token.target),n('1000'));
  await receipt(token.executeRollingTradeStep(1,ag.target,n('1000'),n('1000')));assert.equal((await token.channelTrades(1,1)).status,2n);assert.equal((await token.channelTrades(1,2)).status,1n);assert.equal(await ag.balanceOf(token.target),n('1000'));assert.equal(await ag.balanceOf(treasuryAddress),n('1'));
- await receipt(token.closeRollingChannel(1));assert.equal(await ag.balanceOf(token.target),0n);assert.equal(await ag.balanceOf(own),before-n('2'));assert.equal(await ag.balanceOf(treasuryAddress),n('2'));assert.equal(await token.committedMarginPower(own),0n);await assert.rejects(token.closeRollingChannel(1));
+ await receipt(token.closeRollingChannel(1));assert.equal(await ag.balanceOf(token.target),0n);assert.equal(await ag.balanceOf(own),before-n('2'));assert.equal(await ag.balanceOf(treasuryAddress),n('2'));assert.equal(await token.committedMarginPower(own),0n);await assert.rejects(receipt(token.closeRollingChannel(1)),'closing an already closed rolling channel must revert even when a node accepts the transaction before mining');
 });
 test('parallel channels reserve aggregate margin; settlement currency and operator cannot be changed',async()=>{
  const owner=await admin.getAddress();await receipt(token.executeParallelRollingBatch([10,11],ag.target,[n('1000'),n('1000')],[n('1500'),n('1500')]));assert.equal(await token.getAvailableTradingPower(owner),n('600'));
