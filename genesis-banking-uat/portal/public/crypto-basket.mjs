@@ -59,25 +59,57 @@ export async function resumeBasketAuthorization(api,container){
 export async function openCheckoutManagement(api){
  document.querySelector('[data-checkout-management]')?.remove();
  const d=document.createElement('dialog');d.dataset.checkoutManagement='';d.className='checkout-management';
- d.innerHTML='<header><h2>Checkout management</h2><button aria-label="Close" type="button">×</button></header><label>Find a currency or network<input type="search"></label><div data-list></div><h3>MetaMask pricing</h3><form><label>Currency and blockchain<select name="asset" required></select></label><label>Fiat<select name="fiat"><option>EUR</option><option>USD</option><option>GBP</option><option>CHF</option></select></label><label>Purchase budget<input name="budget" type="number" min=".01" step=".01"></label><button>Refresh price and gas</button></form><details><summary>Treasury supplier settings</summary><form data-procurement><label>MetaMask purchasing region<input name="region" required placeholder="Country or region code"></label><label>MetaMask payment method ID<input name="payment" required></label><button>Save supplier settings</button></form></details><output aria-live="polite"></output>';
- document.body.append(d);d.querySelector('header button').onclick=()=>d.close();d.addEventListener('close',()=>d.remove(),{once:true});d.showModal();
- const out=d.querySelector('output'),list=d.querySelector('[data-list]'),filter=d.querySelector('input[type=search]'),form=d.querySelector('form');
- try{const [{rows},settings]=await Promise.all([api('views/checkouttenders'),api('views/cryptobasketpolicy')]);if(!d.isConnected)return;
-  const route=d.querySelector('[data-procurement]');if(route){const current=settings.rows?.[0];route.elements.region.value=current?.procurement_region||'';route.elements.payment.value=current?.procurement_method||'';route.onsubmit=async e=>{e.preventDefault();try{await api('crypto/basket/procurement',Object.fromEntries(new FormData(route)));out.textContent='MetaMask supplier settings saved.';}catch(err){out.textContent=err.message;}};}
-  const draw=()=>{const match=filter.value.toLowerCase().trim();list.replaceChildren();
-   for(const row of rows.filter(r=>(r.name+' '+r.asset+' '+r.network).toLowerCase().includes(match))){
-    const label=document.createElement('label'),box=document.createElement('input');box.type='checkbox';box.checked=row.accepted;label.append(box,document.createTextNode(row.name+' ('+row.asset+') · '+row.network));list.append(label);
-    box.onchange=async()=>{box.disabled=true;const accepted=box.checked;try{await api('crypto/basket/tender',{assetId:row.asset_id,network:row.network,accepted});row.accepted=accepted;out.textContent='Accepted payment currencies saved.';}
-     catch(err){box.checked=row.accepted;out.textContent=err.message;}finally{box.disabled=false;}};
+ d.innerHTML='<header class="checkout-manager-heading"><div><span class="checkout-manager-eyebrow">AVISPay · POS administration</span><h2>Accepted crypto payments</h2><p>Choose each currency and blockchain permitted at checkout.</p></div><button class="checkout-manager-close" type="button" data-close aria-label="Close checkout management">×</button></header>'+
+  '<div class="checkout-manager-tools"><label>Search currencies and networks<input type="search" data-search placeholder="Search by coin, symbol or network" autocomplete="off"></label><label>Show<select data-state aria-label="Filter accepted currencies"><option value="all">All currencies</option><option value="accepted">Accepted</option><option value="available">Not selected</option></select></label></div>'+
+  '<p class="checkout-manager-count" data-count aria-live="polite"></p><div class="checkout-coin-grid" data-list role="group" aria-label="Checkout currency acceptance"></div><output role="status" aria-live="polite"></output>';
+ document.body.append(d);
+ d.querySelector('[data-close]').onclick=()=>d.close();d.addEventListener('close',()=>d.remove(),{once:true});d.showModal();
+ const out=d.querySelector('output'),list=d.querySelector('[data-list]'),filter=d.querySelector('[data-search]'),state=d.querySelector('[data-state]'),count=d.querySelector('[data-count]');
+ const coinIcon=row=>{
+  const code=String(row.asset||'').toUpperCase();
+  if(code==='AG')return '/crypto-icons/ag.png';
+  if(code==='AGI')return '/crypto-icons/agi.png';
+  const src=String(row.icon_url||'');
+  return /^https:\/\/(?:assets|coin-images)\.coingecko\.com\/[^\s"'<>]+$/i.test(src)?src:'';
+ };
+ try{
+  const {rows}=await api('views/checkouttenders');
+  if(!d.isConnected)return;
+  const accepted=Array.isArray(rows)?rows:[];
+  const countSelected=()=>accepted.filter(r=>r.accepted).length;
+  const draw=()=>{
+   const query=filter.value.toLowerCase().trim(),mode=state.value;
+   const visible=accepted.filter(r=>(r.name+' '+r.asset+' '+r.network).toLowerCase().includes(query)
+    &&(mode==='all'||(mode==='accepted'&&r.accepted)||(mode==='available'&&!r.accepted)))
+    .sort((a,b)=>Number(Boolean(b.accepted))-Number(Boolean(a.accepted))||String(a.name).localeCompare(String(b.name))||String(a.network).localeCompare(String(b.network)));
+   count.textContent=countSelected()+' of '+accepted.length+' currency-network combinations accepted';
+   list.replaceChildren();
+   if(!visible.length){const empty=document.createElement('p');empty.className='checkout-coin-empty';empty.textContent='No currencies match this selection.';list.append(empty);return;}
+   for(const row of visible){
+    const option=document.createElement('label');option.className='checkout-coin-option';
+    const box=document.createElement('input');box.type='checkbox';box.checked=Boolean(row.accepted);
+    box.setAttribute('aria-label','Accept '+row.name+' ('+row.asset+') on '+row.network);
+    const picture=document.createElement('span');picture.className='checkout-coin-picture';
+    const fallback=()=>{const letter=document.createElement('span');letter.className='checkout-coin-monogram';letter.textContent=String(row.asset||'?').slice(0,4).toUpperCase();return letter;};
+    const src=coinIcon(row);
+    if(src){const image=document.createElement('img');image.className='checkout-coin-icon';image.src=src;image.alt='';image.width=40;image.height=40;image.loading='lazy';image.addEventListener('error',()=>image.replaceWith(fallback()),{once:true});picture.append(image);}
+    else picture.append(fallback());
+    const info=document.createElement('span');info.className='checkout-coin-info';
+    const name=document.createElement('strong');name.textContent=row.name+' ('+row.asset+')';
+    const network=document.createElement('small');network.textContent=row.network;
+    info.append(name,network);
+    option.append(box,picture,info);list.append(option);
+    box.onchange=async()=>{
+     const selected=box.checked;box.disabled=true;out.textContent='';
+     try{
+      await api('crypto/basket/tender',{assetId:row.asset_id,network:row.network,accepted:selected});
+      row.accepted=selected;out.textContent=row.asset+' · '+row.network+(selected?' enabled':' disabled')+' for checkout.';
+      draw();
+     }catch(error){box.checked=Boolean(row.accepted);out.textContent=error.message||'Could not save payment acceptance.';}
+     finally{box.disabled=false;}
+    };
    }
-  };filter.oninput=draw;draw();form.elements.asset.replaceChildren(...rows.map((r,i)=>new Option(r.name+' · '+r.network,String(i))));
-  form.onsubmit=async e=>{e.preventDefault();const row=rows[Number(form.elements.asset.value)];if(!row)return;const button=form.querySelector('button');button.disabled=true;
-   try{const market=await api('crypto/basket/price',{asset:row.asset,network:row.network,fiat:form.elements.fiat.value,budget:form.elements.budget.value});
-    const value=Number(market.rate).toLocaleString(undefined,{maximumSignificantDigits:12});
-    out.textContent=market.source+' · '+value+' '+market.fiat+' per '+market.asset+' · '+new Date(market.observedAt).toLocaleTimeString()+
-     (market.gas?' · '+market.gas.source+' estimate '+Number(market.gas.maxGwei)+' gwei per gas':'')+
-     (market.supplier?' · '+market.supplier.provider+' quote '+(Number(market.supplier.totalMinor)/100).toFixed(2)+' '+market.fiat+' including '+(Number(market.supplier.gasMinor)/100).toFixed(2)+' in gas':market.supplierStatus?' · '+market.supplierStatus:'');
-   }catch(err){out.textContent=err.message;}finally{button.disabled=false;}
   };
- }catch(err){out.textContent=err.message;}
+  filter.oninput=draw;state.onchange=draw;draw();
+ }catch(error){out.textContent=error.message||'Could not load checkout currencies.';}
 }
