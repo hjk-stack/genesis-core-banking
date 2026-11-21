@@ -1,7 +1,7 @@
 import {money,decimal,fault} from './core.mjs';
 import {valuedTender} from './metamask-pricing.mjs';
 const s='avis_core_v2.',unit=10n**18n;
-const accepted=`SELECT a.asset_id,a.currency_code AS asset,a.name,n.network,n.contract_address,n.decimals
+const accepted=`SELECT a.asset_id,a.currency_code AS asset,a.name,a.icon_url,n.network,n.contract_address,n.decimals
  FROM avis_core_v2.crypto_assets a JOIN avis_core_v2.crypto_asset_networks n USING(asset_id)
  WHERE n.approved AND n.verified_at IS NOT NULL AND n.decimals IS NOT NULL`;
 const wallets=`SELECT w.account_id,w.currency_code AS asset,w.network,n.asset_id,n.contract_address,n.decimals,(w.available_balance-w.locked_balance)::text AS spendable,h.user_id AS holder
