@@ -136,6 +136,9 @@ test('customer sessions cannot list, create or read Common/Suspense accounts or 
  const access=new CustomerAccess(core);await assert.rejects(access.list(customer,'backofficeaccounts'),/FORBIDDEN/);await assert.rejects(access.invoke(customer,'accountStatement',{accountId:common.id}),/FORBIDDEN/);await assert.rejects(core.openAccount({...customer,admin:true},{accountType:'COMMON'},key()),/FORBIDDEN/);
  await core.bindCustomerLogin(admin,{fineractUserId:'101',userId:'2'},key());
  server=createBankServer({pool,secureCookies:false,authenticate:async u=>u==='admin'?{...admin,username:u}:{id:'fineract:101',username:u,admin:false}});await new Promise(r=>server.listen(0,'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;
+ const registerAsset=await fetch(base+'/open-account-register.mjs');
+ assert.equal(registerAsset.status,200,'registered holder module must be served by actual banking application');
+ assert.match(await registerAsset.text(),/connectAccountHolderRegister/);
  const login=async username=>{const r=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username,password:'fixture'})});return {cookie:r.headers.get('set-cookie')?.split(';')[0],...await r.json()};};
  const request=async(s,path,body)=>{const r=await fetch(base+'/api/'+path,{method:body===undefined?'GET':'POST',headers:{cookie:s.cookie,origin:base,'content-type':'application/json','x-csrf-token':s.csrf,'idempotency-key':key()},...(body===undefined?{}:{body:JSON.stringify(body)})});return {status:r.status,body:await r.json()};};
  const user=await login('user');for(const path of ['views/backofficeaccounts','backoffice-accounts/'+common.id+'/statement'])assert.equal((await request(user,path)).status,403);
