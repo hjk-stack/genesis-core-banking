@@ -166,3 +166,47 @@ test('intermediary banks register under the selected NOSTRO without creating or 
  await assert.rejects(core.list({id:'guest',admin:false},'nostrointermediaries'),e=>e.code==='FORBIDDEN');
  await assert.rejects(core.registerIntermediaryBank({id:'guest',admin:false},input,key()),e=>e.code==='FORBIDDEN');
 });
+
+
+test('combined NOSTRO registration creates its incoming intermediary in one atomic operation and renders it under the account',async()=>{
+ const before=(await pool.query('SELECT count(*)::int AS count FROM avis_core_v2.external_cash_accounts')).rows[0].count;
+ const input={institutionType:'CORRESPONDENT_BANK',institutionName:'Combined Test NOSTRO',
+  bic:'CHASUS33XXX',accountNumber:'COMBINED-NOSTRO-77',currency:'USD',
+  bankAddress:'1 Clearing Road',accountName:'AVISPay PLC NOSTRO',reference:'NOSTRO-COMB-77',
+  intermediary:{bankName:'Inbound Transit Bank',bankAddress:'2 Transit Road',accountName:'AVISPay PLC',
+   aba:'021000021',reference:'TRANSIT-77',bic:'CHASUS33XXX',accountNumber:'TRANSIT-ACC-77'}};
+ const token=key();
+ const opened=await core.registerCashAccount(admin,input,token);
+ assert.deepEqual(await core.registerCashAccount(admin,input,token),opened);
+ const rows=await core.list(admin,'nostroclearing');
+ const row=rows.find(x=>x.cash_account_id===opened.id);
+ assert.ok(row,'NOSTRO visible in registry');
+ assert.equal(row.intermediaries.length,1);
+ assert.equal(row.intermediaries[0].intermediaryId,opened.intermediaryId);
+ assert.equal(row.intermediaries[0].bankName,'Inbound Transit Bank');
+ assert.equal(row.intermediaries[0].reference,'TRANSIT-77');
+ const html=nostroRegisterTable([row]);
+ assert.match(html,/Incoming intermediary bank/);
+ assert.match(html,/Inbound Transit Bank/);
+ assert.match(html,/TRANSIT-77/);
+ assert.equal((await pool.query('SELECT count(*)::int AS count FROM avis_core_v2.external_cash_accounts')).rows[0].count,before+1);
+ assert.equal(await balance(opened.accountId),'0.000000000000000000');
+ const snapshot=(await pool.query('SELECT * FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[opened.accountId])).rows[0];
+ const edit={cashAccountId:opened.id,bankName:'Combined Test NOSTRO Corrected',bankAddress:'Updated clearing road',
+  accountName:'AVISPay PLC NOSTRO',aba:'',reference:'NOSTRO-COMB-77',
+  intermediary:{...input.intermediary,intermediaryId:opened.intermediaryId,bankAddress:'Updated transit road'}};
+ const saved=await core.updateCashAccountDetails(admin,edit,key());
+ assert.equal(saved.intermediaryId,opened.intermediaryId);
+ const updated=(await core.list(admin,'nostroclearing')).find(x=>x.cash_account_id===opened.id);
+ assert.equal(updated.institution_name,'Combined Test NOSTRO Corrected');
+ assert.equal(updated.intermediaries.length,1);
+ assert.equal(updated.intermediaries[0].bankAddress,'Updated transit road');
+ assert.deepEqual((await pool.query('SELECT * FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[opened.accountId])).rows[0],snapshot);
+ const badCount=(await pool.query('SELECT count(*)::int AS count FROM avis_core_v2.external_cash_accounts')).rows[0].count;
+ await assert.rejects(core.registerCashAccount(admin,{...input,accountNumber:'REJECTED-NOSTRO-77',
+  intermediary:{...input.intermediary,aba:'123456789'}},key()),e=>e.code==='INVALID_FIELD'&&e.field==='intermediaryAba');
+ assert.equal((await pool.query('SELECT count(*)::int AS count FROM avis_core_v2.external_cash_accounts')).rows[0].count,badCount);
+ await assert.rejects(core.updateCashAccountDetails(admin,{...edit,bankName:'MUST ROLLBACK',
+  intermediary:{...edit.intermediary,intermediaryId:randomUUID()}},key()),e=>e.code==='INTERMEDIARY_NOT_FOUND');
+ assert.equal((await core.list(admin,'nostroclearing')).find(x=>x.cash_account_id===opened.id).institution_name,'Combined Test NOSTRO Corrected');
+});
