@@ -145,3 +145,11 @@ textarea{box-sizing:border-box;width:100%;font:inherit;border:1px solid #d6dbe3;
  50%{filter:brightness(1.17);box-shadow:inset 0 2px 3px #fff,inset 0 -5px 10px #05285bab,0 0 0 9px #399fff3d,0 7px 20px #0a68de8e}
 }
 @media(prefers-reduced-motion:reduce){.pos-liquid-switch[data-state=REQUESTED]{animation:none}}
+
+/* Keep the ID and approval switch visible together at tablet widths. */
+.pos-terminal-table{min-width:1000px}
+.pos-terminal-table td.account-number{min-width:126px}
+.pos-terminal-table .pos-activation-cell{min-width:142px;max-width:158px;white-space:normal!important}
+.pos-activation-cell .pos-liquid-switch{margin-right:0}
+.pos-activation-cell .pos-activation-label{display:block;margin-top:7px;font-size:12px;line-height:1.35}
+@media(max-width:860px){.pos-terminal-table{min-width:950px}.pos-terminal-table .pos-activation-cell{min-width:136px;max-width:144px}}
