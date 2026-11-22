@@ -187,8 +187,7 @@ setInterval(async()=>{
    activate:input=>api('checkout-ip/activation',input),onChange:()=>void render(),
    openHandler:record=>{
     const url='https://avis.land/admin/bank/quantum/direct-transfer?checkoutRequest='+encodeURIComponent(record.requestId);
-    const popup=window.open(url,'avispay-ip-transfer-'+record.requestId,'popup=yes,resizable=yes,scrollbars=yes,width=1380,height=940');
-    popup?.focus();
+    window.open(url,'_blank','noopener,noreferrer');
    }});
  }catch(e){console.error('CHECKOUT_IP_REFRESH',e.code||e.name)}
  finally{ipQueueRefreshing=false}
@@ -283,10 +282,9 @@ html+=results.map((r,i)=>{
   root:$('#panels'),requests:cache.checkoutip||[],nostros:cache.nostroclearing||[],
   activate:input=>api('checkout-ip/activation',input),onChange:()=>void render(),
   openHandler:record=>{
-   const url='https://avis.land/admin/bank/quantum/direct-transfer?checkoutRequest='+encodeURIComponent(record.requestId);
-   const popup=window.open(url,'avispay-ip-transfer-'+record.requestId,'popup=yes,resizable=yes,scrollbars=yes,width=1380,height=940');
-   popup?.focus();
-  }
+    const url='https://avis.land/admin/bank/quantum/direct-transfer?checkoutRequest='+encodeURIComponent(record.requestId);
+    window.open(url,'_blank','noopener,noreferrer');
+   }
  });if(key==='pos')bindTerminalControls();
  document.querySelectorAll('[data-nostro-edit]').forEach(button=>button.onclick=async()=>{
    const cashId=button.dataset.nostroEdit;
