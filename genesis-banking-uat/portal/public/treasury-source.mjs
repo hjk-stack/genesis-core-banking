@@ -1,4 +1,3 @@
-import {portfolioValue} from './portfolio.mjs';
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const option=(value,label)=>`<option value="${esc(value)}">${esc(label)}</option>`;
 const field=(name,label,attributes='')=>`<label>${esc(label)}<input name="${name}" aria-label="${esc(label)}" ${attributes}></label>`;
@@ -9,6 +8,8 @@ const currencies=['EUR','USD','GBP','CHF','SEK','NOK','DKK','PLN','CZK','HUF','R
 // Registration connects an existing Treasury source to its Portfolio record.
 // Only an explicit form submission writes metadata; opening this window is read-only.
 export async function openTreasurySource({api,modal,bookingId,isCurrent=()=>true,onRegistered=()=>{}}){
+ // Load valuation only when Treasury registration is opened; avoid adding a portfolio dependency to the crypto workspace.
+ const {portfolioValue}=await import('./portfolio.mjs');
  let dialog=null,epoch=0,closed=false,securities=[],positions=[],source=null;
  const active=serial=>!closed&&isCurrent()&&dialog?.isConnected&&serial===epoch;
  const [treasury,registered,holdings]=await Promise.all([
