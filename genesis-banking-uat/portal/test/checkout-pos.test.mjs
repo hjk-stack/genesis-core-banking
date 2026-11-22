@@ -6,6 +6,7 @@ import {migrate} from '../src/migrate.mjs';
 import {SovereignCore} from '../src/core.mjs';
 import {CheckoutPosControl} from '../src/checkout-pos.mjs';
 import {CheckoutPosAuthenticator} from '../src/checkout-pos-auth.mjs';
+import {createBankServer} from '../server.mjs';
 
 const admin={id:'operator:pos',admin:true},customer={id:'buyer',admin:false};
 const milestone={terminalId:'11ITCON03',checkoutKind:'MILESTONE',reference:'AVIS-IT-03',title:'Italy · Construction milestone 03'};
@@ -65,6 +66,28 @@ test('checkout ID cannot be reused for a different merchant, milestone or source
   await assert.rejects(control.request(actor,{...milestone,terminalId:'../../other'}),/POS_TERMINAL_ID/);
   await control.resolve(actor,basket);
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM avis_core_v2.pos_terminals WHERE terminal_id = ANY($1::varchar[])",[[milestone.terminalId,basket.terminalId]])).rows[0].n,2);
+ });
+});
+test('POS terminal approval endpoint requires a real administrator session and CSRF token',async()=>{
+ await withDb(async({pool,control})=>{
+  await control.resolve(actor,milestone);
+  await control.request(actor,milestone);
+  const http=createBankServer({pool,authenticate:async(username,password)=>username==='admin-fixture'&&password==='key-fixture'?admin:Object.assign(new Error('SIGN_IN_FAILED'),{status:401,code:'SIGN_IN_FAILED'}),secureCookies:false});
+  await new Promise(resolve=>http.listen(0,'127.0.0.1',resolve));
+  const base='http://127.0.0.1:'+http.address().port;
+  try{
+   const url=base+'/api/terminals/activation',body=JSON.stringify({terminalId:milestone.terminalId,active:true});
+   assert.equal((await fetch(url,{method:'POST',headers:{origin:base,'content-type':'application/json'},body})).status,401);
+   const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:'admin-fixture',password:'key-fixture'})});
+   assert.equal(login.status,200);
+   const session=await login.json(),cookie=login.headers.get('set-cookie').split(';')[0];
+   assert.equal((await fetch(url,{method:'POST',headers:{origin:base,cookie,'content-type':'application/json'},body})).status,403);
+   const approved=await fetch(url,{method:'POST',headers:{origin:base,cookie,'content-type':'application/json','x-csrf-token':session.csrf,'idempotency-key':'activation-check'},body});
+   assert.equal(approved.status,200);assert.equal((await approved.json()).state,'ACTIVE');
+   const listed=await fetch(base+'/api/views/terminals',{headers:{cookie}});
+   const rows=(await listed.json()).rows,selected=rows.find(x=>x.terminal_id===milestone.terminalId);
+   assert.equal(selected.activation_state,'ACTIVE');assert.equal(selected.checkout_reference,milestone.reference);
+  }finally{await new Promise(resolve=>http.close(resolve))}
  });
 });
 test('only a signed site-to-bank request may resolve or request a checkout POS; nonce replay and INDEX scope rejected',async()=>{
