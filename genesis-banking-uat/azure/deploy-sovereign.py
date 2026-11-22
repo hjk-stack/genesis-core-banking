@@ -741,6 +741,23 @@ def main():
             result = api(opener, base, '/api/views/' + view)
             if not isinstance(result.get('rows'), list):
                 raise RuntimeError('Authenticated banking read failed')
+        stage = 'Web POS terminal activation registry verification'
+        terminals = api(opener, base, '/api/views/terminals')['rows']
+        web_pos = [terminal for terminal in terminals if terminal.get('terminal_type') == 'WEB_POS']
+        for terminal in web_pos:
+            if (not isinstance(terminal.get('terminal_id'), str)
+                    or not terminal['terminal_id']
+                    or terminal.get('activation_state') not in ('CLOSED', 'REQUESTED', 'ACTIVE')):
+                raise RuntimeError('Web POS terminal has an invalid activation state')
+            if terminal['activation_state'] == 'REQUESTED' and not terminal.get('requested_at'):
+                raise RuntimeError('Web POS activation request lacks a timestamp')
+            if terminal['activation_state'] == 'ACTIVE' and not terminal.get('approved_at'):
+                raise RuntimeError('Web POS activation approval lacks a timestamp')
+        print('Verified Web POS terminal activation registry: ' + json.dumps({
+            'registered': len(web_pos),
+            'requested': sum(t['activation_state'] == 'REQUESTED' for t in web_pos),
+            'active': sum(t['activation_state'] == 'ACTIVE' for t in web_pos)
+        }, sort_keys=True))
         stage = 'live accepted wallet allowance verification'
         import importlib.util as allowance_import
         from pathlib import Path as AllowancePath
