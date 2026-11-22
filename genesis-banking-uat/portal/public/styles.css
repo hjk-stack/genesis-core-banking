@@ -44,3 +44,23 @@ textarea{box-sizing:border-box;width:100%;font:inherit;border:1px solid #d6dbe3;
 .generator-preview,.generator-result{grid-column:1/-1;overflow-wrap:anywhere}.generator-preview output,.generator-result,.abiq-generator li{font-family:ui-monospace,monospace}
 .generator-result:not(:empty){padding:0 24px 16px}.abiq-generator li{margin:.35em 0}
 @media(max-width:440px){.generator-fields{grid-template-columns:minmax(0,1fr)}}
+
+/* Per-checkout Web POS request/approval controls — scoped to POS register only. */
+.pos-terminal-register>summary{cursor:pointer;list-style:none}
+.pos-terminal-register>summary::-webkit-details-marker{display:none}
+.pos-terminal-register>summary:before{content:'▸';color:#9c1231;font-size:18px}
+.pos-terminal-register[open]>summary:before{content:'▾'}
+.pos-terminal-register td{vertical-align:middle}
+.pos-liquid-switch{position:relative;display:inline-flex;vertical-align:middle;align-items:center;width:72px;height:38px;margin-right:10px;padding:4px;border:1px solid #ffffffaa;border-radius:30px;background:linear-gradient(130deg,#750b28,#f15b73,#8f0d2c);box-shadow:inset 0 2px 5px #0005,0 3px 11px #25443532;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);transition:background .25s,box-shadow .25s}
+.pos-liquid-switch[data-state=REQUESTED]{background:linear-gradient(135deg,#0d3675,#53a3fa 52%,#093972);animation:pos-request-pulse 1.25s ease-in-out infinite}
+.pos-liquid-switch[data-state=ACTIVE]{background:linear-gradient(130deg,#065d40,#5ad59d 54%,#0e6848)}
+.pos-liquid-knob{display:block;width:28px;height:28px;border-radius:50%;background:linear-gradient(160deg,#fff,#f0fcf9 60%,#dcece8);box-shadow:0 2px 8px #0005;transition:transform .25s}
+.pos-liquid-switch[data-state=REQUESTED] .pos-liquid-knob{transform:translateX(17px)}
+.pos-liquid-switch[data-state=ACTIVE] .pos-liquid-knob{transform:translateX(34px)}
+.pos-activation-label{font-size:12px;font-weight:700;white-space:nowrap}
+.pos-activation-label[data-state=REQUESTED]{color:#1363ad}
+.pos-activation-label[data-state=ACTIVE]{color:#086944}
+.pos-activation-label[data-state=CLOSED]{color:#a6173c}
+.pos-request-time{font-variant-numeric:tabular-nums}
+@keyframes pos-request-pulse{50%{box-shadow:0 0 0 5px #337eda42,0 0 18px #367fda9c,inset 0 2px 5px #071e50}}
+@media(prefers-reduced-motion:reduce){.pos-liquid-switch[data-state=REQUESTED]{animation:none}}
