@@ -18,7 +18,7 @@ async function withDb(fn){
   await migrate(db);
   const core=new SovereignCore(pool);
   await core.registerShop(admin,{merchantId:'AVISPAY-WEB-POS',shopName:'AVISPay Web POS',ownerUserId:'1',commissionBps:0},'pos-merchant');
-  return await fn({pool,db,control:new CheckoutPosControl(pool)});
+  return await fn({pool,db,core,control:new CheckoutPosControl(pool)});
  }finally{await db.close()}
 }
 test('each checkout has its own unique terminal, blue request, admin approval, closure and durable timestamps',async()=>{
@@ -42,6 +42,19 @@ test('each checkout has its own unique terminal, blue request, admin approval, c
   const events=(await pool.query('SELECT event_type FROM avis_core_v2.checkout_pos_events WHERE terminal_id=$1 ORDER BY event_id',[milestone.terminalId])).rows.map(r=>r.event_type);
   assert.deepEqual(events,['REQUEST','APPROVE','CLOSE']);
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.ledger_entries')).rows[0].n,ledgerBefore);
+ });
+});
+test('a previously registered POS ID can be linked once to its actual milestone',async()=>{
+ await withDb(async({core,control,pool})=>{
+  await core.registerTerminal(admin,{terminalId:milestone.terminalId,merchantId:'AVISPAY-WEB-POS',terminalType:'WEB_POS'},'pre-register');
+  const placeholder=await control.status(actor,{terminalId:milestone.terminalId});
+  assert.equal(placeholder.checkoutKind,'REGISTERED');
+  const linked=await control.resolve(actor,milestone);
+  assert.equal(linked.checkoutKind,'MILESTONE');assert.equal(linked.reference,milestone.reference);
+  const modified=await control.resolve(actor,{...milestone,title:'Italy · Updated milestone title'});
+  assert.equal(modified.title,'Italy · Updated milestone title');
+  await assert.rejects(control.resolve(actor,{...milestone,reference:'DIFFERENT-PRODUCT'}),/POS_TERMINAL_CONFLICT/);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.pos_terminals WHERE terminal_id=$1',[milestone.terminalId])).rows[0].n,1);
  });
 });
 test('checkout ID cannot be reused for a different merchant, milestone or source reference',async()=>{
