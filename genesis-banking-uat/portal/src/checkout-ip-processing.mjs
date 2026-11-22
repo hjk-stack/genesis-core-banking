@@ -1,0 +1,151 @@
+import {createHash} from 'node:crypto';
+import {fault,text} from './core.mjs';
+
+export const IP_PROOF_MAX_BYTES=2*1024*1024;
+const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
+const sha=value=>createHash('sha256').update(value).digest('hex');
+const optionalText=(value,field,max)=>value==null||value===''?null:text(value,field,max);
+const decimal=(value,field,{percent=false}={})=>{
+ if(value==null||value==='')return null;
+ const pattern=percent?/^[0-9]{1,3}(\.[0-9]{1,2})?$/:/^[0-9]{1,18}(\.[0-9]{1,18})?$/;
+ if(typeof value!=='string'||!pattern.test(value))fault('INVALID_FIELD',field);
+ const [whole,fraction='']=value.split('.');
+ if(percent&&BigInt(whole)*100n+BigInt(fraction.padEnd(2,'0'))>10000n)fault('INVALID_FIELD',field);
+ return BigInt(whole).toString()+(fraction.replace(/0+$/,'')?'.'+fraction.replace(/0+$/,''):'');
+};
+const authorizeHandler=actor=>{if(!actor?.ipHandlerService||!actor.id||actor.customerUserId)fault('FORBIDDEN',null,403)};
+const authorizeAdmin=actor=>{if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403)};
+const report=row=>({handlerTransferId:row.handler_transfer_id,revision:row.revision,
+ transactionReference:row.transaction_reference,handlerStatus:row.handler_status,bankName:row.bank_name,
+ bankServerSentAmount:row.bank_server_sent_amount,nostroIban:row.nostro_iban,receivingAbiqIban:row.receiving_abiq_iban,
+ amountCleared:row.amount_cleared,beneficiaryName:row.beneficiary_name,beneficiaryAccount:row.beneficiary_account,
+ franchiseAllocatedPercent:row.franchise_allocated_percent,operationCompleted:row.operation_completed,
+ manualReport100Digits:row.manual_report_100_digits,updatedAt:row.updated_at,
+ proof:{available:!!row.proof_sha256,fileName:row.proof_file_name||null,sha256:row.proof_sha256||null,sizeBytes:row.proof_size_bytes||null}});
+const parseProof=value=>{
+ if(!value||typeof value!=='object'||Array.isArray(value))fault('CHECKOUT_IP_PROOF','proof');
+ const fileName=text(value.fileName,'proof.fileName',128);
+ if(!/^[A-Za-z0-9][A-Za-z0-9 ._-]*\.pdf$/i.test(fileName))fault('INVALID_FIELD','proof.fileName');
+ const encoded=value.pdfBase64;
+ if(typeof encoded!=='string'||encoded.length>Math.ceil(IP_PROOF_MAX_BYTES/3)*4||!encoded.length||
+  !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded))fault('CHECKOUT_IP_PROOF','proof');
+ const bytes=Buffer.from(encoded,'base64');
+ if(bytes.length<8||bytes.length>IP_PROOF_MAX_BYTES||bytes.toString('base64')!==encoded||
+  !/^%PDF-[12]\.[0-9]/.test(bytes.subarray(0,8).toString('ascii'))||!bytes.subarray(-1024).includes(Buffer.from('%%EOF')))
+  fault('CHECKOUT_IP_PROOF','proof');
+ return {fileName,bytes,sha256:sha(bytes),sizeBytes:bytes.length};
+};
+
+// Only the authenticated handler writes this register. Completion is a report
+// of its settled operation, never a ledger instruction or a browser assertion.
+export class CheckoutIpProcessing{
+ constructor(pool,{mapRequest}={}){this.pool=pool;this.mapRequest=mapRequest;}
+ async readReports(db,ids){
+  if(!ids.length)return new Map();
+  const rows=(await db.query(`SELECT p.*,p.bank_server_sent_amount::text,p.amount_cleared::text,
+   p.franchise_allocated_percent::text,d.file_name AS proof_file_name,d.sha256 AS proof_sha256,
+   octet_length(d.pdf_bytes) AS proof_size_bytes
+   FROM avis_core_v2.checkout_ip_processing p LEFT JOIN avis_core_v2.checkout_ip_proofs d USING(request_id)
+   WHERE p.request_id=ANY($1::uuid[])`,[ids])).rows;
+  return new Map(rows.map(row=>[row.request_id,report(row)]));
+ }
+ async routing(db,request){
+  const row=(await db.query(`SELECT r.receiving_account_id,r.nostro_cash_account_id,r.intermediary_id,
+   b.abiq_iban,c.iban_or_account_no
+   FROM avis_core_v2.checkout_ip_requests r
+   LEFT JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=r.receiving_account_id AND b.status='ACTIVE'
+   LEFT JOIN avis_core_v2.external_cash_accounts c ON c.cash_account_id=r.nostro_cash_account_id
+   WHERE r.request_id=$1`,[request.request_id])).rows[0];
+  return {receivingAccountId:row?.receiving_account_id||null,receivingAbiqIban:row?.abiq_iban||null,
+   nostroCashAccountId:row?.nostro_cash_account_id||null,nostroIban:row?.iban_or_account_no||null,
+   intermediaryId:row?.intermediary_id||null};
+ }
+ async context(actor,input){
+  authorizeHandler(actor);
+  if(!uuid(input?.requestId))fault('INVALID_FIELD','requestId');
+  const row=(await this.pool.query('SELECT * FROM avis_core_v2.checkout_ip_requests WHERE request_id=$1',[input.requestId])).rows[0];
+  if(!row)fault('CHECKOUT_IP_NOT_FOUND','requestId',404);
+  const reports=await this.readReports(this.pool,[row.request_id]);
+  return {request:{...this.mapRequest(row),processing:reports.get(row.request_id)||null},routing:await this.routing(this.pool,row)};
+ }
+ async publish(actor,input){
+  authorizeHandler(actor);
+  if(!uuid(input?.requestId))fault('INVALID_FIELD','requestId');
+  if(!uuid(input.handlerTransferId))fault('INVALID_FIELD','handlerTransferId');
+  if(!Number.isSafeInteger(input.revision)||input.revision<1||input.revision>2147483647)fault('INVALID_FIELD','revision');
+  if(typeof input.operationCompleted!=='boolean')fault('INVALID_FIELD','operationCompleted');
+  const value={handlerTransferId:input.handlerTransferId.toLowerCase(),revision:input.revision,
+   transactionReference:text(input.transactionReference,'transactionReference',140),
+   handlerStatus:text(input.handlerStatus,'handlerStatus',40),bankName:optionalText(input.bankName,'bankName',180),
+   bankServerSentAmount:decimal(input.bankServerSentAmount,'bankServerSentAmount'),
+   nostroIban:optionalText(input.nostroIban,'nostroIban',128),receivingAbiqIban:optionalText(input.receivingAbiqIban,'receivingAbiqIban',64),
+   amountCleared:decimal(input.amountCleared,'amountCleared'),beneficiaryName:optionalText(input.beneficiaryName,'beneficiaryName',160),
+   beneficiaryAccount:optionalText(input.beneficiaryAccount,'beneficiaryAccount',128),
+   franchiseAllocatedPercent:decimal(input.franchiseAllocatedPercent,'franchiseAllocatedPercent',{percent:true}),
+   operationCompleted:input.operationCompleted,manualReport100Digits:optionalText(input.manualReport100Digits,'manualReport100Digits',100)};
+  if(value.manualReport100Digits&&!/^[0-9]{100}$/.test(value.manualReport100Digits))fault('INVALID_FIELD','manualReport100Digits');
+  const proof=input.proof==null?null:parseProof(input.proof);
+  if(proof&&!value.operationCompleted)fault('CHECKOUT_IP_PROOF','proof');
+  if(value.operationCompleted){
+   if(value.handlerStatus!=='SETTLED')fault('CHECKOUT_IP_COMPLETION','handlerStatus');
+   for(const field of ['bankName','bankServerSentAmount','receivingAbiqIban','amountCleared','beneficiaryName','beneficiaryAccount','franchiseAllocatedPercent','manualReport100Digits'])
+    if(value[field]==null)fault('CHECKOUT_IP_COMPLETION',field);
+   if(!proof)fault('CHECKOUT_IP_PROOF','proof');
+  }
+  const snapshot={...value,proof:proof?{fileName:proof.fileName,sha256:proof.sha256,sizeBytes:proof.sizeBytes}:null};
+  const fingerprint=sha(JSON.stringify(snapshot)),db=await this.pool.connect();
+  try{
+   await db.query('BEGIN');
+   const request=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_requests WHERE request_id=$1 FOR UPDATE',[input.requestId])).rows[0];
+   if(!request)fault('CHECKOUT_IP_NOT_FOUND','requestId',404);
+   const previous=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_processing WHERE request_id=$1',[request.request_id])).rows[0];
+   if(previous){
+    if(previous.handler_transfer_id!==value.handlerTransferId||previous.transaction_reference!==value.transactionReference)
+     fault('CHECKOUT_IP_PROCESSING_LINK','handlerTransferId',409);
+    if(previous.revision===value.revision){
+     if(previous.report_fingerprint!==fingerprint)fault('IDEMPOTENCY_CONFLICT','revision',409);
+     const reports=await this.readReports(db,[request.request_id]);await db.query('COMMIT');
+     return {requestId:request.request_id,processing:reports.get(request.request_id)};
+    }
+    if(previous.operation_completed)fault('CHECKOUT_IP_COMPLETED','requestId',409);
+    if(previous.revision>value.revision)fault('CHECKOUT_IP_REVISION','revision',409);
+   }
+   if(request.status!=='ACTIVE')fault('CHECKOUT_IP_STATE','requestId',409);
+   const route=await this.routing(db,request);
+   if(value.receivingAbiqIban!==route.receivingAbiqIban||value.nostroIban!==route.nostroIban)
+    fault('CHECKOUT_IP_ACCOUNT',value.receivingAbiqIban!==route.receivingAbiqIban?'receivingAbiqIban':'nostroIban',409);
+   const other=(await db.query('SELECT request_id FROM avis_core_v2.checkout_ip_processing WHERE handler_transfer_id=$1 AND request_id<>$2',[value.handlerTransferId,request.request_id])).rows[0];
+   if(other)fault('CHECKOUT_IP_PROCESSING_LINK','handlerTransferId',409);
+   await db.query(`INSERT INTO avis_core_v2.checkout_ip_processing(request_id,handler_transfer_id,revision,
+    transaction_reference,handler_status,bank_name,bank_server_sent_amount,nostro_iban,receiving_abiq_iban,
+    amount_cleared,beneficiary_name,beneficiary_account,franchise_allocated_percent,operation_completed,
+    manual_report_100_digits,report_fingerprint,updated_by)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+    ON CONFLICT(request_id) DO UPDATE SET revision=EXCLUDED.revision,handler_status=EXCLUDED.handler_status,
+    bank_name=EXCLUDED.bank_name,bank_server_sent_amount=EXCLUDED.bank_server_sent_amount,
+    nostro_iban=EXCLUDED.nostro_iban,receiving_abiq_iban=EXCLUDED.receiving_abiq_iban,amount_cleared=EXCLUDED.amount_cleared,
+    beneficiary_name=EXCLUDED.beneficiary_name,beneficiary_account=EXCLUDED.beneficiary_account,
+    franchise_allocated_percent=EXCLUDED.franchise_allocated_percent,operation_completed=EXCLUDED.operation_completed,
+    manual_report_100_digits=EXCLUDED.manual_report_100_digits,report_fingerprint=EXCLUDED.report_fingerprint,
+    updated_by=EXCLUDED.updated_by,updated_at=now()`,
+    [request.request_id,value.handlerTransferId,value.revision,value.transactionReference,value.handlerStatus,value.bankName,
+     value.bankServerSentAmount,value.nostroIban,value.receivingAbiqIban,value.amountCleared,value.beneficiaryName,
+     value.beneficiaryAccount,value.franchiseAllocatedPercent,value.operationCompleted,value.manualReport100Digits,fingerprint,actor.id]);
+   if(proof)await db.query(`INSERT INTO avis_core_v2.checkout_ip_proofs(request_id,handler_transfer_id,revision,
+    transaction_reference,manual_report_100_digits,file_name,pdf_bytes,sha256,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [request.request_id,value.handlerTransferId,value.revision,value.transactionReference,value.manualReport100Digits,proof.fileName,proof.bytes,proof.sha256,actor.id]);
+   await db.query(`INSERT INTO avis_core_v2.checkout_ip_processing_events(request_id,revision,report_snapshot,report_fingerprint,actor_id)
+    VALUES($1,$2,$3::jsonb,$4,$5)`,[request.request_id,value.revision,JSON.stringify(snapshot),fingerprint,actor.id]);
+   const reports=await this.readReports(db,[request.request_id]);await db.query('COMMIT');
+   return {requestId:request.request_id,processing:reports.get(request.request_id)};
+  }catch(error){await db.query('ROLLBACK');throw error}finally{db.release()}
+ }
+ async proof(actor,requestId){
+  authorizeAdmin(actor);if(!uuid(requestId))fault('INVALID_FIELD','requestId');
+  const row=(await this.pool.query('SELECT file_name,pdf_bytes,sha256 FROM avis_core_v2.checkout_ip_proofs WHERE request_id=$1',[requestId])).rows[0];
+  if(!row)fault('CHECKOUT_IP_PROOF_NOT_FOUND','requestId',404);
+  const bytes=Buffer.from(row.pdf_bytes);
+  if(sha(bytes)!==row.sha256)fault('CHECKOUT_IP_PROOF_INTEGRITY','requestId',500);
+  return {fileName:row.file_name,bytes,sha256:row.sha256};
+ }
+}

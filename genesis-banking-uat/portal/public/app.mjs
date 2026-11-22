@@ -3,7 +3,7 @@ import {createCryptoWorkspace} from './crypto-workspace.mjs';
 import {readExchangeIntent} from './exchange-intent.mjs';
 import {createPortfolio,securitiesTable,stockRegisterTable,securityOrdersTable,securityBookTable} from './portfolio.mjs';
 import {nostroRegisterTable,nostroMovementsTable} from './nostro-clearing.mjs';
-import {checkoutIpRegister,bindCheckoutIp,ipState} from './checkout-ip.mjs';
+import {checkoutIpRegister,bindCheckoutIp,checkoutIpHandlerUrl,checkoutIpFingerprint,replaceCheckoutIpRegister,createCheckoutIpProof,expireCheckoutIpControls} from './checkout-ip.mjs';
 import {accountTypes,accountSummaryTable,backofficeAccountTable,createAccountStatements} from './accounts.mjs';
 import {holderRegisterField,connectAccountHolderRegister,buildAccountOpeningRequest} from './open-account-register.mjs';
 import {createCardManager,cardAccountTable,cardProducts} from './cards.mjs';
@@ -15,6 +15,7 @@ let identity={admin:true,canSwitchWorkspace:false},sessionEpoch=0,accountTypeFil
 let exchangeIntent=null;try{exchangeIntent=readExchangeIntent(location.hash);}catch(e){$('#login-form .form-error').textContent=e.message;}
 if(exchangeIntent)$('#login-form h2').textContent=exchangeIntent.side?'Sign in to '+exchangeIntent.side.toLowerCase()+' '+exchangeIntent.symbol:'Sign in to your portfolio';
 if(new URLSearchParams(location.search).get('own')==='1'){$('#close-workspace').hidden=false;$('#close-workspace').onclick=()=>{if(window.avisDesktop?.windowControl)window.avisDesktop.windowControl('close');else{window.close();setTimeout(()=>{if(!window.closed)location.assign('https://avis.land/exchange');},300);}};}
+const ipProof=createCheckoutIpProof({onUnauthorized:()=>signedOut()});
 const currencies=['EUR','USD','GBP','CHF','SEK','NOK','DKK','PLN','CZK','HUF','RON','AED','SGD','JPY'];
 async function api(path,body,key){
  const epoch=sessionEpoch,write=body!==undefined;
@@ -44,8 +45,8 @@ async function api(path,body,key){
 let formGeneration=0,noticeTimer;
 function clearNotice(){clearTimeout(noticeTimer);$('#notice').textContent='';$('#notice').hidden=true;}
 function clearForm(){abiqGenerator.close();formGeneration++;activeForm=null;if($('#form-dialog').open)$('#form-dialog').close();$('#action-form').reset();$('#form-fields').replaceChildren();}
-function signedOut(){document.querySelector('[data-basket-authorize]')?.remove();document.querySelector('[data-checkout-management]')?.remove();sessionEpoch++;loading++;clearNotice();$('#workspace-selector').replaceChildren();$('#workspace-error').textContent='';clearForm();paymentWizard.close();cardManager.close();accountStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';$('#workspace-selector').hidden=true;$('#workspace').hidden=true;$('#signin').hidden=false;$('#signout').hidden=true;$('#operator-name').textContent='';csrf='';for(const k of Object.keys(cache))delete cache[k];if($('#form-dialog').open)$('#form-dialog').close();}
-function signedIn(session){document.querySelector('[data-basket-authorize]')?.remove();document.querySelector('[data-checkout-management]')?.remove();sessionEpoch++;clearNotice();$('#workspace-selector').replaceChildren();$('#workspace-error').textContent='';clearForm();paymentWizard.close();cardManager.close();accountStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';for(const k of Object.keys(cache))delete cache[k];identity={...session,admin:session.admin!==false};csrf=session.csrf;document.querySelectorAll('nav a').forEach(a=>a.hidden=!identity.admin&&!['#accounts','#portfolio','#payments','#cards','#wallets'].includes(a.hash));void refreshWorkspaces();void refreshPickupAlerts();$('#workspace').hidden=false;$('#signin').hidden=true;$('#signout').hidden=false;$('#operator-name').textContent=session.username;void resumeExchange();void showStripeReturn();if(new URLSearchParams(location.search).get('crypto_basket')==='1'){const purpose=new URLSearchParams(location.search).get('purpose');history.replaceState(null,'','#wallets');void openCryptoBasket(api,null,null,purpose).catch(pageError);}else if(identity.admin&&new URLSearchParams(location.search).get('checkout_management')==='1'){history.replaceState(null,'','#pos');void openCheckoutManagement(api);}else void resumeBasketAuthorization(api,document.body);}
+function signedOut(){ipProof.close();document.querySelector('[data-basket-authorize]')?.remove();document.querySelector('[data-checkout-management]')?.remove();sessionEpoch++;loading++;clearNotice();$('#workspace-selector').replaceChildren();$('#workspace-error').textContent='';clearForm();paymentWizard.close();cardManager.close();accountStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';$('#workspace-selector').hidden=true;$('#workspace').hidden=true;$('#signin').hidden=false;$('#signout').hidden=true;$('#operator-name').textContent='';csrf='';for(const k of Object.keys(cache))delete cache[k];if($('#form-dialog').open)$('#form-dialog').close();}
+function signedIn(session){ipProof.close();document.querySelector('[data-basket-authorize]')?.remove();document.querySelector('[data-checkout-management]')?.remove();sessionEpoch++;clearNotice();$('#workspace-selector').replaceChildren();$('#workspace-error').textContent='';clearForm();paymentWizard.close();cardManager.close();accountStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';for(const k of Object.keys(cache))delete cache[k];identity={...session,admin:session.admin!==false};csrf=session.csrf;document.querySelectorAll('nav a').forEach(a=>a.hidden=!identity.admin&&!['#accounts','#portfolio','#payments','#cards','#wallets'].includes(a.hash));void refreshWorkspaces();void refreshPickupAlerts();$('#workspace').hidden=false;$('#signin').hidden=true;$('#signout').hidden=false;$('#operator-name').textContent=session.username;void resumeExchange();void showStripeReturn();if(new URLSearchParams(location.search).get('crypto_basket')==='1'){const purpose=new URLSearchParams(location.search).get('purpose');history.replaceState(null,'','#wallets');void openCryptoBasket(api,null,null,purpose).catch(pageError);}else if(identity.admin&&new URLSearchParams(location.search).get('checkout_management')==='1'){history.replaceState(null,'','#pos');void openCheckoutManagement(api);}else void resumeBasketAuthorization(api,document.body);}
 async function showStripeReturn(){
  const params=new URLSearchParams(location.search),kind=params.get('stripe_pos');if(!['return','cancel'].includes(kind))return;
  const sessionId=params.get('session_id');
@@ -120,7 +121,9 @@ function bindTerminalControls(){
  });
 }
 setInterval(()=>{
- if(!csrf||!identity.admin||location.hash!=='#pos')return;
+ if(!csrf||!identity.admin)return;
+ if(location.hash==='#payments')expireCheckoutIpControls();
+ if(location.hash!=='#pos')return;
  let expiredCount=0;
  for(const switchButton of document.querySelectorAll('[data-pos-deadline]')){
   if(Number(switchButton.dataset.posDeadline)>Date.now())continue;
@@ -160,38 +163,28 @@ setInterval(async()=>{
  }catch(error){console.error('POS_TERMINAL_REFRESH',error.code||error.name)}finally{posTerminalPolling=false}
 },7000);
 // Update checkout request switches while preserving an administrator's bank selections.
-let ipQueueRefreshing=false;
+let ipQueueRefreshing=false,ipActionsInFlight=0,ipActionEpoch=0;
 setInterval(async()=>{
- if(!csrf||!identity.admin||location.hash!=='#payments'||ipQueueRefreshing)return;
+ if(!csrf||!identity.admin||location.hash!=='#payments'||ipQueueRefreshing||ipActionsInFlight)return;
  const panel=document.querySelector('[data-checkout-ip-register]');if(!panel)return;
- ipQueueRefreshing=true;const epoch=sessionEpoch;
+ ipQueueRefreshing=true;const epoch=sessionEpoch,actionEpoch=ipActionEpoch;
  try{
   const rows=(await api('views/checkoutip')).rows;
-  if(epoch!==sessionEpoch||location.hash!=='#payments')return;
+  if(epoch!==sessionEpoch||location.hash!=='#payments'||ipActionsInFlight||actionEpoch!==ipActionEpoch||!panel.isConnected)return;
   const old=cache.checkoutip||[];
-  const fingerprint=rs=>rs.map(x=>[x.requestId,x.status,x.expiresAt,x.approvedAt,x.closedAt]).join('|');
-  if(fingerprint(old)===fingerprint(rows))return;
-  const selections=new Map([...panel.querySelectorAll('[data-checkout-ip]')].map(row=>[
-   row.dataset.checkoutIp,['[data-ip-account]','[data-ip-nostro]','[data-ip-intermediary]'].map(selector=>row.querySelector(selector)?.value)]));
+  if(checkoutIpFingerprint(old)===checkoutIpFingerprint(rows))return;
   cache.checkoutip=rows;
-  panel.outerHTML=checkoutIpRegister(rows,cache.checkoutipaccounts||[],cache.nostroclearing||[]);
-  const current=document.querySelector('[data-checkout-ip-register]');
-  for(const row of current.querySelectorAll('[data-checkout-ip]')){
-   const values=selections.get(row.dataset.checkoutIp);if(!values)continue;
-   for(const [index,selector] of ['[data-ip-account]','[data-ip-nostro]','[data-ip-intermediary]'].entries()){
-    const field=row.querySelector(selector);
-    if(field&&[...field.options].some(option=>option.value===values[index]))field.value=values[index];
-   }
-  }
-  bindCheckoutIp({root:$('#panels'),requests:rows,nostros:cache.nostroclearing||[],
-   activate:input=>api('checkout-ip/activation',input),onChange:()=>void render(),
-   openHandler:record=>{
-    const url='https://avis.land/admin/bank/quantum/direct-transfer?checkoutRequest='+encodeURIComponent(record.requestId);
-    window.open(url,'_blank','noopener,noreferrer');
-   }});
+  replaceCheckoutIpRegister(panel,rows,cache.checkoutipaccounts||[],cache.nostroclearing||[]);
+  bindIpControls();
  }catch(e){console.error('CHECKOUT_IP_REFRESH',e.code||e.name)}
  finally{ipQueueRefreshing=false}
 },7000);
+function bindIpControls(){
+ bindCheckoutIp({root:$('#panels'),requests:cache.checkoutip||[],nostros:cache.nostroclearing||[],
+  activate:async input=>{ipActionsInFlight++;ipActionEpoch++;try{return await api('checkout-ip/activation',input);}finally{ipActionsInFlight--;ipActionEpoch++;}},onChange:()=>void render(),
+  openHandler:record=>window.open(checkoutIpHandlerUrl(record),'_blank','noopener,noreferrer'),
+  openProof:record=>void ipProof.open(record)});
+}
 function table(name,title,rows){return `<section class="panel"><div class="panel-header"><h2>${esc(title)}</h2><span>${rows.length} records${rows.length===300?' · latest 300':''}</span></div><div class="table-wrap"><table><thead><tr>${columns[name].map(([,h])=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${columns[name].map(([k])=>`<td${k.includes('iban')||k==='account_reference'?' class="account-number"':''}>${name==='portfolio'&&['smart_contract','historical_wallet_address'].includes(k)?(r.historical_proof||[]).map(p=>`<a class="portfolio-chain-proof" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(k==='smart_contract'?p.contractAddress:p.walletAddress)}</a>`).join('<br>')||'—':k==='request_id'?`<button type="button" data-request="${esc(r[k])}">View transfer</button>`:k==='status'?`<span class="status">${esc(label(r[k]))}</span>`:esc(k.includes('balance')||['amount','total_amount_eur'].includes(k)?number(r[k]):k==='created_at'?new Date(r[k]).toLocaleString():['abiq_iban','account_reference'].includes(k)?displayAbiq(r[k]):['owner_class','wallet_scope','account_category'].includes(k)&&r[k]?label(r[k]):typeof r[k]==='boolean'?(r[k]?'Yes':'No'):r[k]??'—')}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;}
 Object.assign(columns,{
  treasurypositions:[['asset_name','Registered asset'],['portfolio_abiq_iban','Portfolio ABIQ IBAN'],['asset_code','Asset identifier'],['isin','ISIN'],['asset_class','Asset class'],['quantity','Units'],['destination','Treasury account'],['booking_reference','Booking reference'],['booked_at','Booked at']],
@@ -278,14 +271,7 @@ html+=results.map((r,i)=>{
  if(view==='exchangebook')return securityBookTable(rows);
  return table(view,page.views[i][1],rows)+(view==='portfolio'&&!rows.length?'<p class="panel-empty">No investment holdings recorded yet.</p>':'');
 }).join('');$('#panels').innerHTML=html;$('#panels').setAttribute('aria-busy','false');accountStatements.bind($('#panels'));portfolioManager.bind($('#panels'));
- if(key==='payments'&&identity.admin)bindCheckoutIp({
-  root:$('#panels'),requests:cache.checkoutip||[],nostros:cache.nostroclearing||[],
-  activate:input=>api('checkout-ip/activation',input),onChange:()=>void render(),
-  openHandler:record=>{
-    const url='https://avis.land/admin/bank/quantum/direct-transfer?checkoutRequest='+encodeURIComponent(record.requestId);
-    window.open(url,'_blank','noopener,noreferrer');
-   }
- });if(key==='pos')bindTerminalControls();
+ if(key==='payments'&&identity.admin)bindIpControls();if(key==='pos')bindTerminalControls();
  document.querySelectorAll('[data-nostro-edit]').forEach(button=>button.onclick=async()=>{
    const cashId=button.dataset.nostroEdit;
    if(!await openForm('editcashaccount'))return;
@@ -318,7 +304,7 @@ html+=results.map((r,i)=>{
   }
  });document.querySelectorAll('[data-request]').forEach(b=>b.onclick=()=>paymentWizard.view(b.dataset.request).catch(e=>pageError(e,b)));document.querySelectorAll('[data-card-row]').forEach(row=>{const show=()=>cardManager.open(row.querySelector('select').value).catch(e=>pageError(e,row));row.onclick=e=>{if(e.target.closest('select'))return;void show();};row.onkeydown=e=>{if(e.target===row&&e.key==='Enter'){e.preventDefault();void show();}};});}
 window.addEventListener('hashchange',()=>{
- clearNotice();clearForm();paymentWizard.close();accountStatements.close();cardManager.close();portfolioManager.close();
+ ipProof.close();clearNotice();clearForm();paymentWizard.close();accountStatements.close();cardManager.close();portfolioManager.close();
 
  try{const intent=readExchangeIntent(location.hash);if(intent){exchangeIntent=intent;if(csrf)void resumeExchange();else $('#login-form h2').textContent=intent.side?'Sign in to '+intent.side.toLowerCase()+' '+intent.symbol:'Sign in to your portfolio';return;}}catch(e){pageError(e);return;}
  void render();

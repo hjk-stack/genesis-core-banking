@@ -2,6 +2,7 @@ import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {PGlite} from '@electric-sql/pglite';
+import {JSDOM} from 'jsdom';
 import pg from 'pg';
 import {migrate} from '../src/migrate.mjs';
 import {AccountManagement} from '../src/account-management.mjs';
@@ -16,7 +17,7 @@ const id=()=>randomUUID(),request=()=>({requestId:id(),checkoutKind:'MILESTONE',
 before(async()=>{
  if(process.env.TEST_DATABASE_URL){const url=new URL(process.env.TEST_DATABASE_URL);assert.equal(url.pathname,'/avispay_ci');
   pool=new pg.Pool({connectionString:url.href});await pool.query('DROP SCHEMA IF EXISTS avis_core_v2 CASCADE');}
- else{db=new PGlite();pool={query:(...args)=>db.query(...args),connect:async()=>({query:(...args)=>db.query(...args),release(){}})};}
+ else{db=new PGlite();pool={query:(...args)=>db.query(...args),connect:async()=>({query:(...args)=>db.query(...args),exec:(...args)=>db.exec(...args),release(){}})};}
  const conn=await pool.connect();try{await migrate(conn)}finally{conn.release()}
  ip=new CheckoutIpControl(pool);const c=new AccountManagement(pool);
  const a=await c.openAccount(admin,{accountType:'COMMON',fullName:'NOSTRO common',currencies:['EUR']},id());
@@ -44,7 +45,10 @@ test('checkout IP request remains request-only, idempotent and scoped to one che
  assert.equal(status.status,'REQUESTED');assert.equal(status.receivingAccountId,undefined);
  const admins=await ip.accounts(admin);
  assert.equal(admins.length,2);assert.deepEqual(new Set(admins.map(x=>x.owner_type)),new Set(['COMMON_POOL','SUSPENSE_INBOUND']));
- assert.match(checkoutIpRegister(await ip.list(admin),admins,[]),/Liquid Glass access/);
+ const window=new JSDOM(checkoutIpRegister(await ip.list(admin),admins,[])).window;
+ const control=window.document.querySelector('[role="switch"]');
+ assert.ok(control);assert.equal(control.dataset.state,'REQUESTED');assert.equal(control.getAttribute('aria-checked'),'false');
+ assert.ok(control.getAttribute('aria-label').includes(payload.requestId));window.close();
  assert.equal(ipState(status),'REQUESTED');
  await assert.rejects(ip.list(guest),e=>e.code==='FORBIDDEN');
 });

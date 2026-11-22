@@ -177,12 +177,40 @@ textarea{box-sizing:border-box;width:100%;font:inherit;border:1px solid #d6dbe3;
 #form-dialog:has(.incoming-intermediary-fields) #form-fields{display:block}
 
 /* Checkout IP counter — existing POS Liquid Glass semantics, wider ledger selector. */
-.checkout-ip-table{min-width:1170px}
+.checkout-ip-table{min-width:2240px}
 .checkout-ip-table td{vertical-align:top;min-width:115px}
-.checkout-ip-table td:first-child{min-width:215px}
+.checkout-ip-table td:first-child{min-width:230px;max-width:280px}
 .checkout-ip-table td small{display:block;font-size:11px;color:#5a6470;margin-top:6px;white-space:normal;overflow-wrap:anywhere}
+.checkout-ip-table th:first-child,.checkout-ip-table td:first-child{position:sticky;left:0;background:var(--surface,#fff);z-index:1;box-shadow:2px 0 0 var(--line,#e0e4e9)}
+.checkout-ip-table td{white-space:normal;overflow-wrap:anywhere;max-width:280px}
+.checkout-ip-table td.account-number{max-width:200px}
+.checkout-ip-table td small.form-error{color:var(--red,#b00029)}
+.checkout-ip-table td small.form-error:empty{display:none}
+.ip-request-controls{margin:16px 0 10px}
+.ip-request-controls .pos-activation-label{display:block;margin-top:8px;font-size:12px}
+.ip-register-heading{flex-wrap:wrap;gap:12px}
+.ip-register-actions{display:flex;align-items:center;flex-wrap:wrap;gap:16px}
 .checkout-ip-table .ip-row-label{font-size:11px;display:block;margin:0 0 10px}
 .checkout-ip-table .ip-row-label select{margin-top:5px;width:100%;min-width:190px;padding:9px 7px;max-width:230px}
-.checkout-ip-table [data-ip-handler]{white-space:nowrap;border:1px solid #8a9cad;border-radius:10px;padding:9px 12px;cursor:pointer;background:#f5f8fc}
+[data-checkout-ip-register] button:not(.pos-liquid-switch){white-space:nowrap;border:1px solid #8a9cad;border-radius:10px;padding:9px 12px;cursor:pointer;background:#f5f8fc;color:var(--ink,#20242b)}
+.checkout-ip-table .ip-operation-cell{min-width:200px}
+.checkout-ip-table [data-ip-completion-report]{display:block;width:100%;min-width:190px;resize:vertical;font-family:monospace;font-size:12px;line-height:1.5;overflow-wrap:anywhere;margin-top:8px;padding:8px;border:1px solid var(--line,#e0e4e9);border-radius:8px;background:#f7f9fb}
 .checkout-ip-table .pos-liquid-switch[data-state="REQUESTED"]{animation:pos-request-pulse 1.15s ease-in-out infinite}
 @media(prefers-reduced-motion:reduce){.checkout-ip-table .pos-liquid-switch[data-state="REQUESTED"]{animation:none}}
+
+/* The handler stays in its own tab; only its original proof PDF uses this window. */
+.ip-proof-dialog{width:min(980px,calc(100vw - 24px));height:min(850px,calc(100dvh - 24px));max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);padding:0;border:1px solid var(--line,#d6dce5);border-radius:16px;box-shadow:0 24px 80px #10203955;resize:both;overflow:hidden}
+.ip-proof-dialog[open]{display:flex;flex-direction:column}
+.ip-proof-handle{padding:16px 20px;cursor:move;touch-action:none;flex-shrink:0;border-bottom:1px solid var(--line,#d6dce5);gap:12px}
+.ip-proof-handle>div{min-width:0}
+.ip-proof-handle h2{margin:0;font-size:20px}
+.ip-proof-handle p{margin:6px 0 0;font-size:12px;overflow-wrap:anywhere}
+.ip-proof-handle .close{flex-shrink:0;cursor:pointer}
+.ip-proof-toolbar{padding:12px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;flex-shrink:0}
+.ip-proof-toolbar button,.ip-proof-toolbar a{border:1px solid #8a9cad;border-radius:8px;padding:9px 14px;background:#f5f8fc;color:#20242b;font-size:14px;font-weight:600;text-decoration:none;cursor:pointer}
+.ip-proof-toolbar button:disabled{cursor:default;opacity:.5}
+.ip-proof-dialog>p{padding:0 20px;margin:0 0 12px;flex-shrink:0}
+.ip-proof-dialog>.form-error:empty{display:none}
+.ip-proof-dialog iframe{display:block;width:100%;min-height:180px;flex:1;border:0;background:#f1f3f5}
+.ip-proof-dialog iframe[hidden],.ip-proof-dialog [hidden]{display:none}
+@media(max-width:620px){.ip-register-actions{align-items:flex-start;flex-direction:column;gap:10px}.ip-proof-handle{padding:14px}.ip-proof-toolbar{padding:10px 14px}.ip-proof-dialog{resize:none}}
