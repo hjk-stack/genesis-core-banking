@@ -69,7 +69,7 @@ const number=s=>{const[a,b]=String(s).split('.');return a.replace(/\B(?=(\d{3})+
 const displayAbiq=s=>typeof s==='string'&&/^TN\d{2}AVIP000\d{15}$/.test(s)?s.slice(0,14)+' '+s.slice(14):s;
 const label=s=>s.toLowerCase().replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase());
 const columns={accounts:[['user_id','User'],['full_name','Account holder'],['account_type','Type'],['abiq_iban','ABIQ-IBAN'],['currency_code','Currency'],['available_balance','Available'],['locked_balance','Reserved']],customers:[['user_id','User'],['customer_number','Customer number'],['full_name','Name'],['account_type','Account type'],['account_role','Role']],ledger:[['owner_class','Owner'],['account_holder','Account holder'],['account_reference','ABIQ / Ledger account'],['currency_code','Asset'],['wallet_scope','Scope'],['account_category','Category'],['available_balance','Available'],['locked_balance','Reserved']],transactions:[['created_at','Date & time'],['reference_id','Reference'],['event_type','Operation'],['direction','Entry'],['amount','Amount'],['currency_code','Currency'],['abiq_iban','ABIQ account']],shops:[['shop_name','Shop'],['merchant_id','Merchant ID'],['full_name','Business owner'],['commission_rate_bps','Commission (bps)'],['status','Status']],checkouts:[['marketplace_order_ref','Order'],['buyer_user_id','Buyer'],['payment_rail','Payment rail'],['total_amount_eur','EUR'],['status','Status'],['checkout_id','Checkout reference']],cards:[['user_id','Customer'],['last_four_digits','Card ending'],['card_type','Type'],['card_rail_mode','Card programme'],['status','Status']],terminals:[['terminal_id','Terminal'],['merchant_id','Merchant'],['terminal_type','Type'],['status','Status']],authorizations:[['created_at','Date & time'],['terminal_id','Terminal'],['network_reference','Network reference'],['amount','Amount'],['currency_code','Currency'],['status','Status'],['authorization_id','Authorization']],gateways:[['display_name','Gateway'],['gateway_category','Route'],['settlement_cycle','Settlement cycle']],stripepayments:[['created_at','Created'],['merchant_id','Merchant'],['terminal_id','Web POS'],['reference','Reference'],['amount','Amount'],['currency_code','Currency'],['status','Stripe status'],['payment_intent_id','Payment reference']],correspondents:[['institution_name','Institution'],['institution_type','Account class'],['bic_code','BIC'],['iban_or_account_no','Account'],['currency_code','Currency']],wallets:[['user_id','Customer'],['network','Blockchain'],['public_address','Receiving address'],['destination_tag','Destination tag']],connectors:[['display_name','Connector'],['connector_code','Code'],['is_enabled','Enabled'],['auto_provision','Automatic provisioning']],audit:[['created_at','Date & time'],['actor_id','Operator'],['operation','Action'],['resource_id','Reference']]};
-let posTerminalsExpanded=true;
+let posTerminalsExpanded=true,posTerminalActionBusy=false,posTerminalActionEpoch=0;
 const terminalDeadline=row=>row.expires_at?Date.parse(row.expires_at):row.requested_at?Date.parse(row.requested_at)+3600000:NaN;
 const terminalState=row=>{
  if(row.terminal_type!=='WEB_POS')return '';
@@ -105,14 +105,15 @@ function bindTerminalControls(){
  const panel=document.querySelector('[data-pos-register]');if(!panel)return;
  panel.addEventListener('toggle',()=>{posTerminalsExpanded=panel.open});
  panel.querySelectorAll('[data-terminal-toggle]').forEach(button=>button.onclick=async()=>{
-  if(button.disabled)return;button.disabled=true;
+  if(button.disabled||posTerminalActionBusy)return;
+  posTerminalActionBusy=true;posTerminalActionEpoch++;button.disabled=true;
   try{
    const rows=await api('terminals/activation',{terminalId:button.dataset.terminalToggle,active:button.dataset.terminalActive==='true'});
    const index=(cache.terminals||[]).findIndex(t=>t.terminal_id===rows.terminalId);
    if(index>=0)cache.terminals[index]={...cache.terminals[index],activation_state:rows.state,requested_at:rows.requestedAt,approved_at:rows.approvedAt,expired_at:rows.expiredAt,expires_at:rows.expiresAt};
    const current=document.querySelector('[data-pos-register]');if(!current||location.hash!=='#pos')return;
    posTerminalsExpanded=current.open;current.outerHTML=posTerminalsTable(cache.terminals||[]);bindTerminalControls();
-  }catch(err){pageError(err,button)}finally{if(button.isConnected)button.disabled=false}
+  }catch(err){pageError(err,button)}finally{posTerminalActionBusy=false;if(button.isConnected)button.disabled=false}
  });
 }
 setInterval(()=>{
@@ -140,11 +141,13 @@ setInterval(()=>{
  }
 },1000);
 setInterval(async()=>{
- if(!csrf||!identity.admin||location.hash!=='#pos'||!document.querySelector('[data-pos-register]'))return;
- const currentEpoch=sessionEpoch;
+ if(!csrf||!identity.admin||posTerminalActionBusy||location.hash!=='#pos'||!document.querySelector('[data-pos-register]'))return;
+ const currentEpoch=sessionEpoch,actionEpoch=posTerminalActionEpoch;
  try{
   const before=JSON.stringify((cache.terminals||[]).map(r=>[r.terminal_id,r.activation_state,r.requested_at,r.approved_at,r.expired_at,r.expires_at,r.checkout_title]));
-  const rows=await getRows('terminals');if(currentEpoch!==sessionEpoch||location.hash!=='#pos')return;
+  const response=await api('views/terminals');
+  if(currentEpoch!==sessionEpoch||actionEpoch!==posTerminalActionEpoch||posTerminalActionBusy||location.hash!=='#pos')return;
+  const rows=response.rows;cache.terminals=rows;
   const after=JSON.stringify(rows.map(r=>[r.terminal_id,r.activation_state,r.requested_at,r.approved_at,r.expired_at,r.expires_at,r.checkout_title]));
   if(before===after)return;
   const panel=document.querySelector('[data-pos-register]');if(!panel)return;
