@@ -47,7 +47,7 @@ const fixtureScript=[
 
 before(async()=>{
  // Use the real shell and stylesheet, including its main-width constraint.
- const html=(await readFile(new URL('../index.html',import.meta.url),'utf8')).replace('src="/app.mjs"','src="/fixture.mjs"');
+ const html=(await readFile(new URL('../index.html',import.meta.url),'utf8')).replace(/src="\/app\.mjs(?:\?[^"]*)?"/,'src="/fixture.mjs"');
  for(const address of Object.values(addresses))address.qr=await QRCode.toDataURL(address.public_address,{margin:2,width:256,errorCorrectionLevel:'M'});
  server=http.createServer(async(req,res)=>{
   if(req.url==='/'){wallets=initialWallets.map(w=>({...w}));testRuns=[];testReads=0;reviewedRunId=null;backingReads=0;liveFills=[execution('first-fill')];instructionVersion=1;savedInstructionVersion=0;robotInstructions=JSON.stringify({maxNotional:'100',dailyNotional:'1000',maxLoss:'100',minimumIndex:0,trailingBps:50,notes:'Follow the saved W-effect configuration.'},null,2);res.setHeader('content-type','text/html');return res.end(html);}
