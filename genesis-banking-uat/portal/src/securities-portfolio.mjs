@@ -183,6 +183,56 @@ export class SecuritiesPortfolio extends AccountManagement {
    return result(position,!existing);
   });
  }
+
+ async editTreasurySecuritySource(actor,input,key){
+  actualAdmin(actor);
+  const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
+  if(!uuid(input.bookingId))fault('TREASURY_SECURITY_SOURCE','bookingId');
+  if(!uuid(input.securityId))fault('SECURITY_NOT_FOUND','securityId');
+  const reference=text(input.reference,'reference',128);
+  const price=(value,field)=>{try{return decimal(units(value));}catch(error){if(error.code==='INVALID_AMOUNT')fault('INVALID_AMOUNT',field);throw error;}};
+  const quantity=price(input.quantity,'quantity'),issuingPrice=price(input.issuingPrice,'issuingPrice'),marketPrice=price(input.marketPrice,'marketPrice');
+  return this.operation(actor,'EDIT_TREASURY_SECURITY_POSITION',input,key,async db=>{
+   const source=(await db.query(`SELECT t.*,u.account_role FROM avis_core_v2.treasury_opening_positions t
+    JOIN avis_core_v2.sovereign_users u ON u.user_id=t.owner_user_id
+    WHERE t.booking_id=$1 FOR UPDATE OF t`,[input.bookingId])).rows[0];
+   if(!source||source.asset_class!=='SECURITY'||source.destination!=='TREASURY_PORTFOLIO'||source.account_role!=='INSTITUTION')
+    fault('TREASURY_SECURITY_SOURCE','bookingId');
+   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['securities:'+input.securityId]);
+   const p=(await db.query('SELECT * FROM avis_core_v2.portfolio_positions WHERE treasury_booking_id=$1 FOR UPDATE',[input.bookingId])).rows[0];
+   if(!p||String(p.user_id)!==String(source.owner_user_id)||p.security_id!==input.securityId)
+    fault('TREASURY_SECURITY_IDENTITY','securityId',409);
+   if(!Number.isSafeInteger(Number(input.version))||Number(input.version)!==p.version)fault('POSITION_CHANGED','quantity',409);
+   const security=await this.security(db,input.securityId);
+   const meta=securityMetadata({name:input.name,shortName:input.shortName,
+    currency:security.currency_code,isin:input.isin||null,cusip:input.cusip||null,
+    denomination:security.denomination,quoteBasis:security.quote_basis,
+    quantityDecimals:security.quantity_decimals,kind:security.kind});
+   if(source.isin&&source.isin!==meta.isin||source.asset_code==='AVISPAY-PLC-SHARES'&&security.kind!=='share')
+    fault('TREASURY_SECURITY_IDENTITY','isin');
+   quantityUnits(quantity,security);
+   if(units(quantity)<units(p.reserved_quantity))fault('SECURITY_QUANTITY_RESERVED','quantity');
+   const metadataChanged=meta.name!==security.name||meta.shortName!==security.short_name||
+    meta.isin!==security.isin||meta.cusip!==security.cusip;
+   if(metadataChanged){
+    const shared=(await db.query(`SELECT 1 FROM avis_core_v2.portfolio_positions
+     WHERE security_id=$1 AND position_id<>$2
+     UNION ALL SELECT 1 FROM avis_core_v2.securities_orders
+     WHERE security_id=$1 AND status IN ('REVIEW','OPEN') LIMIT 1`,[security.security_id,p.position_id])).rows;
+    if(shared.length)fault('TREASURY_SECURITY_SHARED','name',409);
+    await db.query(`UPDATE avis_core_v2.portfolio_securities SET name=$2,short_name=$3,isin=$4,cusip=$5
+     WHERE security_id=$1`,[security.security_id,meta.name,meta.shortName,meta.isin,meta.cusip]);
+   }
+   const row=(await db.query(`UPDATE avis_core_v2.portfolio_positions SET quantity=$2,
+    issuing_price=$3,market_price=$4,version=version+1,updated_at=now()
+    WHERE position_id=$1 RETURNING *`,[p.position_id,quantity,issuingPrice,marketPrice])).rows[0];
+   await db.query(`INSERT INTO avis_core_v2.portfolio_movements
+    (position_id,quantity_delta,resulting_quantity,reference,actor_id)
+    VALUES($1,$2,$3,$4,$5)`,[p.position_id,decimal(units(quantity)-units(p.quantity)),quantity,reference,actor.id]);
+   return {id:p.position_id,positionId:p.position_id,bookingId:source.booking_id,
+    securityId:security.security_id,quantity,version:row.version,sourceReference:source.source_reference,updated:true};
+  });
+ }
  async recordPosition(actor,input,key){
   actualAdmin(actor);const qty=decimal(units(input.quantity)),issue=decimal(units(input.issuingPrice)),market=decimal(units(input.marketPrice)),reference=text(input.reference,'reference',128);
   return this.operation(actor,'RECORD_PORTFOLIO_POSITION',input,key,async(db,k)=>{
