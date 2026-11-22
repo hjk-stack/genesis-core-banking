@@ -159,6 +159,40 @@ setInterval(async()=>{
   panel.outerHTML=posTerminalsTable(rows);bindTerminalControls();
  }catch(error){console.error('POS_TERMINAL_REFRESH',error.code||error.name)}finally{posTerminalPolling=false}
 },7000);
+// Update checkout request switches while preserving an administrator's bank selections.
+let ipQueueRefreshing=false;
+setInterval(async()=>{
+ if(!csrf||!identity.admin||location.hash!=='#payments'||ipQueueRefreshing)return;
+ const panel=document.querySelector('[data-checkout-ip-register]');if(!panel)return;
+ ipQueueRefreshing=true;const epoch=sessionEpoch;
+ try{
+  const rows=(await api('views/checkoutip')).rows;
+  if(epoch!==sessionEpoch||location.hash!=='#payments')return;
+  const old=cache.checkoutip||[];
+  const fingerprint=rs=>rs.map(x=>[x.requestId,x.status,x.expiresAt,x.approvedAt,x.closedAt]).join('|');
+  if(fingerprint(old)===fingerprint(rows))return;
+  const selections=new Map([...panel.querySelectorAll('[data-checkout-ip]')].map(row=>[
+   row.dataset.checkoutIp,['[data-ip-account]','[data-ip-nostro]','[data-ip-intermediary]'].map(selector=>row.querySelector(selector)?.value)]));
+  cache.checkoutip=rows;
+  panel.outerHTML=checkoutIpRegister(rows,cache.checkoutipaccounts||[],cache.nostroclearing||[]);
+  const current=document.querySelector('[data-checkout-ip-register]');
+  for(const row of current.querySelectorAll('[data-checkout-ip]')){
+   const values=selections.get(row.dataset.checkoutIp);if(!values)continue;
+   for(const [index,selector] of ['[data-ip-account]','[data-ip-nostro]','[data-ip-intermediary]'].entries()){
+    const field=row.querySelector(selector);
+    if(field&&[...field.options].some(option=>option.value===values[index]))field.value=values[index];
+   }
+  }
+  bindCheckoutIp({root:$('#panels'),requests:rows,nostros:cache.nostroclearing||[],
+   activate:input=>api('checkout-ip/activation',input),onChange:()=>void render(),
+   openHandler:record=>{
+    const url='https://avis.land/admin/bank/quantum/direct-transfer?checkoutRequest='+encodeURIComponent(record.requestId);
+    const popup=window.open(url,'avispay-ip-transfer-'+record.requestId,'popup=yes,resizable=yes,scrollbars=yes,width=1380,height=940');
+    popup?.focus();
+   }});
+ }catch(e){console.error('CHECKOUT_IP_REFRESH',e.code||e.name)}
+ finally{ipQueueRefreshing=false}
+},7000);
 function table(name,title,rows){return `<section class="panel"><div class="panel-header"><h2>${esc(title)}</h2><span>${rows.length} records${rows.length===300?' · latest 300':''}</span></div><div class="table-wrap"><table><thead><tr>${columns[name].map(([,h])=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${columns[name].map(([k])=>`<td${k.includes('iban')||k==='account_reference'?' class="account-number"':''}>${name==='portfolio'&&['smart_contract','historical_wallet_address'].includes(k)?(r.historical_proof||[]).map(p=>`<a class="portfolio-chain-proof" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(k==='smart_contract'?p.contractAddress:p.walletAddress)}</a>`).join('<br>')||'—':k==='request_id'?`<button type="button" data-request="${esc(r[k])}">View transfer</button>`:k==='status'?`<span class="status">${esc(label(r[k]))}</span>`:esc(k.includes('balance')||['amount','total_amount_eur'].includes(k)?number(r[k]):k==='created_at'?new Date(r[k]).toLocaleString():['abiq_iban','account_reference'].includes(k)?displayAbiq(r[k]):['owner_class','wallet_scope','account_category'].includes(k)&&r[k]?label(r[k]):typeof r[k]==='boolean'?(r[k]?'Yes':'No'):r[k]??'—')}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;}
 Object.assign(columns,{
  treasurypositions:[['asset_name','Registered asset'],['portfolio_abiq_iban','Portfolio ABIQ IBAN'],['asset_code','Asset identifier'],['isin','ISIN'],['asset_class','Asset class'],['quantity','Units'],['destination','Treasury account'],['booking_reference','Booking reference'],['booked_at','Booked at']],
