@@ -64,3 +64,26 @@ textarea{box-sizing:border-box;width:100%;font:inherit;border:1px solid #d6dbe3;
 .pos-request-time{font-variant-numeric:tabular-nums}
 @keyframes pos-request-pulse{50%{box-shadow:0 0 0 5px #337eda42,0 0 18px #367fda9c,inset 0 2px 5px #071e50}}
 @media(prefers-reduced-motion:reduce){.pos-liquid-switch[data-state=REQUESTED]{animation:none}}
+
+/* POS controls are always in the registered ID row, not in an unrelated desk. */
+.pos-terminal-summary{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
+.pos-terminal-summary .pos-register-count{margin-left:auto;font-size:12px;color:#56605f}
+.pos-pending-count{display:inline-flex;align-items:center;gap:7px;padding:5px 10px;border-radius:20px;font-size:12px;font-weight:700;background:#e8eff5;color:#245475}
+.pos-pending-count:not([data-pending-count="0"]){background:#dcefff;color:#1352a2}
+.pos-pending-count:not([data-pending-count="0"])::before{content:"";width:9px;height:9px;border-radius:50%;background:#277be8;box-shadow:0 0 0 3px #4e9df44f;animation:pos-request-pulse 1.25s infinite}
+.pos-terminal-register .table-wrap{overflow-x:auto;overscroll-behavior-x:contain}
+.pos-terminal-table{min-width:1040px;width:100%}
+.pos-terminal-table th,.pos-terminal-table td{vertical-align:middle;white-space:normal}
+.pos-terminal-table td.account-number{font-size:12px;font-weight:700;white-space:nowrap}
+.pos-terminal-table .pos-checkout-source{min-width:170px}
+.pos-checkout-source strong{display:block;font-size:13px;color:#234438;font-weight:650}
+.pos-checkout-source small{display:block;margin-top:4px;font:500 11px/1.4 ui-monospace,monospace;color:#67747a;word-break:break-word}
+.pos-request-time{min-width:160px;font:500 12px/1.5 ui-monospace,monospace;color:#424e55}
+.pos-time-line{display:block;white-space:nowrap}
+.pos-time-line+ .pos-time-line{margin-top:3px}
+.pos-activation-cell{min-width:166px;white-space:nowrap!important}
+.pos-terminal-awaiting{background:linear-gradient(90deg,transparent,#d7eeff55,transparent)}
+.pos-terminal-awaiting .pos-activation-label{color:#145aba}
+.pos-liquid-switch:focus-visible{outline:3px solid #235ee8;outline-offset:3px}
+.pos-liquid-switch:disabled{opacity:.6;cursor:progress}
+@media(max-width:700px){.pos-terminal-register .pos-terminal-summary{padding:14px}.pos-terminal-table{min-width:990px}}
