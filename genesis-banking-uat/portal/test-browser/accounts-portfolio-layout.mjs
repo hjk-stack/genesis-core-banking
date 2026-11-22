@@ -25,15 +25,40 @@ before(async()=>{
   if(['/admin','/customer'].includes(req.url)){res.setHeader('set-cookie','fixture-role='+req.url.slice(1)+'; Path=/');res.setHeader('content-type','text/html');return res.end(await readFile(new URL('../index.html',import.meta.url)));}
   const admin=req.headers.cookie?.includes('fixture-role=admin');
   if(req.url==='/api/session')return respond({username:'fixture',csrf:'isolated',admin,customerUserId:admin?null:'2',canSwitchWorkspace:false});
+  if(req.url.startsWith('/api/abiq/generator?'))return respond({
+   countries:['TN','IT'],currencies:[
+    {currency:'EUR',series:'00001',currencyBlock:'000978'},
+    {currency:'579',label:'Custodial account',series:'00015',currencyBlock:'000579'}],
+   customerNumbers:req.url.endsWith('holder=AVIP')?['1000101']:[],reusable:[],recent:[]
+  });
   if(req.url.startsWith('/api/views/')){const view=req.url.split('/').at(-1);reads.push(view);const fixtures={accounts:admin?[business,personal]:[personal],accountsummaries:admin?[business,custody,margin,personal]:[personal],customers:[business,personal],backofficeaccounts:[common,suspense],securities:[security],portfolio:[{currency_code:'AG',network:'ETHEREUM',available_balance:admin?'15.000000000000000000':'7.000000000000000000',locked_balance:'0'}],ledger:[{account_holder:'SHOULD NOT RENDER'}],transactions:[{reference_id:'SHOULD NOT RENDER'}]};return respond({rows:fixtures[view]||[]});}
   if(req.method==='GET'&&(req.url.startsWith('/api/backoffice-accounts/')||req.url.startsWith('/api/accounts/'))){const id=req.url.split('/')[3].split('?')[0],account=[common,suspense,personal,business,custody,margin].find(a=>a.account_id===id),older=req.url.includes('?before='),entry={entry_id:older?'1':'2',journal_id:'fixture-journal',event_type:'OPENING',created_at:'2026-11-14T12:00:00Z',reference_id:older?'Earlier statement entry':'Selected account entry',direction:'CREDIT',amount:'100',running_balance:'100'};if(req.url.includes('/movements/'))return respond({account,entry});return respond({account,totals:{incoming:'100',outgoing:'10'},entries:[entry],nextCursor:older?null:'2'});}
   if(req.method==='POST'&&req.url.startsWith('/api/')){let raw='';for await(const chunk of req)raw+=chunk;calls.push({path:req.url,body:JSON.parse(raw)});return respond({id:'fixture'});}
-  if(['/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/approved-robot.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/trading-panel.mjs','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/app.mjs','/portfolio.mjs','/exchange-intent.mjs','/accounts.mjs','/cards.mjs','/payment-wizard.mjs','/card-message.mjs','/styles.css'].includes(req.url)){res.setHeader('content-type',req.url.endsWith('.css')?'text/css':'text/javascript');return res.end(await readFile(new URL('../public'+req.url,import.meta.url)));}
+  if(['/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/approved-robot.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/trading-panel.mjs','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/app.mjs','/abiq-generator.mjs','/abiq-number.mjs','/portfolio.mjs','/exchange-intent.mjs','/accounts.mjs','/cards.mjs','/payment-wizard.mjs','/card-message.mjs','/styles.css'].includes(req.url)){res.setHeader('content-type',req.url.endsWith('.css')?'text/css':'text/javascript');return res.end(await readFile(new URL('../public'+req.url,import.meta.url)));}
   res.writeHead(404);res.end();
  });
  await new Promise(r=>server.listen(0,'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
 });
 after(async()=>{await browser?.close();if(server)await new Promise(r=>server.close(r));});
+test('Accounts & ABIQ selects country and currency and derives the series',async()=>{
+ const page=await browser.newPage();
+ try{
+  await page.goto(base+'/admin#accounts');
+  await page.getByRole('button',{name:'Generate ABIQ number',exact:true}).click();
+  const dialog=page.locator('dialog.abiq-generator');
+  await dialog.waitFor({state:'visible'});
+  const country=dialog.getByLabel('Country',{exact:true}),currency=dialog.getByLabel('Currency',{exact:true});
+  assert.equal(await country.inputValue(),'');assert.equal(await currency.inputValue(),'');
+  await country.selectOption('IT');await currency.selectOption('EUR');
+  assert.equal(await dialog.locator('output[name=series]').textContent(),'00001');
+  await dialog.getByLabel('ABIQ holder short name').fill('AVIP');
+  await dialog.getByText(/^IT\d{2}AVIP000978 000011000101$/).waitFor();
+  await currency.selectOption('579');
+  assert.equal(await dialog.locator('output[name=series]').textContent(),'00015');
+  await dialog.getByText(/^IT\d{2}AVIP000579 000151000101$/).waitFor();
+  await dialog.getByRole('button',{name:'Close',exact:true}).click();
+ }finally{await page.close();}
+});
 test('former ledger URL opens portfolio without customer accounts or journal tracing',async()=>{
  const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));reads.length=0;
  try{await page.goto(base+'/admin#ledger');await page.getByRole('heading',{name:'Portfolio holdings',exact:true}).waitFor();assert.equal(new URL(page.url()).hash,'#portfolio');assert.equal(await page.getByRole('heading',{name:'Portfolio management',exact:true}).count(),1);assert.equal(await page.getByText('AG',{exact:true}).count(),1);

@@ -1,3 +1,4 @@
+import {generatorOptions,availableGeneratorNumbers,issueGeneratorNumber,assignGeneratorNumber} from './src/abiq-generator.mjs';
 import http from 'node:http';
 import {processAbiqRequest} from './src/abiq-interface.mjs';
 import {readFile} from 'node:fs/promises';
@@ -85,6 +86,9 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  PAYMENT_REVIEW_CHANGED:'The payment details or route changed. Go back and build a new message.',
  PAYMENT_REQUEST_NOT_FOUND:'Select an existing payment request.',PAYMENT_REQUEST_CLOSED:'This request is already closed.',
  ABIQ_ACCOUNT_ORDER_COUNT:'Request one identifier when opening a currency account.',
+ ABIQ_HOLDER_CODE:'Enter a four-letter ABIQ holder code.',ABIQ_CHECK_DIGITS:'Select the calculated check digits.',
+ ABIQ_NUMBER_TAKEN:'That number has been issued. Select another customer number.',ABIQ_NUMBER_EXHAUSTED:'The seven-digit series for this holder is full.',
+ ABIQ_ALREADY_ASSIGNED:'This number is already assigned to another account.',
  ABIQ_UNSUPPORTED_CURRENCY:'Select an accepted account currency.',ABIQ_INVALID_CURRENCIES:'Select at least one account currency.',
  ABIQ_CURRENCY_ALREADY_HELD:'This currency already has an account under the business identity.',
  ABIQ_CUSTOMER_NOT_FOUND:'Select an existing account holder.',ABIQ_INVALID_CUSTOMER:'Select a valid account holder.',
@@ -184,7 +188,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const reply=await buildPacs002({messageId:randomBytes(16).toString('hex'),uetr:original.uetr,senderBic:p.local_bic,receiverBic:p.peer_bic,status:receipt.status,bankReference:receipt.id.replaceAll('-','')});
     res.setHeader('content-type','application/xml');return res.end(reply);
    }
-   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/portfolio.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
+   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/portfolio.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
     const file=path==='/'?'index.html':path==='/card-message'?'public/card-message.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     // Always present the deployed UAT revision's current application source after an update.
@@ -242,6 +246,12 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     if(session.csrf_hash!==digest(csrf))await pool.query('UPDATE avis_core_v2.operator_sessions SET csrf_hash=$2 WHERE token_hash=$1',[digest(token),digest(csrf)]);
     return send(res,200,sessionData());
    }
+   if((path==='/api/abiq/generator'||path.startsWith('/api/abiq/generator/'))&&!session.is_admin)
+    fault('FORBIDDEN',null,403);
+   if(path==='/api/abiq/generator/available'&&req.method==='GET')
+    return send(res,200,await availableGeneratorNumbers(pool,actor,url.searchParams.get('currency'),url.searchParams.get('after'),url.searchParams.get('accountId')));
+   if(path==='/api/abiq/generator'&&req.method==='GET')
+    return send(res,200,await generatorOptions(pool,actor,url.searchParams.get('holder')));
    if(path==='/api/workspaces'&&req.method==='GET'){if(!session.is_admin)fault('FORBIDDEN',null,403);return send(res,200,{rows:(await pool.query("SELECT DISTINCT user_id,full_name FROM avis_core_v2.holder_identities WHERE record_role='CUSTOMER' ORDER BY user_id")).rows});}
    if(req.method==='GET'&&/^\/api\/portfolio\/orders\/[0-9a-f-]{36}$/.test(path))return send(res,200,await invoke('securityOrderDetails',{orderId:path.split('/').at(-1)}));
    if(req.method==='GET'&&/^\/api\/accounts\/[0-9a-f-]{36}$/.test(path))return send(res,200,await invoke('accountDetails',{accountId:path.split('/').at(-1),before:url.searchParams.get('before')}));
@@ -272,6 +282,11 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    }
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
+   if(path==='/api/abiq/generator'||path==='/api/abiq/generator/assign'){
+    const scoped=actor.admin?actor:customerAccess.operator(actor);
+    const operation=path.endsWith('/assign')?assignGeneratorNumber:issueGeneratorNumber;
+    return send(res,200,await operation(core,scoped,body,req.headers['idempotency-key']));
+   }
    if(path==='/api/crypto/basket/start')return send(res,200,await basket.start(actor));
    if(path==='/api/crypto/basket/store-confirm')return send(res,200,await storeWallet.confirm(actor,body));
    if(path==='/api/crypto/basket/tender')return send(res,200,await basket.tender.configure(actor,body,req.headers['idempotency-key']));
