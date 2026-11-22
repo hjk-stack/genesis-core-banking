@@ -331,7 +331,15 @@ const forms={
 
 fxquote:{title:'Quote currency conversion',path:'fx/quote',button:'Reserve quote',fields:()=>select('from','Pay from',accountOptions())+select('to','Receive into',accountOptions())+input('amount','You pay','text','inputmode="decimal"')+input('commissionBps','Commission in basis points','number','min="0" max="9999" value="0"'),build:f=>({...Object.fromEntries(f),fromCurrency:cache.accounts.find(a=>a.abiq_iban===f.get('from'))?.currency_code,toCurrency:cache.accounts.find(a=>a.abiq_iban===f.get('to'))?.currency_code,commissionBps:Number(f.get('commissionBps'))})},
 fxexecute:{title:'Execute currency conversion',path:'fx/execute',button:'Execute conversion',fields:()=>select('quoteId','Reserved quote',(cache.fxquotes||[]).filter(q=>q.status==='OPEN').map(q=>[q.quote_id,number(q.from_amount)+' '+q.from_currency+' → '+number(q.to_amount)+' '+q.to_currency+' · fee '+number(q.fee_amount)+' '+q.from_currency+' · until '+new Date(q.expires_at).toLocaleTimeString()]))},
-fxcancel:{title:'Cancel reserved quote',path:'fx/cancel',button:'Release quote',ficashaccount:{title:'Register NOSTRO & incoming intermediary',path:'correspondents',button:'Register NOSTRO & intermediary',
+fxcancel:{title:'Cancel reserved quote',path:'fx/cancel',button:'Release quote',fields:()=>select('quoteId','Quote',(cache.fxquotes||[]).filter(q=>q.status==='OPEN').map(q=>[q.quote_id,q.from_currency+' → '+q.to_currency+' · '+q.quote_id]))},
+fxrefresh:{title:'Refresh published reference rates',path:'fx/rates/refresh',button:'Refresh rates',fields:()=>'<p>Retrieve the latest ECB publication. Its source date is retained with every conversion quote.</p>'},
+
+offlinekeys:{title:'Configure offline public key',path:'offline/keys',button:'Save public key',fields:()=>select('kind','Key belongs to',[['CARD','AVIS card'],['TERMINAL','POS terminal']])+input('reference','Card token or terminal ID')+`<label>Public key (PEM)<textarea name="publicKey" rows="6" required></textarea></label>`+input('floorLimit','Terminal transaction limit (EUR)','text','value="50"')+input('batchCap','Terminal batch limit (EUR)','text','value="10000"')},
+allowance:{title:'Reserve offline card allowance',path:'offline/allowances',button:'Issue signed allowance',fields:()=>input('cardReference','AVIS card token')+input('amount','Allowance (EUR)','text','inputmode="decimal"')+input('maxTransactions','Maximum transactions','number','min="1" max="5000" value="5"')+input('expiresAt','Valid until','datetime-local'),build:f=>({...Object.fromEntries(f),maxTransactions:Number(f.get('maxTransactions')),expiresAt:new Date(f.get('expiresAt')).toISOString()})},
+offlinesync:{title:'Settle signed offline batch',path:'offline/sync',button:'Verify and settle batch',fields:()=>`<label>Signed terminal batch (JSON)<textarea name="batch" rows="12" required></textarea></label>`,build:f=>JSON.parse(f.get('batch'))},
+offlineclose:{title:'Release remaining offline allowance',path:'offline/close',button:'Release remaining balance',fields:()=>select('grantId','Allowance',(cache.offlinegrants||[]).filter(g=>g.status==='ACTIVE'&&new Date(g.settle_by).getTime()<Date.now()).map(g=>[g.grant_id,`${g.last_four_digits} · ${g.grant_id}`]))},
+
+cashaccount:{title:'Register NOSTRO & incoming intermediary',path:'correspondents',button:'Register NOSTRO & intermediary',
  fields:()=>'<fieldset class="nostro-primary-fields"><legend>NOSTRO bank</legend>'+
  input('institutionName','Bank name','text','maxlength="100"')+
  select('institutionType','Account class',['CENTRAL_BANK','CORRESPONDENT_BANK','CORE_BANK_OMNIBUS','CARD_SCHEME_SETTLEMENT'].map(x=>[x,label(x)]))+
@@ -340,25 +348,6 @@ fxcancel:{title:'Cancel reserved quote',path:'fx/cancel',button:'Release quote',
  editcashaccount:{title:'NOSTRO & incoming intermediary',path:'correspondents/details',button:'Save NOSTRO & intermediary',
  fields:()=>'<input type="hidden" name="cashAccountId"><fieldset class="nostro-primary-fields"><legend>NOSTRO bank</legend>'+
  bankDirectoryFields()+'</fieldset>'+intermediaryFields(true),build:combinedNostroInput},
-.map(g=>[g.grant_id,`${g.last_four_digits} · ${g.grant_id}`]))},
-
-cashaccount:{title:'Register NOSTRO clearing account',path:'correspondents',button:'Register account',
- fields:()=>input('institutionName','Bank name','text','maxlength="100"')+
- select('institutionType','Account class',['CENTRAL_BANK','CORRESPONDENT_BANK','CORE_BANK_OMNIBUS','CARD_SCHEME_SETTLEMENT'].map(x=>[x,label(x)]))+
- input('bic','Bank BIC','text','maxlength="11"')+input('accountNumber','External account number','text','maxlength="128"')+
- currencySelect()+bankDirectoryFields(false)},
- editcashaccount:{title:'Edit registered NOSTRO bank details',path:'correspondents/details',button:'Save bank details',
- fields:()=>'<input type="hidden" name="cashAccountId">'+bankDirectoryFields()},
- intermediarybank:{title:'Register intermediary bank',path:'nostro/intermediary',button:'Register intermediary bank',
- fields:()=>select('cashAccountId','Related NOSTRO account',(cache.nostroclearing||[]).map(c=>[c.cash_account_id,`${c.institution_name} · ${c.currency_code} · ${c.iban_or_account_no}`]))+
- bankDirectoryFields()+'<fieldset><legend>Intermediary routing identifiers (optional)</legend>'+
- '<label>Intermediary BIC<input name="bic" aria-label="Intermediary BIC" maxlength="11"></label>'+
- '<label>Intermediary account number<input name="accountNumber" aria-label="Intermediary account number" maxlength="128"></label></fieldset>'},
- editintermediary:{title:'Edit intermediary bank',path:'nostro/intermediary/edit',button:'Save intermediary bank',
- fields:()=>'<input type="hidden" name="intermediaryId">'+bankDirectoryFields()+
- '<fieldset><legend>Intermediary routing identifiers (optional)</legend>'+
- '<label>Intermediary BIC<input name="bic" aria-label="Intermediary BIC" maxlength="11"></label>'+
- '<label>Intermediary account number<input name="accountNumber" aria-label="Intermediary account number" maxlength="128"></label></fieldset>'},
 nostromirror:{title:'Record NOSTRO clearing movement',path:'nostro/mirror',button:'Post mirrored movement',fields:()=>select('cashAccountId','NOSTRO settlement account',(cache.nostroclearing||[]).map(c=>[c.cash_account_id,`${c.institution_name} · ${c.currency_code} · ${c.iban_or_account_no}`]))+select('direction','External movement',[['CREDIT','Incoming to NOSTRO'],['DEBIT','Outgoing from NOSTRO']])+select('rail','Settlement rail',[['BANK_TRANSFER','Bank transfer'],['CARD','Card settlement'],['IP_TO_IP','IP-to-IP'],['ISO20022','ISO 20022'],['BANK_API','Bank API'],['OTHER','Other']])+input('externalReference','External bank / payment reference','text','maxlength="128"')+input('amount','Settled amount','text','inputmode="decimal"')+`<label>Memo<textarea name="memo" rows="2" maxlength="250"></textarea></label>`,build:f=>({...Object.fromEntries(f),currency:(cache.nostroclearing||[]).find(c=>c.cash_account_id===f.get('cashAccountId'))?.currency_code})},
  nostrogateway:{title:'Assign NOSTRO card settlement',path:'nostro/gateway',button:'Link card gateway',fields:()=>select('gatewayCode','Card settlement gateway',(cache.nostrogateways||[]).map(g=>[g.gateway_code,`${g.display_name} · ${g.gateway_code}`]))+select('cashAccountId','NOSTRO settlement account',(cache.nostroclearing||[]).map(c=>[c.cash_account_id,`${c.institution_name} · ${c.currency_code} · ${c.iban_or_account_no}`]))},
  bankprofile:{title:'Configure bank connector',path:'bankprofiles',button:'Save connector',fields:()=>input('profileId','Connector code','text','pattern="[A-Z0-9_]{1,35}"')+input('name','Bank / network name')+select('cashAccountId','Clearing account',(cache.correspondents||[]).map(c=>[c.cash_account_id,`${c.institution_name} · ${c.currency_code} · ${c.iban_or_account_no}`]))+select('protocol','Protocol',['IP_TO_IP','SWIFT_ISO20022','BANK_API'].map(x=>[x,label(x)]))+input('localBic','Our BIC')+input('peerBic','Peer bank BIC')+input('endpoint','Bank endpoint','url')+input('credentialReference','Application credential reference','text','pattern="AVIS_CONNECTOR_[A-Z0-9_]+"')},
