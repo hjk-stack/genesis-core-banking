@@ -52,6 +52,19 @@ before(async()=>{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
 });
 after(async()=>{await browser?.close();if(server)await new Promise(r=>server.close(r));});
+test('iPad POS register keeps the visible glass approval switch immediately next to its terminal ID',async()=>{
+ const page=await browser.newPage({viewport:{width:834,height:1112}});
+ try{
+  await page.goto(base+'/admin#pos');
+  const row=page.locator('[data-pos-terminal="11TNCON12"]');
+  await row.waitFor();
+  const id=await row.locator('.account-number').boundingBox();
+  const control=await row.getByRole('switch',{name:'Activate POS 11TNCON12'}).boundingBox();
+  assert.ok(id&&control,'the terminal and switch are both rendered');
+  assert.ok(control.x>id.x&&control.x<id.x+id.width+32,'POS approval is directly beside the terminal number');
+  assert.ok(control.x+control.width<=834,'the POS switch is visible without horizontal scrolling on iPad');
+ }finally{await page.close()}
+});
 test('POS terminal register identifies the exact checkout and shows each blinking blue approval switch',async()=>{
  const page=await browser.newPage({viewport:{width:1180,height:950}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
