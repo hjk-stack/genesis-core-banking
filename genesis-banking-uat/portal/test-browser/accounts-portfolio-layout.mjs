@@ -10,6 +10,11 @@ const common={account_id:'11111111-1111-4111-8111-111111111111',account_type:'CO
 const personal={account_id:'33333333-3333-4333-8333-333333333333',account_reference:'TN62AVIP000978000011000102',credit:'1000',debit:'0',reference_id:'Opening fixture',user_id:'2',full_name:'Frontend fixture',account_type:'PERSONAL',account_role:'CUSTOMER',abiq_iban:'TN62AVIP000978000011000102',wallet_scope:'FUNDING',status:'ACTIVE',currency_code:'EUR',available_balance:'1000',locked_balance:'0'},business={...personal,account_id:'44444444-4444-4444-8444-444444444444',account_reference:'TN89AVIP000978000011000101',user_id:'1',account_type:'BUSINESS',account_role:'INSTITUTION',full_name:'AVISPay PLC',abiq_iban:'TN89AVIP000978000011000101'};
 const custody={...business,account_id:'55555555-5555-4555-8555-555555555555',account_reference:issued25(900003),abiq_iban:issued25(900003),wallet_scope:'CUSTODY'},margin={...business,account_id:'66666666-6666-4666-8666-666666666666',account_reference:issued25(900004),abiq_iban:issued25(900004),wallet_scope:'MARGIN'};
 const security={security_id:'77777777-7777-4777-8777-777777777777',name:'Funding source fixture',short_name:'FUNDING EUR',currency_code:'EUR',denomination:'1000',quote_basis:'PERCENT',reference_price:'98'};
+const posRequestAt=new Date(Date.now()-60_000).toISOString(),posExpiresAt=new Date(Date.now()+59*60_000).toISOString();
+const posFixtures=[
+ {terminal_id:'11TNCON12',merchant_id:'AVISPAY-WEB-POS',terminal_type:'WEB_POS',status:'ACTIVE',activation_state:'REQUESTED',checkout_kind:'MILESTONE',checkout_reference:'AVIS-TN-12',checkout_title:'Tunisia · Road development',requested_at:posRequestAt,expires_at:posExpiresAt,approved_at:null,expired_at:null},
+ {terminal_id:'11ITCON01',merchant_id:'AVISPAY-WEB-POS',terminal_type:'WEB_POS',status:'ACTIVE',activation_state:'CLOSED',checkout_kind:'MILESTONE',checkout_reference:'AVIS-IT-01',checkout_title:'Italy · Kickoff',requested_at:null,expires_at:null,approved_at:null,expired_at:null}
+];
 async function assertRowIban(row,account){
  assert.equal((await row.locator('.account-number').innerText()).replace(/\s/g,''),account.abiq_iban);
  assert.equal(await row.getByRole('button',{name:'Show movements for '+account.abiq_iban,exact:true}).count(),1);
@@ -31,15 +36,52 @@ before(async()=>{
     {currency:'579',label:'Custodial account',series:'00015',currencyBlock:'000579'}],
    customerNumbers:req.url.endsWith('holder=AVIP')?['1000101']:[],reusable:[],recent:[]
   });
-  if(req.url.startsWith('/api/views/')){const view=req.url.split('/').at(-1);reads.push(view);const fixtures={accounts:admin?[business,personal]:[personal],accountsummaries:admin?[business,custody,margin,personal]:[personal],customers:[business,personal],backofficeaccounts:[common,suspense],securities:[security],portfolio:[{currency_code:'AG',network:'ETHEREUM',available_balance:admin?'15.000000000000000000':'7.000000000000000000',locked_balance:'0'}],ledger:[{account_holder:'SHOULD NOT RENDER'}],transactions:[{reference_id:'SHOULD NOT RENDER'}]};return respond({rows:fixtures[view]||[]});}
+  if(req.url.startsWith('/api/views/')){const view=req.url.split('/').at(-1);reads.push(view);const fixtures={accounts:admin?[business,personal]:[personal],accountsummaries:admin?[business,custody,margin,personal]:[personal],customers:[business,personal],backofficeaccounts:[common,suspense],securities:[security],portfolio:[{currency_code:'AG',network:'ETHEREUM',available_balance:admin?'15.000000000000000000':'7.000000000000000000',locked_balance:'0'}],ledger:[{account_holder:'SHOULD NOT RENDER'}],transactions:[{reference_id:'SHOULD NOT RENDER'}],terminals:posFixtures};return respond({rows:fixtures[view]||[]});}
   if(req.method==='GET'&&(req.url.startsWith('/api/backoffice-accounts/')||req.url.startsWith('/api/accounts/'))){const id=req.url.split('/')[3].split('?')[0],account=[common,suspense,personal,business,custody,margin].find(a=>a.account_id===id),older=req.url.includes('?before='),entry={entry_id:older?'1':'2',journal_id:'fixture-journal',event_type:'OPENING',created_at:'2026-11-14T12:00:00Z',reference_id:older?'Earlier statement entry':'Selected account entry',direction:'CREDIT',amount:'100',running_balance:'100'};if(req.url.includes('/movements/'))return respond({account,entry});return respond({account,totals:{incoming:'100',outgoing:'10'},entries:[entry],nextCursor:older?null:'2'});}
-  if(req.method==='POST'&&req.url.startsWith('/api/')){let raw='';for await(const chunk of req)raw+=chunk;calls.push({path:req.url,body:JSON.parse(raw)});return respond({id:'fixture'});}
+  if(req.method==='POST'&&req.url.startsWith('/api/')){let raw='';for await(const chunk of req)raw+=chunk;calls.push({path:req.url,body:JSON.parse(raw)});if(req.url==='/api/terminals/activation'){
+   const input=JSON.parse(raw),terminal=posFixtures.find(r=>r.terminal_id===input.terminalId);
+   if(!terminal){res.statusCode=404;return respond({code:'TERMINAL_NOT_FOUND'})}
+   terminal.activation_state=input.active?'ACTIVE':'CLOSED';
+   terminal.approved_at=input.active?new Date().toISOString():null;
+   if(!input.active){terminal.requested_at=null;terminal.expires_at=null}
+   return respond({terminalId:terminal.terminal_id,state:terminal.activation_state,requestedAt:terminal.requested_at,approvedAt:terminal.approved_at,expiresAt:terminal.expires_at,expiredAt:terminal.expired_at});
+  }return respond({id:'fixture'});}
   if(['/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/approved-robot.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/trading-panel.mjs','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/app.mjs','/abiq-generator.mjs','/abiq-number.mjs','/portfolio.mjs','/exchange-intent.mjs','/accounts.mjs','/cards.mjs','/payment-wizard.mjs','/card-message.mjs','/styles.css'].includes(req.url.split('?')[0])){const asset=req.url.split('?')[0];res.setHeader('content-type',asset.endsWith('.css')?'text/css':'text/javascript');return res.end(await readFile(new URL('../public'+asset,import.meta.url)));}
   res.writeHead(404);res.end();
  });
  await new Promise(r=>server.listen(0,'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
 });
 after(async()=>{await browser?.close();if(server)await new Promise(r=>server.close(r));});
+test('POS terminal register identifies the exact checkout and shows each blinking blue approval switch',async()=>{
+ const page=await browser.newPage({viewport:{width:1180,height:950}}),errors=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ try{
+  await page.goto(base+'/admin#pos');
+  await page.getByRole('heading',{name:'POS terminals',exact:true}).waitFor();
+  const pending=page.locator('[data-pos-terminal="11TNCON12"]'),closed=page.locator('[data-pos-terminal="11ITCON01"]');
+  await pending.waitFor();
+  assert.equal(await page.locator('[data-pos-register] summary').getAttribute('aria-label'),null);
+  assert.equal(await page.getByRole('columnheader',{name:'Checkout / origin'}).count(),1);
+  assert.equal(await page.getByRole('columnheader',{name:'Request & expiry (local time)'}).count(),1);
+  assert.match(await pending.innerText(),/Tunisia · Road development/);
+  assert.match(await pending.innerText(),/AVIS-TN-12/);
+  assert.match(await pending.innerText(),/Requested:/);
+  assert.match(await pending.innerText(),/Expires:/);
+  const blue=pending.getByRole('switch',{name:'Activate POS 11TNCON12'});
+  assert.equal(await blue.getAttribute('data-state'),'REQUESTED');
+  assert.equal(await blue.evaluate(el=>getComputedStyle(el).animationName),'pos-request-pulse');
+  assert.equal(await closed.getByRole('switch',{name:'Activate POS 11ITCON01'}).getAttribute('data-state'),'CLOSED');
+  await blue.click();
+  await pending.getByRole('switch',{name:'Close POS 11TNCON12'}).waitFor();
+  assert.equal(await pending.getByRole('switch',{name:'Close POS 11TNCON12'}).getAttribute('data-state'),'ACTIVE');
+  assert.equal(calls.at(-1).path,'/api/terminals/activation');
+  assert.deepEqual(calls.at(-1).body,{terminalId:'11TNCON12',active:true});
+  await pending.getByRole('switch',{name:'Close POS 11TNCON12'}).click();
+  await pending.getByRole('switch',{name:'Activate POS 11TNCON12'}).waitFor();
+  assert.equal(await pending.getByRole('switch',{name:'Activate POS 11TNCON12'}).getAttribute('data-state'),'CLOSED');
+  assert.deepEqual(errors,[]);
+ }finally{await page.close()}
+});
 test('Accounts & ABIQ selects country and currency and derives the series',async()=>{
  const page=await browser.newPage();
  try{
