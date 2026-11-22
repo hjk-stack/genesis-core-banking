@@ -736,7 +736,7 @@ class FrontendReleaseIntegrityTests(unittest.TestCase):
     def test_real_checked_out_frontend_assets_match_release(self):
         release = 'a' * 40
         portal = Path(__file__).resolve().parent.parent / 'portal'
-        files = {'/': 'index.html', '/app.mjs': 'public/app.mjs',
+        files = {'/': 'index.html', '/app.mjs': 'public/app.mjs', '/styles.css': 'public/styles.css',
                  '/payment-wizard.mjs': 'public/payment-wizard.mjs',
                  '/cards.mjs': 'public/cards.mjs',
                  '/accounts.mjs': 'public/accounts.mjs',
