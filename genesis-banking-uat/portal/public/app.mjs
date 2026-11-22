@@ -4,7 +4,6 @@ import {readExchangeIntent} from './exchange-intent.mjs';
 import {createPortfolio,securitiesTable,stockRegisterTable,securityOrdersTable,securityBookTable} from './portfolio.mjs';
 import {nostroRegisterTable,nostroMovementsTable} from './nostro-clearing.mjs';
 import {checkoutIpRegister,bindCheckoutIp,ipState} from './checkout-ip.mjs';
-import {openIpHandlerDesk} from './ip-handler-desk.mjs';
 import {accountTypes,accountSummaryTable,backofficeAccountTable,createAccountStatements} from './accounts.mjs';
 import {holderRegisterField,connectAccountHolderRegister,buildAccountOpeningRequest} from './open-account-register.mjs';
 import {createCardManager,cardAccountTable,cardProducts} from './cards.mjs';
@@ -186,7 +185,10 @@ setInterval(async()=>{
   }
   bindCheckoutIp({root:$('#panels'),requests:rows,nostros:cache.nostroclearing||[],
    activate:input=>api('checkout-ip/activation',input),onChange:()=>void render(),
-   openHandler:record=>openIpHandlerDesk(record.requestId)});
+   openHandler:record=>{
+    const url='https://avis.land/admin/bank/quantum/direct-transfer?checkoutRequest='+encodeURIComponent(record.requestId);
+    window.open(url,'_blank','noopener,noreferrer');
+   }});
  }catch(e){console.error('CHECKOUT_IP_REFRESH',e.code||e.name)}
  finally{ipQueueRefreshing=false}
 },7000);
@@ -279,7 +281,10 @@ html+=results.map((r,i)=>{
  if(key==='payments'&&identity.admin)bindCheckoutIp({
   root:$('#panels'),requests:cache.checkoutip||[],nostros:cache.nostroclearing||[],
   activate:input=>api('checkout-ip/activation',input),onChange:()=>void render(),
-  openHandler:record=>openIpHandlerDesk(record.requestId)
+  openHandler:record=>{
+    const url='https://avis.land/admin/bank/quantum/direct-transfer?checkoutRequest='+encodeURIComponent(record.requestId);
+    window.open(url,'_blank','noopener,noreferrer');
+   }
  });if(key==='pos')bindTerminalControls();
  document.querySelectorAll('[data-nostro-edit]').forEach(button=>button.onclick=async()=>{
    const cashId=button.dataset.nostroEdit;
