@@ -213,6 +213,7 @@ test('the banking form shows server validation beside its field and accepts a co
   await page.getByRole('button',{name:'Open account',exact:true}).click();
   const dialog=page.locator('#form-dialog'),name=dialog.getByLabel('Account name / holder',{exact:true});
   await dialog.getByLabel('Account type',{exact:true}).selectOption('BUSINESS');
+  await dialog.getByLabel('Account holder register',{exact:true}).selectOption('NEW');
   await name.fill('First holder');await dialog.locator('[name=currency]').selectOption('EUR');
   await dialog.getByRole('button',{name:'Open account',exact:true}).click();
   await dialog.locator('#action-field-error').waitFor();assert.equal(await name.getAttribute('aria-invalid'),'true');
