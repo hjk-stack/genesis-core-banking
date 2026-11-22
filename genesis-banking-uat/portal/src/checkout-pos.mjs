@@ -10,16 +10,35 @@ function context(input){
  return {id,checkoutKind,reference,title};
 }
 const rowSql=`SELECT c.terminal_id,c.checkout_kind,c.checkout_reference,c.checkout_title,c.state,
- c.requested_at,c.approved_at,c.updated_at,t.merchant_id,t.terminal_type,t.status AS terminal_status
+ c.requested_at,c.approved_at,c.expired_at,c.updated_at,t.merchant_id,t.terminal_type,t.status AS terminal_status
  FROM avis_core_v2.checkout_pos_controls c
  JOIN avis_core_v2.pos_terminals t USING(terminal_id) WHERE c.terminal_id=$1`;
 const project=r=>({
  terminalId:r.terminal_id,checkoutKind:r.checkout_kind,reference:r.checkout_reference,
  title:r.checkout_title,state:r.terminal_status==='ACTIVE'?r.state:'CLOSED',
- requestedAt:r.requested_at,approvedAt:r.approved_at,updatedAt:r.updated_at
+ requestedAt:r.requested_at,approvedAt:r.approved_at,updatedAt:r.updated_at,
+ expiresAt:r.state==='REQUESTED'&&r.requested_at?new Date(new Date(r.requested_at).getTime()+3600000).toISOString():null,
+ expiredAt:r.expired_at
 });
 export class CheckoutPosControl{
  constructor(pool){this.pool=pool;}
+ // One atomic statement both closes overdue requests and records each expiry.
+ // Concurrent API polls and the periodic worker cannot expire the same request twice.
+ async expirePending(db=this.pool,terminalId=null){
+  const result=await db.query(`WITH expired AS (
+    UPDATE avis_core_v2.checkout_pos_controls
+       SET state='CLOSED',expired_at=requested_at+interval '60 minutes',
+           updated_at=now(),changed_by='system:pos-timeout'
+     WHERE state='REQUESTED' AND requested_at <= now()-interval '60 minutes'
+       AND ($1::varchar IS NULL OR terminal_id=$1)
+     RETURNING terminal_id
+    ), events AS (
+     INSERT INTO avis_core_v2.checkout_pos_events(terminal_id,event_type,actor_id)
+     SELECT terminal_id,'EXPIRE','system:pos-timeout' FROM expired
+     RETURNING event_id
+    ) SELECT count(*)::int AS total FROM events`,[terminalId]);
+  return result.rows[0]?.total||0;
+ }
  async withTransaction(work){
   const db=await this.pool.connect();
   try{await db.query('BEGIN');const result=await work(db);await db.query('COMMIT');return result}
@@ -53,21 +72,26 @@ export class CheckoutPosControl{
   return control;
  }
  async resolve(_actor,input){
-  return this.withTransaction(async db=>project(await this.ensure(db,input)));
+  return this.withTransaction(async db=>{
+   await this.expirePending(db,input?.terminalId||null);
+   return project(await this.ensure(db,input));
+  });
  }
  async status(_actor,input){
   const id=input?.terminalId;if(!known(id))fault('POS_TERMINAL_ID','terminalId');
+  await this.expirePending(this.pool,id);
   const result=(await this.pool.query(rowSql,[id])).rows[0];
   if(!result)fault('TERMINAL_NOT_FOUND','terminalId',404);
   return project(result);
  }
  async request(actor,input){
   const current=await this.withTransaction(async db=>{
+   await this.expirePending(db,input?.terminalId||null);
    let row=await this.ensure(db,input);
    if(row.terminal_status!=='ACTIVE')fault('TERMINAL_NOT_FOUND','terminalId',409);
    if(row.state==='CLOSED'){
     await db.query(`UPDATE avis_core_v2.checkout_pos_controls
-     SET state='REQUESTED',requested_at=now(),approved_at=NULL,updated_at=now(),changed_by=$2 WHERE terminal_id=$1`,[row.terminal_id,actor.id]);
+     SET state='REQUESTED',requested_at=now(),approved_at=NULL,expired_at=NULL,updated_at=now(),changed_by=$2 WHERE terminal_id=$1`,[row.terminal_id,actor.id]);
     await db.query(`INSERT INTO avis_core_v2.checkout_pos_events(terminal_id,event_type,actor_id) VALUES($1,'REQUEST',$2)`,[row.terminal_id,actor.id]);
    }
    row=(await db.query(rowSql,[row.terminal_id])).rows[0];
@@ -80,6 +104,7 @@ export class CheckoutPosControl{
   const id=input?.terminalId;if(typeof id!=='string'||id.length>32||!(/^[A-Z0-9-]{3,32}$/).test(id))fault('POS_TERMINAL_ID','terminalId');
   if(typeof input.active!=='boolean')fault('INVALID_FIELD','active');
   return this.withTransaction(async db=>{
+   await this.expirePending(db,id);
    const terminal=(await db.query(`SELECT terminal_id,terminal_type,merchant_id,status FROM avis_core_v2.pos_terminals
     WHERE terminal_id=$1 FOR UPDATE`,[id])).rows[0];
    if(!terminal||terminal.terminal_type!=='WEB_POS'||terminal.status!=='ACTIVE')fault('TERMINAL_NOT_FOUND','terminalId',404);
@@ -91,8 +116,8 @@ export class CheckoutPosControl{
    if(current.state!==target){
     await db.query(`UPDATE avis_core_v2.checkout_pos_controls
       SET state=$2::text,approved_at=CASE WHEN $2::text='ACTIVE' THEN now() ELSE NULL END,
-      requested_at=CASE WHEN $2::text='CLOSED' THEN NULL ELSE requested_at END,
-      updated_at=now(),changed_by=$3 WHERE terminal_id=$1`,[id,target,actor.id]);
+      requested_at=CASE WHEN $2::text='CLOSED' OR expired_at IS NOT NULL THEN NULL ELSE requested_at END,
+      expired_at=NULL,updated_at=now(),changed_by=$3 WHERE terminal_id=$1`,[id,target,actor.id]);
     await db.query(`INSERT INTO avis_core_v2.checkout_pos_events(terminal_id,event_type,actor_id)
       VALUES($1,$2,$3)`,[id,target==='ACTIVE'?'APPROVE':'CLOSE',actor.id]);
    }
