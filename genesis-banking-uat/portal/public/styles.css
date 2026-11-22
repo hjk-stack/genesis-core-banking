@@ -175,3 +175,14 @@ textarea{box-sizing:border-box;width:100%;font:inherit;border:1px solid #d6dbe3;
 @media(max-width:620px){#form-dialog .nostro-primary-fields,#form-dialog .incoming-intermediary-fields{grid-template-columns:minmax(0,1fr)}}
 
 #form-dialog:has(.incoming-intermediary-fields) #form-fields{display:block}
+
+/* Checkout IP counter — existing POS Liquid Glass semantics, wider ledger selector. */
+.checkout-ip-table{min-width:1170px}
+.checkout-ip-table td{vertical-align:top;min-width:115px}
+.checkout-ip-table td:first-child{min-width:215px}
+.checkout-ip-table td small{display:block;font-size:11px;color:#5a6470;margin-top:6px;white-space:normal;overflow-wrap:anywhere}
+.checkout-ip-table .ip-row-label{font-size:11px;display:block;margin:0 0 10px}
+.checkout-ip-table .ip-row-label select{margin-top:5px;width:100%;min-width:190px;padding:9px 7px;max-width:230px}
+.checkout-ip-table [data-ip-handler]{white-space:nowrap;border:1px solid #8a9cad;border-radius:10px;padding:9px 12px;cursor:pointer;background:#f5f8fc}
+.checkout-ip-table .pos-liquid-switch[data-state="REQUESTED"]{animation:pos-request-pulse 1.15s ease-in-out infinite}
+@media(prefers-reduced-motion:reduce){.checkout-ip-table .pos-liquid-switch[data-state="REQUESTED"]{animation:none}}
