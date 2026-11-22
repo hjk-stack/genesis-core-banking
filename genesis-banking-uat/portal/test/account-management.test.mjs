@@ -38,6 +38,33 @@ test('Common and Suspense account types create zero-balance backoffice accounts 
 test('Personal and Business choices retain automatic ABIQ provisioning',async()=>{
  for(const accountType of ['PERSONAL','BUSINESS']){const r=await core.openAccount(admin,{accountType,fullName:'Account type fixture '+accountType,currencies:['EUR']},key());assert.match(r.accounts[0].abiqIban,/^TN\d{2}AVIP/);}
 });
+test('Open account selects an existing registered holder, retaining identity, balances and ABIQ routing',async()=>{
+ const holder=await core.openAccount(admin,{accountType:'BUSINESS',fullName:'Registered holder fixture',currencies:['EUR']},key());
+ const beforeCount=(await core.list(admin,'customers')).length;
+ const beforeEur=(await core.list(admin,'accounts')).find(a=>String(a.user_id)===holder.userId&&a.currency_code==='EUR');
+ const input={accountType:'BUSINESS',userId:holder.userId,currencies:['USD']},replay=key();
+ const opened=await core.openAccount(admin,input,replay);
+ assert.deepEqual(await core.openAccount(admin,input,replay),opened);
+ assert.equal(opened.userId,holder.userId);assert.equal(opened.fullName,'Registered holder fixture');
+ assert.equal(parseAbiqIban(opened.accounts[0].abiqIban).currency,'USD');
+ const customers=await core.list(admin,'customers');
+ assert.equal(customers.length,beforeCount);
+ assert.equal(customers.filter(u=>String(u.user_id)===holder.userId).length,1);
+ assert.deepEqual((await core.list(admin,'accounts')).find(a=>a.abiq_iban===beforeEur.abiq_iban),beforeEur);
+ const funded=(await core.list(admin,'accounts')).filter(a=>String(a.user_id)===holder.userId&&a.currency_code==='USD');
+ assert.equal(funded.length,1);assert.equal(funded[0].abiq_iban,opened.accounts[0].abiqIban);
+ const ledgers=(await core.list(admin,'ledger')).filter(a=>String(a.user_id)===holder.userId&&a.currency_code==='USD');
+ for(const scope of ['FUNDING','CUSTODY','MARGIN'])assert.ok(ledgers.some(a=>a.wallet_scope===scope));
+ const reopened=await core.openAccount(admin,input,key());
+ assert.equal(reopened.accounts[0].abiqIban,opened.accounts[0].abiqIban);
+ await assert.rejects(core.openAccount(admin,{...input,accountType:'PERSONAL'},key()),/ACCOUNT_HOLDER_NOT_FOUND/);
+ await assert.rejects(core.openAccount(admin,{...input,userId:'9999999999'},key()),/ACCOUNT_HOLDER_NOT_FOUND/);
+ await assert.rejects(core.openAccount(admin,{...input,fullName:'New identity'},key()),/INVALID_FIELD/);
+ await assert.rejects(core.openAccount(admin,{...input,userId:'invalid'},key()),/INVALID_FIELD/);
+ await assert.rejects(core.openAccount({...admin,customerUserId:'2'},input,key()),/FORBIDDEN/);
+ assert.equal((await core.list(admin,'customers')).length,beforeCount);
+});
+
 test('funding, margin and securities custody accounts have distinct ABIQ numbers without changing payment eligibility',async()=>{
  const access=new CustomerAccess(core),summaries=await access.list(customer,'accountsummaries'),funding=await access.list(customer,'accounts');
  assert.equal(summaries.length,funding.length*3);assert.ok(summaries.every(a=>String(a.user_id)==='2'&&a.network===null));
@@ -115,5 +142,12 @@ test('customer sessions cannot list, create or read Common/Suspense accounts or 
  assert.equal((await request(user,'accounts/open',{accountType:'COMMON',fullName:'Forbidden',currencies:['EUR']})).status,403);assert.equal((await request(user,'views/portfolio')).body.rows[0].available_balance,'7.000000000000000000');
  const operator=await login('admin');assert.equal((await request(operator,'backoffice-accounts/'+common.id+'/statement')).status,200);assert.equal((await request(operator,'views/backofficeaccounts')).status,200);assert.equal((await request(operator,'views/portfolio')).body.rows[0].available_balance,'15.000000000000000000');
  const own=(await request(user,'views/accountsummaries')).body.rows.find(a=>a.currency_code==='EUR');assert.equal(own.user_id.toString(),'2');const detail=await request(user,'accounts/'+own.account_id);assert.equal(detail.status,200);const entryId=String(detail.body.entries[0].entry_id);assert.equal((await request(user,'accounts/'+own.account_id+'/movements/'+entryId)).status,200);assert.equal((await request(user,'accounts/'+common.id)).status,403);assert.equal((await request(user,'accounts/'+common.id+'/movements/'+entryId)).status,403);
+ const existingHttp=await request(operator,'accounts/open',{accountType:'PERSONAL',userId:'2',currencies:['SGD']});
+ assert.equal(existingHttp.status,200);assert.equal(existingHttp.body.userId,'2');
+ assert.equal(parseAbiqIban(existingHttp.body.accounts[0].abiqIban).currency,'SGD');
+ const badHttp=await request(operator,'accounts/open',{accountType:'BUSINESS',userId:'2',currencies:['EUR']});
+ assert.equal(badHttp.status,404);
+ const duplicateHttp=await request(user,'accounts/open',{accountType:'PERSONAL',userId:'2',currencies:['SGD']});
+ assert.equal(duplicateHttp.status,403);
  const created=await request(operator,'accounts/open',{accountType:'SUSPENSE',fullName:'HTTP creation',currencies:['GBP']});assert.equal(created.status,200);assert.equal(created.body.accountType,'SUSPENSE');assert.equal(parseAbiqIban(created.body.managedAccounts[0].abiqIban).currency,'GBP');
 });
