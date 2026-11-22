@@ -153,7 +153,7 @@ test('new system and custody accounts receive one identifier, including explicit
  assert.equal((await account(id)).abiq_iban,identifier);assert.equal(parseAbiqIban(identifier).currency,'CHF');
  for(const scope of ['CUSTODY','MARGIN']){
   const custody=await insertAccount(pool,{owner:'USER',user:2,currency:'GBP',scope});
-  assert.equal(parseAbiqIban((await account(custody)).abiq_iban).currency,'GBP');
+  assert.equal(parseAbiqIban((await account(custody)).abiq_iban).currency,scope==='CUSTODY'?'579':'GBP');
   assert.equal((await rows('SELECT * FROM avis_core_v2.abiq_routing_bridge WHERE ledger_account_id=$1',[custody])).length,0);
  }
  const current=await sequence();for(let n=0;n<10;n++)assert.equal(await ensure(id),identifier);

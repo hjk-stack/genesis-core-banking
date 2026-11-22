@@ -21,7 +21,7 @@ const entryRows=(accountId,rows)=>rows.map(e=>`<tr data-movement="${esc(e.entry_
 const movementTable=(accountId,entries)=>`<div class="table-wrap"><table class="account-movements"><thead><tr><th>Date and time</th><th>Reference</th><th>Credit</th><th>Debit</th><th>Balance</th><th></th></tr></thead><tbody>${entryRows(accountId,entries)}</tbody></table></div>`;
 const fields=values=>`<dl class="account-detail-fields">${values.filter(([,v])=>v!==null&&v!==undefined&&v!=='').map(([label,v])=>`<dt>${esc(label)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
 const accountFields=a=>fields([['Account holder / name',a.display_name],['User',a.user_id],['Account type',name(a.account_type)],['Account purpose',purpose(a)],['ABIQ IBAN',abiq(accountIban(a))],['BIC',a.abiq_bic],['Currency / asset',a.currency_code],['Blockchain',a.network],['Status',a.status],['Address',a.postal_address?Object.values(a.postal_address).filter(Boolean).join(', '):null],['Available',number(a.available_balance)],['Reserved',number(a.locked_balance)]]);
-export function createAccountStatements({api}){
+export function createAccountStatements({api,assignNumber,canAssign=()=>false}){
  const dialog=document.createElement('dialog');dialog.className='account-statement-dialog';document.body.append(dialog);
  let generation=0;
  const close=()=>{generation++;dialog.close();dialog.replaceChildren();dialog.removeAttribute('style');};
@@ -49,6 +49,13 @@ export function createAccountStatements({api}){
  async function open(id,isBackoffice=false){
   const serial=++generation,r=await api(isBackoffice?'backoffice-accounts/'+id+'/statement':'accounts/'+id);if(serial!==generation)return;const a=r.account;
   dialog.innerHTML=heading(backoffice(a)?name(a.account_type)+' statement':'Account details',a.display_name+' · '+a.currency_code)+`<div class="account-statement-content">${accountFields(a)}<div class="metrics"><div class="metric"><p>Total credit</p><strong>${esc(number(r.totals.incoming))}</strong></div><div class="metric"><p>Total debit</p><strong>${esc(number(r.totals.outgoing))}</strong></div><div class="metric"><p>Balance</p><strong>${esc(number(a.available_balance))} ${esc(a.currency_code)}</strong></div></div>${movementTable(id,r.entries)}${r.entries.length?'':'<p>No movements recorded for this account.</p>'}<button type="button" data-older>Load older entries</button><p class="form-error" role="alert"></p></div>`;
+  if(assignNumber && canAssign() && a.abiq_iban && !a.network){
+   const button=document.createElement('button');button.type='button';button.textContent='Assign ABIQ number';
+   const info=dialog.querySelector('.account-detail-fields');info.after(button);
+   for(const identifier of r.additionalNumbers||[]){const term=document.createElement('dt'),value=document.createElement('dd');
+    term.textContent='Additional ABIQ IBAN';value.textContent=identifier.slice(0,14)+' '+identifier.slice(14);info.append(term,value);}
+   button.onclick=()=>{close();assignNumber(a,()=>open(id,isBackoffice));};
+  }
   older(dialog,id,r.nextCursor,()=>serial===generation);bindMovements(dialog);show();
  }
  async function movement(id,entryId){

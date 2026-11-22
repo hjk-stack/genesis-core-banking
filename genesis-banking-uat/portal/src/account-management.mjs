@@ -66,8 +66,9 @@ export class AccountManagement extends CardManagement {
     COALESCE(sum(amount) FILTER(WHERE direction='CREDIT'),0)::text AS incoming,
     COALESCE(sum(amount) FILTER(WHERE direction='DEBIT'),0)::text AS outgoing
     FROM avis_core_v2.ledger_entries WHERE account_id=$1`,[accountId])).rows[0];
+   const additionalNumbers=(await db.query('SELECT identifier FROM avis_core_v2.abiq_number_bindings WHERE ledger_account_id=$1 AND identifier<>$2 ORDER BY identifier',[accountId,account.abiq_iban])).rows.map(row=>row.identifier);
    await db.query('COMMIT');
-   return {account,entries,totals,nextCursor:all.length>100?String(entries.at(-1).entry_id):null};
+   return {account,entries,totals,additionalNumbers,nextCursor:all.length>100?String(entries.at(-1).entry_id):null};
   }catch(e){await db.query('ROLLBACK');throw e;}finally{db.release();}
  }
  async movementDetails(actor,{accountId,entryId}){

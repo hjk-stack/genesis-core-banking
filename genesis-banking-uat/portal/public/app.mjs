@@ -1,3 +1,4 @@
+import {createAbiqGenerator} from './abiq-generator.mjs';
 import {createCryptoWorkspace} from './crypto-workspace.mjs';
 import {readExchangeIntent} from './exchange-intent.mjs';
 import {createPortfolio,securitiesTable,stockRegisterTable,securityOrdersTable,securityBookTable} from './portfolio.mjs';
@@ -39,7 +40,7 @@ async function api(path,body,key){
 }
 let formGeneration=0,noticeTimer;
 function clearNotice(){clearTimeout(noticeTimer);$('#notice').textContent='';$('#notice').hidden=true;}
-function clearForm(){formGeneration++;activeForm=null;if($('#form-dialog').open)$('#form-dialog').close();$('#action-form').reset();$('#form-fields').replaceChildren();}
+function clearForm(){abiqGenerator.close();formGeneration++;activeForm=null;if($('#form-dialog').open)$('#form-dialog').close();$('#action-form').reset();$('#form-fields').replaceChildren();}
 function signedOut(){document.querySelector('[data-basket-authorize]')?.remove();document.querySelector('[data-checkout-management]')?.remove();sessionEpoch++;loading++;clearNotice();$('#workspace-selector').replaceChildren();$('#workspace-error').textContent='';clearForm();paymentWizard.close();cardManager.close();accountStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';$('#workspace-selector').hidden=true;$('#workspace').hidden=true;$('#signin').hidden=false;$('#signout').hidden=true;$('#operator-name').textContent='';csrf='';for(const k of Object.keys(cache))delete cache[k];if($('#form-dialog').open)$('#form-dialog').close();}
 function signedIn(session){document.querySelector('[data-basket-authorize]')?.remove();document.querySelector('[data-checkout-management]')?.remove();sessionEpoch++;clearNotice();$('#workspace-selector').replaceChildren();$('#workspace-error').textContent='';clearForm();paymentWizard.close();cardManager.close();accountStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';for(const k of Object.keys(cache))delete cache[k];identity={...session,admin:session.admin!==false};csrf=session.csrf;document.querySelectorAll('nav a').forEach(a=>a.hidden=!identity.admin&&!['#accounts','#portfolio','#payments','#cards','#wallets'].includes(a.hash));void refreshWorkspaces();void refreshPickupAlerts();$('#workspace').hidden=false;$('#signin').hidden=true;$('#signout').hidden=false;$('#operator-name').textContent=session.username;void resumeExchange();void showStripeReturn();if(new URLSearchParams(location.search).get('crypto_basket')==='1'){const purpose=new URLSearchParams(location.search).get('purpose');history.replaceState(null,'','#wallets');void openCryptoBasket(api,null,null,purpose).catch(pageError);}else if(identity.admin&&new URLSearchParams(location.search).get('checkout_management')==='1'){history.replaceState(null,'','#pos');void openCheckoutManagement(api);}else void resumeBasketAuthorization(api,document.body);}
 async function showStripeReturn(){
@@ -90,7 +91,7 @@ clearing:[['provider_reference','Statement'],['currency_code','Currency'],['open
 });
 const pages={
 fx:{title:'Fiat converter',subtitle:'AVISPay treasury quotes, commission and settlement between your currency accounts.',actions:[['fxquote','Get quote'],['fxexecute','Execute conversion'],['fxcancel','Cancel quote'],['fxrefresh','Refresh reference rates']],views:[['fxquotes','Conversion quotes & settlements'],['fxrates','Published reference rates']]},
-accounts:{title:'Accounts & ABIQ',subtitle:'Account summaries, currency accounts and backoffice account management.',actions:[['customer','Open account'],['currency','Add currencies'],['customerprofile','Account holder details'],['suspense','Move to suspense']],views:[['accountsummaries','Account summary'],['backofficeaccounts','Backoffice accounts']]},
+accounts:{title:'Accounts & ABIQ',subtitle:'Account summaries, currency accounts and backoffice account management.',actions:[['customer','Open account'],['currency','Add currencies'],['abiqgenerator','Generate ABIQ number'],['customerprofile','Account holder details'],['suspense','Move to suspense']],views:[['accountsummaries','Account summary'],['backofficeaccounts','Backoffice accounts']]},
 portfolio:{title:'Portfolio management',subtitle:'Securities, investment values and exchange orders.',actions:[['recordsecurity','Record holding'],['buysecurity','Buy'],['sellsecurity','Sell'],['syncsecurities','Refresh Green Bond catalogue']],views:[['treasurypositions','AVISPay PLC Treasury opening positions'],['securitypositions','Securities portfolio'],['securityorders','Exchange orders'],['exchangebook','AVISPay Exchange'],['portfolio','Portfolio holdings']]},
 payments:{title:'Payments',subtitle:'Register, review and transfer payments from your accounts.',actions:[['newpayment','New payment']],views:[['paymentregister','Payment register'],['bankpayments','Bank payments & settlement'],['bankroutes','IBAN to ABIQ routing'],['transactions','Account activity']]},
 marketplace:{title:'Marketplace City',subtitle:'Business shops, multi-shop checkout and escrow settlement.',actions:[['shop','Register shop'],['checkout','Create checkout'],['release','Release escrow'],['refund','Refund checkout']],views:[['shops','Merchant shops'],['checkouts','Checkout & settlement']]},
@@ -125,7 +126,7 @@ $('#workspace-selector').onchange=async e=>{
 };
 function visiblePage(key){
  if(identity.admin)return pages[key]||pages.accounts;
- const allowed={accounts:{...pages.accounts,subtitle:'Your accounts and available balances.',actions:[['currency','Add currencies'],['customerprofile','My details']],views:[['accountsummaries','My accounts']]},portfolio:{...pages.portfolio,subtitle:'Your securities, investment values and exchange orders.',actions:[['buysecurity','Buy'],['sellsecurity','Sell'],['buycrypto','Purchase assets'],['sellcrypto','Convert to FIAT']]},payments:{...pages.payments,views:[['paymentregister','My payments'],['transactions','Account activity']]},cards:{...pages.cards,actions:pages.cards.actions.filter(([id])=>!['card','offlinekeys','allowance','offlineclose'].includes(id)),views:[['cardaccounts','My card accounts'],['codedcards','Code-secured card debits']]},wallets:{...pages.wallets,actions:pages.wallets.actions.filter(([id])=>id!=='cryptooffer')}};
+ const allowed={accounts:{...pages.accounts,subtitle:'Your accounts and available balances.',actions:[['currency','Add currencies'],...(identity.canSwitchWorkspace?[['abiqgenerator','Generate ABIQ number']]:[]),['customerprofile','My details']],views:[['accountsummaries','My accounts']]},portfolio:{...pages.portfolio,subtitle:'Your securities, investment values and exchange orders.',actions:[['buysecurity','Buy'],['sellsecurity','Sell'],['buycrypto','Purchase assets'],['sellcrypto','Convert to FIAT']]},payments:{...pages.payments,views:[['paymentregister','My payments'],['transactions','Account activity']]},cards:{...pages.cards,actions:pages.cards.actions.filter(([id])=>!['card','offlinekeys','allowance','offlineclose'].includes(id)),views:[['cardaccounts','My card accounts'],['codedcards','Code-secured card debits']]},wallets:{...pages.wallets,actions:pages.wallets.actions.filter(([id])=>id!=='cryptooffer')}};
  return allowed[key]||allowed.accounts;
 }
 async function refreshPickupAlerts(){if(!csrf||!identity.admin)return;try{const rows=await getRows('transferalerts'),link=document.querySelector('nav a[href="#administration"]');if(link){link.textContent=rows.length?'Administration · '+rows.length:'Administration';link.setAttribute('aria-label',rows.length?'Administration · '+rows.length+' transfers awaiting processing':'Administration');}}catch{}}
@@ -212,6 +213,7 @@ reverse:{title:'Reverse AVIS card authorization',path:'cards/reverse',button:'Re
 };
 function addSplit(){$('#split-fields').insertAdjacentHTML('beforeend',`<fieldset><legend>Shop allocation</legend><div class="split">${select('merchantId','Shop',shopOptions())}${input('splitAmount','Amount (EUR)','text','inputmode="decimal"')}</div></fieldset>`);}
 async function openForm(id){
+ if(id==='abiqgenerator'){abiqGenerator.open();return;}
  if(id==='checkoutmanagement'){if(identity.admin)await openCheckoutManagement(api);return;}
  if(id==='buycrypto'){try{await openCryptoBasket(api);}catch(e){pageError(e);}return;}
  const epoch=sessionEpoch,hash=location.hash,generation=++formGeneration;
@@ -274,6 +276,7 @@ $('#action-form').addEventListener('submit',async e=>{
 const cryptoManager=createCryptoWorkspace({api,identity:()=>identity,purchase:(asset,network)=>openCryptoBasket(api,asset,network).catch(pageError),registerOffer:()=>openForm('cryptooffer'),sell:()=>openForm('sellcrypto'),send:holding=>paymentWizard.fromCrypto(holding.account_id,readPaymentRows),notice});
 const paymentWizard=createPaymentWizard({api,accounts:()=>cache.accounts||[],refresh:render,notice,data:view=>cache[view]||[],purchase:()=>openForm('buycrypto'),sell:()=>openForm('sellcrypto'),isAdmin:()=>identity.admin,userId:()=>identity.customerUserId,settle:async r=>{if(!await openForm('settletransfer'))return;$('#action-form').elements.requestId.value=r.request_id;$('#action-form').elements.requestId.readOnly=true;}});
 const cardManager=createCardManager({api,refresh:render,notice});
-const accountStatements=createAccountStatements({api});
+const abiqGenerator=createAbiqGenerator({api});
+const accountStatements=createAccountStatements({api,assignNumber:abiqGenerator.assign,canAssign:()=>identity.admin||identity.canSwitchWorkspace});
 const portfolioManager=createPortfolio({api,getRows,data:view=>cache[view]||[],refresh:render,notice,actionError:pageError,isAdmin:()=>identity.admin});
 api('session').then(signedIn).catch(()=>signedOut());

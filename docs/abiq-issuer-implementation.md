@@ -15,7 +15,7 @@ This change implements currency-account issuance in the existing Sovereign UAT c
 | Frontend holder | User 2, Frontend user, PERSONAL / CUSTOMER |
 | Initial currency accounts | EUR, GBP, USD for both requested holders, zero opening balances |
 
-Customer numbers start at `1000101` for AVISPay PLC, followed by `1000102` for frontend holder 2. They are independent of database user IDs and allocated once by a non-cycling PostgreSQL sequence. The range ends at `9999999`, providing 8,999,899 customer-number slots. Rollbacks may leave gaps; numbers are never recycled. This is identifier capacity, not a concurrent-load performance claim.
+Customer numbers start at `1000101` for AVISPay PLC, followed by `1000102` for frontend holder 2. They are independent of database user IDs and allocated once per customer. Migration 035 continues the AVIP allocator from the existing sequence high-water mark. The range ends at `9999999`, providing 8,999,899 customer-number slots. Rollbacks may leave gaps; numbers are never recycled. This is identifier capacity, not a concurrent-load performance claim.
 
 Currency series are fixed regardless of opening order: EUR 00001, USD 00002, GBP 00003, CHF 00004, SEK 00005, NOK 00006, DKK 00007, PLN 00008, CZK 00009, HUF 00010, RON 00011, AED 00012, SGD 00013, JPY 00014. A USD account opened first still uses series 00002. One funding account per holder/currency remains the existing rule; FUNDING/MARGIN/CUSTODY ledger scopes remain separate.
 
@@ -46,7 +46,7 @@ securities Custody accounts. It adds metadata to the original account IDs and
 creates no new ledger, customer, securities position or journal entry. The existing
 customer funding bridge and its 26-character identifiers remain unchanged.
 
-Additional ledgers use the installed 25-character serial issuer from migration 008:
+Before migration 035, additional ledgers received the installed 25-character serial format from migration 008:
 `TN`, two calculated check digits, `AVIP`, the three-digit ISO currency partition
 and a 14-digit permanent serial. The shared non-cycling `abiq_account_numbers`
 sequence and database uniqueness checks prevent reuse. A system account needs no
@@ -74,6 +74,16 @@ registered bank identifiers, while payment routing remains restricted to the
 existing active funding bridge. Numbering a custody or suspense account does not
 make it a payment beneficiary or source. Funding selectors remain restricted even
 though account summaries now include separately numbered margin/custody accounts.
+
+## Manual number issuance
+
+In Accounts & ABIQ, **Generate ABIQ number** opens a standalone number issuer for bank operators, including operators viewing a customer workspace. Enter the four-letter ABIQ holder short code. Select the country, currency and available customer number. The currency selection supplies the five-digit series automatically. Custodial account is an additional option with the internal code `579` (`000579`) and series `00015`, the next entry after the fourteen fiat currencies. The check-digit selector shows the single valid MOD 97-10 result for those components. Country and currency open without a selection. The operator selects a country and a supported currency or custody code independently and types the four-letter short name. The number preview uses all three choices.
+
+Generate reserves exactly the previewed number, independent of any name, account type or posting. An operator can issue another currency for a previously issued customer number under the same short code. Numbers begin at 1000101 in a fresh holder namespace. AVIP continues after existing allocations. A seven-digit suffix ends at 9999999 and never wraps. Duplicate or stale selections cannot reserve a different number.
+
+To use a manually issued number, open the intended bank account's details or statement, choose **Assign ABIQ number**, then select a previously issued number in that account's currency. The assignment is permanent. The operator's active workspace limits the eligible accounts. A generated number is available for account verification only after assignment. Payment resolution requires an active funding bridge.
+
+Existing identifiers remain addressable. Newly opened fiat margin, custody and other non-crypto bank ledgers receive the same 26-character format as funding accounts. Migration 035 retains the original registry entry for internal references and ownership protection. Network wallets and non-fiat asset balances are ineligible.
 
 ## ABIQ message interface
 
