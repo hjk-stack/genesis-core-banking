@@ -121,6 +121,11 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  STRIPE_PROVIDER_RESPONSE:'The card checkout request could not complete. Retry from this payment.',
  STRIPE_SIGNATURE:'The Stripe event could not be verified.',STRIPE_EVENT_MISMATCH:'The card payment details did not match the original checkout.',
  DUPLICATE_RECORD:'This reference is already registered.',INVALID_REFERENCE:'Select a valid record.',
+ NOSTRO_ACCOUNT_NOT_FOUND:'Select a registered NOSTRO clearing account.',
+ NOSTRO_ALREADY_SETTLED:'This external payment reference is already recorded as settled or reconciled.',
+ NOSTRO_GATEWAY_NOT_FOUND:'Select a registered card settlement gateway.',
+ NOSTRO_GATEWAY_ALREADY_LINKED:'This card gateway is linked to another NOSTRO account.',
+ TREASURY_SECURITY_SHARED:'This security is in another portfolio or an open order. Update the shared instrument separately.',
  FORBIDDEN:'You do not have access to this action.',REQUEST_FAILED:'This action could not be completed. Reference this request in Administration.',
  CSRF:'Refresh the page and submit again.',TOO_MANY_ATTEMPTS:'Please wait before trying to sign in again.'
 };
@@ -356,13 +361,13 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(path==='/api/terminals/activation'){if(!actor.admin)fault('FORBIDDEN',null,403);return send(res,200,await posControl.setActive(actor,body));}
    if(path==='/api/stripe/webpos/checkout')return send(res,200,await stripePos.createCheckout(actor,body,req.headers['idempotency-key']));
    const routes={'cards/issue':'issueManagedCard','cards/load':'loadManagedCard','cards/status':'setCardStatus','cards/pin':'resetCardPin','cards/delivery':'managedCardDelivery','accounts/suspense':'moveToSuspense','access/customer':'bindCustomerLogin','crypto/sell':'sellCrypto','cards/external':'registerExternalCard','cards/redeem-code':'redeemCode','cards/cancel-code':'cancelCodedDebit','cards/pickup-details':'externalCardDetails','payments/pickup':'pickupTransfer','payments/settle-manual':'settleManualTransfer','crypto/offers':'registerCryptoOffer','crypto/purchase':'purchaseCrypto','payments/review':'preparePayment','payments/transfer':'confirmPayment','payments/cancel':'cancelPayment','customers/profile':'saveCustomerProfile',customers:'openCustomer',currencies:'addCurrencies',transfers:'transfer',shops:'registerShop',
-    correspondents:'registerCashAccount',bankprofiles:'registerBankConnector',bankroutes:'linkBankAccount',bankpayments:'initiatePayment','clearing/reconcile':'reconcileStatement',
+    correspondents:'registerCashAccount','nostro/mirror':'mirrorNostroMovement','nostro/gateway':'linkNostroGateway',bankprofiles:'registerBankConnector',bankroutes:'linkBankAccount',bankpayments:'initiatePayment','clearing/reconcile':'reconcileStatement',
     'fx/rates/refresh':'refreshFxRates','fx/quote':'quoteFx','fx/execute':'executeFx','fx/cancel':'cancelFx',
     'offline/keys':'configureOffline','offline/allowances':'issueOfflineAllowance','offline/sync':'settleOfflineBatch','offline/close':'closeOfflineAllowance',
     'checkouts/capture':'captureCheckout','checkouts/release':'releaseCheckout','checkouts/refund':'refundCheckout',
     cards:'registerCard',terminals:'registerTerminal','cards/authorize':'authorizeCard','cards/capture':'settleCard','cards/reverse':'settleCard'};
    routes['accounts/open']='openAccount';
-   Object.assign(routes,{'portfolio/exchange-security':'resolveExchangeSecurity','portfolio/catalogue/sync':'syncSecurities','portfolio/securities':'addSecurity','portfolio/positions':'recordPosition','portfolio/treasury-source':'registerTreasurySecuritySource','portfolio/orders/review':'reviewSecurityOrder','portfolio/orders/submit':'submitSecurityOrder','portfolio/orders/cancel':'cancelSecurityOrder'});
+   Object.assign(routes,{'portfolio/exchange-security':'resolveExchangeSecurity','portfolio/catalogue/sync':'syncSecurities','portfolio/securities':'addSecurity','portfolio/positions':'recordPosition','portfolio/treasury-source':'registerTreasurySecuritySource','portfolio/treasury-source/edit':'editTreasurySecuritySource','portfolio/orders/review':'reviewSecurityOrder','portfolio/orders/submit':'submitSecurityOrder','portfolio/orders/cancel':'cancelSecurityOrder'});
    Object.assign(routes,{'crypto/trading/index-policy':'saveIndexPolicy','crypto/trading/validate-providers':'validateRobotProviders','crypto/trading/configure':'configureRobot','crypto/trading/toggle':'toggleRobot','crypto/trading/delegate-wallet':'delegateWalletTrading','crypto/trading/select-wallet':'selectWalletTrading','crypto/trading/revoke-wallet':'revokeWalletTrading','crypto/approve':'approveCrypto','crypto/activate':'activateCrypto','crypto/wallet/visibility':'setCryptoWalletVisibility','crypto/wallet':'cryptoWallet','crypto/balance':'cryptoChainBalance','crypto/check-network':'checkCryptoNetwork','crypto/markets/refresh':'refreshCryptoMarkets','crypto/securities/demo-convert':'convertDemoSecurity','crypto/securities/prepare':'prepareRealSecurity','crypto/securities/wallet':'createSecurityWallet','crypto/securities/package':'cryptoContractPackage','crypto/robot/channels':'createRollingChannel','crypto/actions/cancel':'cancelCryptoReview','crypto/actions/review':'prepareCryptoAction','crypto/actions/submit':'submitCryptoAction','crypto/actions/broadcast':'broadcastCryptoAction','crypto/actions/confirm':'confirmCryptoAction'});
    routes['crypto/deposits/reconcile']='reconcileCryptoDeposit';
    routes['crypto/trading/tests']='runTradingTest';
