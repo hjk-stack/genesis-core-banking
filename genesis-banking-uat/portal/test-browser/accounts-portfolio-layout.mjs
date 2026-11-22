@@ -46,6 +46,7 @@ test('Accounts & ABIQ selects country and currency and derives the series',async
   await page.goto(base+'/admin#accounts');
   await page.getByRole('button',{name:'Generate ABIQ number',exact:true}).click();
   const dialog=page.locator('dialog.abiq-generator');
+  await dialog.waitFor({state:'visible'});
   const country=dialog.getByLabel('Country',{exact:true}),currency=dialog.getByLabel('Currency',{exact:true});
   assert.equal(await country.inputValue(),'');assert.equal(await currency.inputValue(),'');
   await country.selectOption('IT');await currency.selectOption('EUR');

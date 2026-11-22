@@ -34,12 +34,12 @@ export function createAbiqGenerator({api}) {
  }
  function open() {
   const {dialog,form,fields,button,error,result,active}=windowFor('Generate ABIQ number');
-  fields.innerHTML=`<label>Country<select required name="country"></select></label>
-   <label>Check digits<select name="checkDigits"></select></label>
+  fields.innerHTML=`<label>Country<select required name="country" aria-label="Country"></select></label>
+   <label>Check digits<select name="checkDigits" aria-label="Check digits"></select></label>
    <label>ABIQ holder short name<input required type="text" name="holderCode" maxlength="4" pattern="[A-Za-z]{4}" autocomplete="off" spellcheck="false" placeholder="e.g. AVIP"></label>
-   <label>Currency<select required name="currency"></select></label>
+   <label>Currency<select required name="currency" aria-label="Currency"></select></label>
    <label>Currency series<output name="series"></output></label>
-   <label>Customer number<select name="customerNumber"></select></label>
+   <label>Customer number<select name="customerNumber" aria-label="Customer number"></select></label>
    <label class="generator-preview">ABIQ IBAN<output name="preview"></output></label>`;
   button.textContent='Generate number';
   const history=document.createElement('details');
