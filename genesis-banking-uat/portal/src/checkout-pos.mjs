@@ -78,6 +78,7 @@ export class CheckoutPosControl{
    if(current.state!==target){
     await db.query(`UPDATE avis_core_v2.checkout_pos_controls
       SET state=$2,approved_at=CASE WHEN $2='ACTIVE' THEN now() ELSE NULL END,
+      requested_at=CASE WHEN $2='CLOSED' THEN NULL ELSE requested_at END,
       updated_at=now(),changed_by=$3 WHERE terminal_id=$1`,[id,target,actor.id]);
     await db.query(`INSERT INTO avis_core_v2.checkout_pos_events(terminal_id,event_type,actor_id)
       VALUES($1,$2,$3)`,[id,target==='ACTIVE'?'APPROVE':'CLOSE',actor.id]);
