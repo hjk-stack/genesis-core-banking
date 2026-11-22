@@ -83,71 +83,65 @@ textarea{box-sizing:border-box;width:100%;font:inherit;border:1px solid #d6dbe3;
 
 @media(max-width:700px){.pos-terminal-register .pos-terminal-summary{padding:14px}.pos-terminal-table{min-width:990px}}
 
-/* AVIS POS: a tactile multi-layer Liquid Glass mechanism in every terminal row. */
+/* Precision AVIS Liquid Glass terminal: chrome shell, black recess, luminous capsule. */
+.pos-activation-cell{min-width:246px;white-space:nowrap!important}
+.pos-terminal-table{min-width:1200px}
 .pos-liquid-switch{
- --pos-ink:#74172b;--pos-glow:#d34c67;
- isolation:isolate;appearance:none;position:relative;overflow:visible;
+ appearance:none;isolation:isolate;position:relative;overflow:visible;
  display:inline-flex;vertical-align:middle;align-items:center;flex:none;
- width:92px;min-width:92px;height:48px;padding:5px;margin:0 11px 0 0;
- border:1px solid #ffffffb8;border-radius:999px;cursor:pointer;
- background:
-  radial-gradient(ellipse at 28% 17%,#ffffffa8 0%,#ffffff16 26%,transparent 52%),
-  radial-gradient(ellipse at 70% 95%,#ffffff70 0%,transparent 56%),
-  linear-gradient(160deg,#65081e 0%,#e64d69 42%,#af173b 62%,#460d25 100%);
- box-shadow:
-  inset 0 2px 2px #fff8,inset 0 -6px 12px #2b071c8a,
-  inset 0 0 0 2px #ffffff38,
-  0 2px 3px #0c252226,0 9px 18px #2e092e30,0 0 0 3px #911b3930;
- transition:background .25s ease,box-shadow .25s ease,transform .2s ease;
+ width:116px;min-width:116px;height:54px;margin:0 12px 0 0;padding:5px;
+ cursor:pointer;border:1px solid #ffffffd0;border-radius:999px;
+ background:radial-gradient(ellipse at 25% 10%,#ffd6e17c,transparent 52%),linear-gradient(160deg,#8c0d30,#f81e4e 35%,#c61140 75%,#6b102c);
+ box-shadow:inset 0 2px 3px #ffffffc4,inset 0 -5px 10px #3c061da9,0 0 0 2px #ffffff70,0 7px 14px #1c1e2438;
+ transition:background .25s ease,box-shadow .25s ease,transform .18s ease;
  -webkit-tap-highlight-color:transparent;
 }
 .pos-liquid-switch::before{
  content:"";pointer-events:none;position:absolute;z-index:0;
- inset:3px 5px auto 5px;height:18px;border-radius:50% 50% 35% 35%;
- background:linear-gradient(180deg,#ffffff85,transparent);
- opacity:.8;
+ inset:6px 6px 7px 6px;width:auto;height:auto;border-radius:999px;
+ background:linear-gradient(165deg,#060d13,#252a2f 42%,#050c11 78%,#29313a);
+ box-shadow:inset 0 2px 5px #000c,inset 0 -1px 2px #ffffff4b,0 1px 1px #ffffff91;
 }
 .pos-liquid-switch::after{
  content:"";pointer-events:none;position:absolute;z-index:1;
- right:13px;bottom:7px;width:22px;height:8px;border-radius:90%;
- transform:rotate(-24deg);background:linear-gradient(90deg,transparent,#fff9,transparent);
- filter:blur(2px);opacity:.75;
-}
-.pos-liquid-switch:hover{transform:translateY(-1px);box-shadow:inset 0 2px 2px #fff9,inset 0 -6px 12px #1224277a,0 11px 19px #12342b38,0 0 0 4px #ffffff80}
-.pos-liquid-switch:active{transform:translateY(1px) scale(.98)}
-.pos-liquid-switch[data-state=REQUESTED]{
- background:
-  radial-gradient(ellipse at 28% 14%,#d6faffc2,transparent 53%),
-  radial-gradient(ellipse at 75% 92%,#84d5ff9b,transparent 50%),
-  linear-gradient(145deg,#062c65 0%,#59baf9 36%,#1677d1 62%,#052653 100%);
- box-shadow:inset 0 2px 3px #fff9,inset 0 -6px 12px #001f64ae,0 5px 13px #155eb76c,0 0 0 4px #328dec42;
- animation:pos-request-pulse 1.35s ease-in-out infinite;
-}
-.pos-liquid-switch[data-state=ACTIVE]{
- background:
-  radial-gradient(ellipse at 28% 12%,#caffefcf,transparent 53%),
-  radial-gradient(ellipse at 70% 94%,#c4ffe587,transparent 46%),
-  linear-gradient(155deg,#07583b 0%,#5fefb4 37%,#1ea87f 58%,#064834 100%);
- box-shadow:inset 0 2px 3px #fffffff0,inset 0 -7px 12px #063e3191,0 7px 16px #177a5753,0 0 0 3px #4cd2a23e;
+ inset:4px 7px auto 7px;height:14px;border-radius:90% 90% 50% 50%;
+ background:linear-gradient(180deg,#fff9,transparent);opacity:.72;
 }
 .pos-liquid-knob{
- position:relative;z-index:2;display:block;flex:none;
- width:36px;height:36px;border-radius:50%;
- background:
-  radial-gradient(circle at 32% 22%,#fff 0%,#f2fafb 28%,#e4f5f1 52%,#9caeb4 87%,#e8f8f5 100%);
- box-shadow:
-  inset 0 1px 2px #fff,inset 0 -2px 5px #829a9f70,
-  0 2px 2px #001b2555,0 4px 9px #08161e66,0 0 0 1px #ffffffb8;
- transform:translateX(0);transition:transform .26s cubic-bezier(.22,.9,.3,1.12);
+ box-sizing:border-box;position:relative;z-index:2;display:block;flex:none;
+ width:63px;height:42px;border:1px solid #ffffff86;border-radius:999px;
+ background:radial-gradient(ellipse at 24% 15%,#ffe1e9af,transparent 55%),linear-gradient(160deg,#ff4869 5%,#ec163f 55%,#9a1136 100%);
+ box-shadow:inset 0 2px 3px #ffedfba8,inset 0 -4px 7px #63092296,0 3px 7px #000a,0 0 9px #e9365770;
+ transform:translateX(0);
+ transition:transform .28s cubic-bezier(.2,.87,.28,1.08),background .2s,box-shadow .2s;
 }
 .pos-liquid-knob::before{
- content:"";position:absolute;inset:4px 6px 55% 6px;border-radius:100%;
- background:linear-gradient(180deg,#fff,transparent);opacity:.95;
+ content:"";position:absolute;inset:4px 7px 55% 7px;border-radius:90% 90% 50% 50%;
+ background:linear-gradient(180deg,#ffffffbe,transparent);opacity:.85;
 }
-.pos-liquid-switch[data-state=REQUESTED] .pos-liquid-knob{transform:translateX(22px)}
-.pos-liquid-switch[data-state=ACTIVE] .pos-liquid-knob{transform:translateX(44px)}
+.pos-liquid-switch[data-state=REQUESTED]{
+ background:radial-gradient(ellipse at 25% 10%,#c3f3ff8c,transparent 52%),linear-gradient(160deg,#123f86,#2d98fc 45%,#0657ae 75%,#123263);
+ animation:pos-request-pulse 1.35s ease-in-out infinite;
+}
+.pos-liquid-switch[data-state=REQUESTED] .pos-liquid-knob{
+ background:radial-gradient(ellipse at 25% 15%,#def8ffe0,transparent 50%),linear-gradient(160deg,#55baff,#187ee7 55%,#0545a4);
+ box-shadow:inset 0 2px 3px #e6faffb8,inset 0 -4px 8px #09377a9c,0 3px 8px #000a,0 0 12px #55b4fb9e;
+ transform:translateX(21px);
+}
+.pos-liquid-switch[data-state=ACTIVE]{
+ background:radial-gradient(ellipse at 23% 10%,#c6ffec9c,transparent 50%),linear-gradient(160deg,#096546,#30d798 45%,#15915f 80%,#064830);
+}
+.pos-liquid-switch[data-state=ACTIVE] .pos-liquid-knob{
+ background:radial-gradient(ellipse at 25% 12%,#e4fff3e0,transparent 55%),linear-gradient(160deg,#71f3be,#25ba88 55%,#0a7856);
+ box-shadow:inset 0 2px 4px #efffffd9,inset 0 -4px 8px #0b543ba9,0 3px 8px #0009,0 0 12px #3bdfae8a;
+ transform:translateX(42px);
+}
+.pos-liquid-switch:hover:not(:disabled){transform:translateY(-1px);filter:brightness(1.07)}
+.pos-liquid-switch:active:not(:disabled){transform:translateY(1px) scale(.98)}
+.pos-liquid-switch:focus-visible{outline:3px solid #6babeb;outline-offset:4px}
+.pos-liquid-switch:disabled{cursor:progress;opacity:.8}
 @keyframes pos-request-pulse{
- 0%,100%{filter:brightness(1);box-shadow:inset 0 2px 3px #fffb,inset 0 -6px 12px #001c64aa,0 5px 13px #155eb75a,0 0 0 3px #438fec60}
- 50%{filter:brightness(1.2);box-shadow:inset 0 2px 3px #fff,inset 0 -6px 12px #052653ae,0 5px 18px #186df2a0,0 0 0 8px #3b9dff44}
+ 0%,100%{filter:brightness(1);box-shadow:inset 0 2px 3px #e8f7ffab,inset 0 -5px 10px #05235fab,0 0 0 3px #399fff52,0 5px 13px #145ebd67}
+ 50%{filter:brightness(1.17);box-shadow:inset 0 2px 3px #fff,inset 0 -5px 10px #05285bab,0 0 0 9px #399fff3d,0 7px 20px #0a68de8e}
 }
 @media(prefers-reduced-motion:reduce){.pos-liquid-switch[data-state=REQUESTED]{animation:none}}
