@@ -69,44 +69,92 @@ const number=s=>{const[a,b]=String(s).split('.');return a.replace(/\B(?=(\d{3})+
 const displayAbiq=s=>typeof s==='string'&&/^TN\d{2}AVIP000\d{15}$/.test(s)?s.slice(0,14)+' '+s.slice(14):s;
 const label=s=>s.toLowerCase().replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase());
 const columns={accounts:[['user_id','User'],['full_name','Account holder'],['account_type','Type'],['abiq_iban','ABIQ-IBAN'],['currency_code','Currency'],['available_balance','Available'],['locked_balance','Reserved']],customers:[['user_id','User'],['customer_number','Customer number'],['full_name','Name'],['account_type','Account type'],['account_role','Role']],ledger:[['owner_class','Owner'],['account_holder','Account holder'],['account_reference','ABIQ / Ledger account'],['currency_code','Asset'],['wallet_scope','Scope'],['account_category','Category'],['available_balance','Available'],['locked_balance','Reserved']],transactions:[['created_at','Date & time'],['reference_id','Reference'],['event_type','Operation'],['direction','Entry'],['amount','Amount'],['currency_code','Currency'],['abiq_iban','ABIQ account']],shops:[['shop_name','Shop'],['merchant_id','Merchant ID'],['full_name','Business owner'],['commission_rate_bps','Commission (bps)'],['status','Status']],checkouts:[['marketplace_order_ref','Order'],['buyer_user_id','Buyer'],['payment_rail','Payment rail'],['total_amount_eur','EUR'],['status','Status'],['checkout_id','Checkout reference']],cards:[['user_id','Customer'],['last_four_digits','Card ending'],['card_type','Type'],['card_rail_mode','Card programme'],['status','Status']],terminals:[['terminal_id','Terminal'],['merchant_id','Merchant'],['terminal_type','Type'],['status','Status']],authorizations:[['created_at','Date & time'],['terminal_id','Terminal'],['network_reference','Network reference'],['amount','Amount'],['currency_code','Currency'],['status','Status'],['authorization_id','Authorization']],gateways:[['display_name','Gateway'],['gateway_category','Route'],['settlement_cycle','Settlement cycle']],stripepayments:[['created_at','Created'],['merchant_id','Merchant'],['terminal_id','Web POS'],['reference','Reference'],['amount','Amount'],['currency_code','Currency'],['status','Stripe status'],['payment_intent_id','Payment reference']],correspondents:[['institution_name','Institution'],['institution_type','Account class'],['bic_code','BIC'],['iban_or_account_no','Account'],['currency_code','Currency']],wallets:[['user_id','Customer'],['network','Blockchain'],['public_address','Receiving address'],['destination_tag','Destination tag']],connectors:[['display_name','Connector'],['connector_code','Code'],['is_enabled','Enabled'],['auto_provision','Automatic provisioning']],audit:[['created_at','Date & time'],['actor_id','Operator'],['operation','Action'],['resource_id','Reference']]};
-let posTerminalsExpanded=true;
-const terminalState=row=>row.terminal_type==='WEB_POS'?['CLOSED','REQUESTED','ACTIVE'].includes(row.activation_state)?row.activation_state:'CLOSED':'';
+let posTerminalsExpanded=true,posTerminalActionBusy=false,posTerminalPolling=false,posTerminalActionEpoch=0;
+const terminalDeadline=row=>row.expires_at?Date.parse(row.expires_at):row.requested_at?Date.parse(row.requested_at)+3600000:NaN;
+const terminalState=row=>{
+ if(row.terminal_type!=='WEB_POS')return '';
+ const state=['CLOSED','REQUESTED','ACTIVE'].includes(row.activation_state)?row.activation_state:'CLOSED';
+ return state==='REQUESTED'&&Number.isFinite(terminalDeadline(row))&&terminalDeadline(row)<=Date.now()?'CLOSED':state;
+};
+const posTime=value=>{
+ if(!value)return '—';
+ const date=new Date(value);
+ return Number.isNaN(date.getTime())?'—':date.toLocaleString(undefined,{dateStyle:'short',timeStyle:'medium'});
+};
 function posTerminalsTable(rows){
- const requests=rows.filter(r=>terminalState(r)==='REQUESTED').length;
- const opened=posTerminalsExpanded||requests>0;
+ const pending=rows.filter(r=>terminalState(r)==='REQUESTED');
+ const opened=posTerminalsExpanded||pending.length>0;
  return `<details class="panel pos-terminal-register" data-pos-register ${opened?'open':''}>
-  <summary class="panel-header pos-terminal-summary"><h2>POS terminals</h2><span>${rows.length} registered · ${requests} request${requests===1?'':'s'}</span></summary>
-  <div class="table-wrap"><table><thead><tr><th>Terminal ID</th><th>Merchant</th><th>Type</th><th>Registration</th><th>Checkout reference</th><th>Request received</th><th>Liquid Glass activation</th></tr></thead><tbody>
-  ${rows.map(r=>{const state=terminalState(r),id=esc(r.terminal_id),time=r.requested_at?new Date(r.requested_at).toLocaleString():'—';
-    return `<tr data-pos-terminal="${id}"><td class="account-number">${id}</td><td>${esc(r.merchant_id)}</td><td>${esc(r.terminal_type)}</td><td><span class="status">${esc(r.status)}</span></td><td>${esc(r.checkout_reference||'—')}</td><td class="pos-request-time">${esc(time)}</td><td>${state?`<button type="button" class="pos-liquid-switch" role="switch" data-state="${state}" aria-checked="${state==='ACTIVE'}" aria-label="${state==='ACTIVE'?'Close':'Activate'} POS ${id}" data-terminal-toggle="${id}" data-terminal-active="${state!=='ACTIVE'}"><span class="pos-liquid-knob" aria-hidden="true"></span></button><span class="pos-activation-label" data-state="${state}">${state==='REQUESTED'?'Request pending':state==='ACTIVE'?'Open':'Closed'}</span>`:''}</td></tr>`;}).join('')}
+  <summary class="panel-header pos-terminal-summary"><h2>POS terminals</h2><span class="pos-register-count">${rows.length} terminals</span><span class="pos-pending-count" data-pending-count="${pending.length}">${pending.length} pending activation${pending.length===1?'':'s'}</span></summary>
+  <div class="table-wrap"><table class="pos-terminal-table"><thead><tr><th>Terminal ID</th><th>Merchant</th><th>Type</th><th>Registration</th><th>Checkout / origin</th><th>Request &amp; expiry (local time)</th><th>Liquid Glass POS switch</th></tr></thead><tbody>
+  ${rows.map(r=>{
+   const state=terminalState(r),id=esc(r.terminal_id),requestAt=posTime(r.requested_at),
+    expiryAt=posTime(r.expires_at||(r.requested_at&&new Date(Date.parse(r.requested_at)+3600000).toISOString())),
+    lastExpiredAt=posTime(r.expired_at);
+   const isPending=state==='REQUESTED',wasExpired=state==='CLOSED'&&Boolean(r.expired_at);
+   const source=`<strong>${esc(r.checkout_title||r.checkout_reference||'Registered terminal')}</strong><small>${esc(r.checkout_reference||r.terminal_id)} · ${esc(r.checkout_kind||'REGISTERED')}</small>`;
+   const history=isPending?`<span class="pos-time-line">Requested: <time>${esc(requestAt)}</time></span><span class="pos-time-line">Expires: <time>${esc(expiryAt)}</time></span>`
+    :wasExpired?`<span class="pos-time-line">Requested: <time>${esc(requestAt)}</time></span><span class="pos-time-line">Expired: <time>${esc(lastExpiredAt)}</time></span>`
+    :state==='ACTIVE'?`<span class="pos-time-line">${r.requested_at?'Requested: '+esc(requestAt):'Manual activation'}</span><span class="pos-time-line">Activated: <time>${esc(posTime(r.approved_at))}</time></span>`:'—';
+   const expiryMs=isPending?terminalDeadline(r):null;
+   return `<tr data-pos-terminal="${id}" data-pos-request-state="${state}" ${isPending?'class="pos-terminal-awaiting"':''}><td class="account-number">${id}</td><td>${esc(r.merchant_id)}</td><td>${esc(r.terminal_type)}</td><td><span class="status">${esc(r.status)}</span></td><td class="pos-checkout-source">${source}</td><td class="pos-request-time">${history}</td><td class="pos-activation-cell">${state?`<button type="button" class="pos-liquid-switch" role="switch" data-state="${state}" aria-checked="${state==='ACTIVE'}" aria-label="${state==='ACTIVE'?'Close':'Activate'} POS ${id}" data-terminal-toggle="${id}" data-terminal-active="${state!=='ACTIVE'}" ${expiryMs?`data-pos-deadline="${expiryMs}"`:''}><span class="pos-liquid-knob" aria-hidden="true"></span></button><span class="pos-activation-label" data-state="${state}">${isPending?'Request waiting':state==='ACTIVE'?'Open':wasExpired?'Request expired':'Closed'}</span>`:''}</td></tr>`;
+  }).join('')}
   </tbody></table></div></details>`;
 }
 function bindTerminalControls(){
  const panel=document.querySelector('[data-pos-register]');if(!panel)return;
  panel.addEventListener('toggle',()=>{posTerminalsExpanded=panel.open});
  panel.querySelectorAll('[data-terminal-toggle]').forEach(button=>button.onclick=async()=>{
-  if(button.disabled)return;button.disabled=true;
+  if(button.disabled||posTerminalActionBusy)return;
+  posTerminalActionBusy=true;posTerminalActionEpoch++;button.disabled=true;
   try{
    const rows=await api('terminals/activation',{terminalId:button.dataset.terminalToggle,active:button.dataset.terminalActive==='true'});
    const index=(cache.terminals||[]).findIndex(t=>t.terminal_id===rows.terminalId);
-   if(index>=0)cache.terminals[index]={...cache.terminals[index],activation_state:rows.state,requested_at:rows.requestedAt,approved_at:rows.approvedAt};
+   if(index>=0)cache.terminals[index]={...cache.terminals[index],activation_state:rows.state,requested_at:rows.requestedAt,approved_at:rows.approvedAt,expired_at:rows.expiredAt,expires_at:rows.expiresAt};
    const current=document.querySelector('[data-pos-register]');if(!current||location.hash!=='#pos')return;
    posTerminalsExpanded=current.open;current.outerHTML=posTerminalsTable(cache.terminals||[]);bindTerminalControls();
-  }catch(err){pageError(err,button)}finally{if(button.isConnected)button.disabled=false}
+  }catch(err){pageError(err,button)}finally{posTerminalActionBusy=false;if(button.isConnected)button.disabled=false}
  });
 }
+setInterval(()=>{
+ if(!csrf||!identity.admin||location.hash!=='#pos')return;
+ let expiredCount=0;
+ for(const switchButton of document.querySelectorAll('[data-pos-deadline]')){
+  if(Number(switchButton.dataset.posDeadline)>Date.now())continue;
+  // Stop the blue flash immediately at sixty minutes, even when a network
+  // poll is delayed; the server independently closes and audits the request.
+  switchButton.dataset.state='CLOSED';
+  switchButton.setAttribute('aria-checked','false');
+  switchButton.removeAttribute('data-pos-deadline');
+  const row=switchButton.closest('tr');row?.classList.remove('pos-terminal-awaiting');if(row)row.dataset.posRequestState='CLOSED';
+  expiredCount++;
+  const status=switchButton.parentElement.querySelector('.pos-activation-label');
+  if(status){status.dataset.state='CLOSED';status.textContent='Request expired';}
+ }
+ if(expiredCount){
+  const pending=document.querySelector('[data-pending-count]');
+  if(pending){
+   const remaining=document.querySelectorAll('.pos-liquid-switch[data-state="REQUESTED"]').length;
+   pending.dataset.pendingCount=String(remaining);
+   pending.textContent=remaining+' pending activation'+(remaining===1?'':'s');
+  }
+ }
+},1000);
 setInterval(async()=>{
- if(!csrf||!identity.admin||location.hash!=='#pos'||!document.querySelector('[data-pos-register]'))return;
- const currentEpoch=sessionEpoch;
+ if(!csrf||!identity.admin||posTerminalActionBusy||posTerminalPolling||location.hash!=='#pos'||!document.querySelector('[data-pos-register]'))return;
+ posTerminalPolling=true;
+ const currentEpoch=sessionEpoch,actionEpoch=posTerminalActionEpoch;
  try{
-  const before=JSON.stringify((cache.terminals||[]).map(r=>[r.terminal_id,r.activation_state,r.requested_at,r.approved_at]));
-  const rows=await getRows('terminals');if(currentEpoch!==sessionEpoch||location.hash!=='#pos')return;
-  const after=JSON.stringify(rows.map(r=>[r.terminal_id,r.activation_state,r.requested_at,r.approved_at]));
+  const before=JSON.stringify((cache.terminals||[]).map(r=>[r.terminal_id,r.activation_state,r.requested_at,r.approved_at,r.expired_at,r.expires_at,r.checkout_title]));
+  const response=await api('views/terminals');
+  if(currentEpoch!==sessionEpoch||actionEpoch!==posTerminalActionEpoch||posTerminalActionBusy||location.hash!=='#pos')return;
+  const rows=response.rows;cache.terminals=rows;
+  const after=JSON.stringify(rows.map(r=>[r.terminal_id,r.activation_state,r.requested_at,r.approved_at,r.expired_at,r.expires_at,r.checkout_title]));
   if(before===after)return;
   const panel=document.querySelector('[data-pos-register]');if(!panel)return;
   posTerminalsExpanded=panel.open||rows.some(r=>terminalState(r)==='REQUESTED');
   panel.outerHTML=posTerminalsTable(rows);bindTerminalControls();
- }catch(error){console.error('POS_TERMINAL_REFRESH',error.code||error.name)}
+ }catch(error){console.error('POS_TERMINAL_REFRESH',error.code||error.name)}finally{posTerminalPolling=false}
 },7000);
 function table(name,title,rows){return `<section class="panel"><div class="panel-header"><h2>${esc(title)}</h2><span>${rows.length} records${rows.length===300?' · latest 300':''}</span></div><div class="table-wrap"><table><thead><tr>${columns[name].map(([,h])=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${columns[name].map(([k])=>`<td${k.includes('iban')||k==='account_reference'?' class="account-number"':''}>${name==='portfolio'&&['smart_contract','historical_wallet_address'].includes(k)?(r.historical_proof||[]).map(p=>`<a class="portfolio-chain-proof" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(k==='smart_contract'?p.contractAddress:p.walletAddress)}</a>`).join('<br>')||'—':k==='request_id'?`<button type="button" data-request="${esc(r[k])}">View transfer</button>`:k==='status'?`<span class="status">${esc(label(r[k]))}</span>`:esc(k.includes('balance')||['amount','total_amount_eur'].includes(k)?number(r[k]):k==='created_at'?new Date(r[k]).toLocaleString():['abiq_iban','account_reference'].includes(k)?displayAbiq(r[k]):['owner_class','wallet_scope','account_category'].includes(k)&&r[k]?label(r[k]):typeof r[k]==='boolean'?(r[k]?'Yes':'No'):r[k]??'—')}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;}
 Object.assign(columns,{

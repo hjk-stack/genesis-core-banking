@@ -47,7 +47,7 @@ const fixtureScript=[
 
 before(async()=>{
  // Use the real shell and stylesheet, including its main-width constraint.
- const html=(await readFile(new URL('../index.html',import.meta.url),'utf8')).replace('src="/app.mjs"','src="/fixture.mjs"');
+ const html=(await readFile(new URL('../index.html',import.meta.url),'utf8')).replace(/src="\/app\.mjs(?:\?[^"]*)?"/,'src="/fixture.mjs"');
  for(const address of Object.values(addresses))address.qr=await QRCode.toDataURL(address.public_address,{margin:2,width:256,errorCorrectionLevel:'M'});
  server=http.createServer(async(req,res)=>{
   if(req.url==='/'){wallets=initialWallets.map(w=>({...w}));testRuns=[];testReads=0;reviewedRunId=null;backingReads=0;liveFills=[execution('first-fill')];instructionVersion=1;savedInstructionVersion=0;robotInstructions=JSON.stringify({maxNotional:'100',dailyNotional:'1000',maxLoss:'100',minimumIndex:0,trailingBps:50,notes:'Follow the saved W-effect configuration.'},null,2);res.setHeader('content-type','text/html');return res.end(html);}
@@ -94,9 +94,10 @@ before(async()=>{
    }
    return json({id:'result'});
   }
-  if(['/treasury-source.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(req.url)){
-   res.setHeader('content-type',req.url.endsWith('.jpg')?'image/jpeg':req.url.endsWith('.webp')?'image/webp':req.url.endsWith('.png')?'image/png':req.url.endsWith('.css')?'text/css':'text/javascript');
-   return res.end(await readFile(new URL('../public'+req.url,import.meta.url)));
+  if(['/treasury-source.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(req.url.split('?')[0])){
+   const asset=req.url.split('?')[0];
+   res.setHeader('content-type',asset.endsWith('.jpg')?'image/jpeg':asset.endsWith('.webp')?'image/webp':asset.endsWith('.png')?'image/png':asset.endsWith('.css')?'text/css':'text/javascript');
+   return res.end(await readFile(new URL('../public'+asset,import.meta.url)));
   }
   res.writeHead(404);res.end();
  });

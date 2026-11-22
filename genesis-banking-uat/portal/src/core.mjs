@@ -267,7 +267,9 @@ export class SovereignCore {
    cards:'SELECT card_id,user_id,last_four_digits,card_type,card_rail_mode,status FROM avis_core_v2.avis_cards ORDER BY created_at DESC LIMIT 300',
    terminals:`SELECT t.terminal_id,t.merchant_id,t.terminal_type,t.offline_enabled,t.status,
     COALESCE(c.state,'CLOSED') AS activation_state,c.checkout_kind,c.checkout_reference,c.checkout_title,
-    c.requested_at,c.approved_at,c.updated_at AS activation_updated_at
+    c.requested_at,c.approved_at,c.expired_at,
+    CASE WHEN c.state='REQUESTED' THEN c.requested_at+interval '60 minutes' END AS expires_at,
+    c.updated_at AS activation_updated_at
     FROM avis_core_v2.pos_terminals t LEFT JOIN avis_core_v2.checkout_pos_controls c USING(terminal_id)
     ORDER BY (c.state='REQUESTED') DESC,c.requested_at DESC NULLS LAST,t.terminal_id LIMIT 300`,
    authorizations:'SELECT authorization_id,terminal_id,network_reference,amount::text,currency_code,status,created_at FROM avis_core_v2.card_authorizations ORDER BY created_at DESC LIMIT 300',

@@ -130,7 +130,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
  const basket=new CryptoBasket(core,stripePos),storeWallet=new StoreWallet(basket);
  const posControl=new CheckoutPosControl(pool),posAuth=new CheckoutPosAuthenticator(pool,{fetcher:transferOptions.posServiceFetcher||fetch});
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
- return http.createServer(async(req,res)=>{
+ const server=http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
   res.setHeader('X-Request-Id',requestId);res.setHeader('X-Content-Type-Options','nosniff');
   res.setHeader('Cache-Control','no-store');res.setHeader('Referrer-Policy','same-origin');
@@ -296,6 +296,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(req.method==='GET'&&path==='/api/stripe/webpos/connection')return send(res,200,await stripePos.connection(actor));
    if(req.method==='GET'&&path==='/api/stripe/webpos/status')return send(res,200,await stripePos.status(actor,url.searchParams.get('sessionId')));
    if(req.method==='GET'&&path.startsWith('/api/views/')){
+    if(path==='/api/views/terminals')await posControl.expirePending();
     if(path==='/api/views/checkouttenders')return send(res,200,{rows:await basket.tender.catalog(actor)});
     if(path==='/api/views/cryptobasketpolicy')return send(res,200,{rows:[await basket.policy(actor)]});
     if(path==='/api/views/stripepayments')return send(res,200,{rows:await stripePos.list(actor)});
@@ -377,6 +378,13 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    send(res,e.status||(['DUPLICATE_RECORD','IDEMPOTENCY_CONFLICT'].includes(code)?409:code==='REQUEST_FAILED'?500:422),{code,field:e.field,message:messages[code],requestId});
   }
  });
+ // Expiry is authoritative on each read/write and swept independently so pending
+ // requests close even if no checkout or administrator is currently online.
+ const posExpirySweep=setInterval(()=>void posControl.expirePending().catch(error=>
+   console.error(JSON.stringify({operation:'POS_REQUEST_EXPIRY',code:error.code||'POS_SWEEP'}))),30000);
+ posExpirySweep.unref?.();
+ server.once('close',()=>clearInterval(posExpirySweep));
+ return server;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  const pool=new pg.Pool({host:process.env.PGHOST,port:Number(process.env.PGPORT||5432),database:process.env.PGDATABASE,

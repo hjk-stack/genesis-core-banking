@@ -45,6 +45,58 @@ test('each checkout has its own unique terminal, blue request, admin approval, c
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.ledger_entries')).rows[0].n,ledgerBefore);
  });
 });
+test('an unapproved POS request expires at 60 minutes and can be requested again without reopening any other POS',async()=>{
+ await withDb(async({pool,control})=>{
+  await control.resolve(actor,milestone);
+  await control.resolve(actor,basket);
+  const opened=await control.request(actor,milestone);
+  assert.equal(opened.state,'REQUESTED');
+  assert.equal(new Date(opened.expiresAt).getTime()-new Date(opened.requestedAt).getTime(),3600000);
+  assert.equal((await control.status(actor,milestone)).state,'REQUESTED');
+  assert.equal((await control.status(actor,basket)).state,'CLOSED');
+  // Server time, rather than browser timers, decides the 60-minute deadline.
+  await pool.query("UPDATE avis_core_v2.checkout_pos_controls SET requested_at=now()-interval '61 minutes' WHERE terminal_id=$1",[milestone.terminalId]);
+  const expired=await control.status(actor,{terminalId:milestone.terminalId});
+  assert.equal(expired.state,'CLOSED');
+  assert.ok(expired.expiredAt);
+  assert.equal(expired.expiresAt,null);
+  assert.equal((await control.expirePending()).valueOf(),0,'expiry sweep is idempotent');
+  assert.equal((await control.status(actor,basket)).state,'CLOSED');
+  const logged=(await pool.query('SELECT event_type FROM avis_core_v2.checkout_pos_events WHERE terminal_id=$1 ORDER BY event_id',[milestone.terminalId])).rows.map(r=>r.event_type);
+  assert.deepEqual(logged,['REQUEST','EXPIRE']);
+  const requestedAgain=await control.request(actor,milestone);
+  assert.equal(requestedAgain.state,'REQUESTED');
+  assert.equal(requestedAgain.expiredAt,null);
+  assert.ok(new Date(requestedAgain.requestedAt).getTime()>new Date(expired.requestedAt).getTime());
+  const approved=await control.setActive(admin,{terminalId:milestone.terminalId,active:true});
+  assert.equal(approved.state,'ACTIVE');
+  assert.equal(await control.expirePending(),0);
+  assert.equal((await control.status(actor,milestone)).state,'ACTIVE','approved POS never auto-closes with the original request');
+  assert.deepEqual((await pool.query('SELECT event_type FROM avis_core_v2.checkout_pos_events WHERE terminal_id=$1 ORDER BY event_id',[milestone.terminalId])).rows.map(r=>r.event_type),['REQUEST','EXPIRE','REQUEST','APPROVE']);
+ });
+});
+test('admin registry read expires overdue requests before displaying a blinking switch',async()=>{
+ await withDb(async({pool,control})=>{
+  await control.resolve(actor,milestone);
+  await control.request(actor,milestone);
+  await pool.query("UPDATE avis_core_v2.checkout_pos_controls SET requested_at=now()-interval '61 minutes' WHERE terminal_id=$1",[milestone.terminalId]);
+  const http=createBankServer({pool,authenticate:async(username,password)=>username==='admin-fixture'&&password==='key-fixture'?admin:Object.assign(new Error('SIGN_IN_FAILED'),{status:401,code:'SIGN_IN_FAILED'}),secureCookies:false});
+  await new Promise(resolve=>http.listen(0,'127.0.0.1',resolve));
+  const base='http://127.0.0.1:'+http.address().port;
+  try{
+   const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:'admin-fixture',password:'key-fixture'})});
+   assert.equal(login.status,200);
+   const cookie=login.headers.get('set-cookie').split(';')[0];
+   const list=await fetch(base+'/api/views/terminals',{headers:{cookie}});
+   assert.equal(list.status,200);
+   const data=await list.json(),row=data.rows.find(r=>r.terminal_id===milestone.terminalId);
+   assert.equal(row.activation_state,'CLOSED');
+   assert.equal(row.checkout_reference,milestone.reference);
+   assert.ok(row.expired_at);
+   assert.equal((await pool.query("SELECT count(*)::int AS n FROM avis_core_v2.checkout_pos_events WHERE terminal_id=$1 AND event_type='EXPIRE'",[milestone.terminalId])).rows[0].n,1);
+  }finally{await new Promise(resolve=>http.close(resolve))}
+ });
+});
 test('a previously registered POS ID can be linked once to its actual milestone',async()=>{
  await withDb(async({core,control,pool})=>{
   await core.registerTerminal(admin,{terminalId:milestone.terminalId,merchantId:'AVISPAY-WEB-POS',terminalType:'WEB_POS'},'pre-register');

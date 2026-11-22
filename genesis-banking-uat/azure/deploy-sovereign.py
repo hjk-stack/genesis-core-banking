@@ -120,6 +120,7 @@ def verify_deployed_frontend(opener, base, sha):
     assets = {
         '/': 'index.html',
         '/app.mjs': 'public/app.mjs',
+        '/styles.css': 'public/styles.css',
         '/payment-wizard.mjs': 'public/payment-wizard.mjs',
         '/cards.mjs': 'public/cards.mjs',
         '/accounts.mjs': 'public/accounts.mjs',
@@ -749,8 +750,18 @@ def main():
                     or not terminal['terminal_id']
                     or terminal.get('activation_state') not in ('CLOSED', 'REQUESTED', 'ACTIVE')):
                 raise RuntimeError('Web POS terminal has an invalid activation state')
-            if terminal['activation_state'] == 'REQUESTED' and not terminal.get('requested_at'):
-                raise RuntimeError('Web POS activation request lacks a timestamp')
+            if terminal['activation_state'] == 'REQUESTED':
+                if not terminal.get('requested_at') or not terminal.get('expires_at'):
+                    raise RuntimeError('Web POS activation request lacks an expiry timestamp')
+                requested = datetime.fromisoformat(terminal['requested_at'].replace('Z', '+00:00'))
+                expires = datetime.fromisoformat(terminal['expires_at'].replace('Z', '+00:00'))
+                if abs((expires-requested).total_seconds()-3600) > 1:
+                    raise RuntimeError('Web POS activation request does not expire after sixty minutes')
+                if expires < datetime.now(timezone.utc)-timedelta(seconds=5):
+                    raise RuntimeError('Expired Web POS request is still presented as pending')
+            if terminal['activation_state'] == 'CLOSED' and terminal.get('expired_at'):
+                if not terminal.get('requested_at'):
+                    raise RuntimeError('Expired Web POS request lost its original timestamp')
             if terminal['activation_state'] == 'ACTIVE' and not terminal.get('approved_at'):
                 raise RuntimeError('Web POS activation approval lacks a timestamp')
         print('Verified Web POS terminal activation registry: ' + json.dumps({

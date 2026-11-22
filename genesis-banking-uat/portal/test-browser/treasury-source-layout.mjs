@@ -44,7 +44,7 @@ const script=`
 `;
 
 before(async()=>{
- const html=(await readFile(new URL('../index.html',import.meta.url),'utf8')).replace('src="/app.mjs"','src="/fixture.mjs"');
+ const html=(await readFile(new URL('../index.html',import.meta.url),'utf8')).replace(/src="\/app\.mjs(?:\?[^"]*)?"/,'src="/fixture.mjs"');
  server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://fixture.invalid');
   const json=value=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(value));};
