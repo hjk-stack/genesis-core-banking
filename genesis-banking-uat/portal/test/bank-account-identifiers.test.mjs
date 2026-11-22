@@ -106,7 +106,17 @@ test('populated upgrade adds identifiers without creating accounts or changing f
  }
  for(const id of [common,suspense]){
   const numbered=await account(id);assert.equal(numbered.identifier_source,'LEDGER_REGISTRY');
-  assert.equal(numbered.abiq_iban.length,25);assert.equal(numbered.status,'ACTIVE');
+  assert.equal(numbered.abiq_iban.length,26);assert.equal(numbered.status,'ACTIVE');
+  assert.equal(parseAbiqIban(numbered.abiq_iban).currency,'EUR');
+  const old=(await rows('SELECT abiq_iban FROM avis_core_v2.abiq_ledger_identifiers WHERE ledger_account_id=$1',[id]))[0].abiq_iban;
+  assert.equal(old.length,25);
+  assert.notEqual(old,numbered.abiq_iban);
+  const repaired=(await rows('SELECT * FROM avis_core_v2.backoffice_abiq_number_repairs WHERE ledger_account_id=$1',[id]))[0];
+  assert.equal(repaired.previous_identifier,old);
+  assert.equal(repaired.replacement_identifier,numbered.abiq_iban);
+  const binding=(await rows('SELECT * FROM avis_core_v2.abiq_number_bindings WHERE ledger_account_id=$1',[id]))[0];
+  assert.equal(binding.identifier,numbered.abiq_iban);
+  assert.equal(binding.primary_for_ledger,true);
  }
  const custody=await rows("SELECT a.account_id FROM avis_core_v2.ledger_accounts a JOIN avis_core_v2.abiq_account_identifiers i ON i.ledger_account_id=a.account_id WHERE a.wallet_scope='CUSTODY' AND a.network IS NULL");
  assert.ok(custody.length>0);
