@@ -274,7 +274,7 @@ export class SovereignCore {
     ORDER BY (c.state='REQUESTED') DESC,c.requested_at DESC NULLS LAST,t.terminal_id LIMIT 300`,
    authorizations:'SELECT authorization_id,terminal_id,network_reference,amount::text,currency_code,status,created_at FROM avis_core_v2.card_authorizations ORDER BY created_at DESC LIMIT 300',
    gateways:'SELECT gateway_code,display_name,gateway_category,settlement_cycle FROM avis_core_v2.payment_gateway_bridges ORDER BY gateway_code LIMIT 300',
-   correspondents:'SELECT cash_account_id,institution_type,institution_name,bic_code,iban_or_account_no,currency_code FROM avis_core_v2.external_cash_accounts ORDER BY institution_name LIMIT 300',
+   correspondents:'SELECT cash_account_id,institution_type,institution_name,bank_address,account_name,aba,bank_reference,bic_code,iban_or_account_no,currency_code FROM avis_core_v2.external_cash_accounts ORDER BY institution_name LIMIT 300',
    wallets:'SELECT user_id,network,public_address,destination_tag FROM avis_core_v2.user_deposit_addresses ORDER BY user_id,network LIMIT 300',
    connectors:'SELECT connector_code,display_name,is_enabled,auto_provision,updated_at FROM avis_core_v2.platform_connectors ORDER BY connector_code',
    audit:'SELECT actor_id,operation,resource_id,created_at FROM avis_core_v2.operation_audit ORDER BY audit_id DESC LIMIT 300'
