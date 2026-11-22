@@ -3,6 +3,7 @@ import {createCryptoWorkspace} from './crypto-workspace.mjs';
 import {readExchangeIntent} from './exchange-intent.mjs';
 import {createPortfolio,securitiesTable,stockRegisterTable,securityOrdersTable,securityBookTable} from './portfolio.mjs';
 import {nostroRegisterTable,nostroMovementsTable} from './nostro-clearing.mjs';
+import {checkoutIpRegister,bindCheckoutIp,ipState} from './checkout-ip.mjs';
 import {accountTypes,accountSummaryTable,backofficeAccountTable,createAccountStatements} from './accounts.mjs';
 import {holderRegisterField,connectAccountHolderRegister,buildAccountOpeningRequest} from './open-account-register.mjs';
 import {createCardManager,cardAccountTable,cardProducts} from './cards.mjs';
@@ -182,7 +183,7 @@ const pages={
 fx:{title:'Fiat converter',subtitle:'AVISPay treasury quotes, commission and settlement between your currency accounts.',actions:[['fxquote','Get quote'],['fxexecute','Execute conversion'],['fxcancel','Cancel quote'],['fxrefresh','Refresh reference rates']],views:[['fxquotes','Conversion quotes & settlements'],['fxrates','Published reference rates']]},
 accounts:{title:'Accounts & ABIQ',subtitle:'Account summaries, currency accounts and backoffice account management.',actions:[['customer','Open account'],['currency','Add currencies'],['abiqgenerator','Generate ABIQ number'],['accountcleanup','Review legacy accounts'],['customerprofile','Account holder details'],['suspense','Move to suspense'],['cashaccount','Register NOSTRO']],views:[['accountsummaries','Account summary'],['backofficeaccounts','Backoffice accounts'],['nostroclearing','NOSTRO Clearing'],['nostromovements','Clearing network movements']]},
 portfolio:{title:'Portfolio management',subtitle:'Securities, investment values and exchange orders.',actions:[['recordsecurity','Record holding'],['buysecurity','Buy'],['sellsecurity','Sell'],['syncsecurities','Refresh Green Bond catalogue']],views:[['treasurypositions','AVISPay PLC Treasury opening positions'],['securitypositions','Securities portfolio'],['securityorders','Exchange orders'],['exchangebook','AVISPay Exchange'],['portfolio','Portfolio holdings']]},
-payments:{title:'Payments',subtitle:'Register, review and transfer payments from your accounts.',actions:[['newpayment','New payment']],views:[['paymentregister','Payment register'],['bankpayments','Bank payments & settlement'],['bankroutes','IBAN to ABIQ routing'],['transactions','Account activity']]},
+payments:{title:'Payments',subtitle:'Register, review and transfer payments from your accounts.',actions:[['newpayment','New payment']],views:[['checkoutip','IP-to-IP checkout activations'],['checkoutipaccounts','IP-to-IP receiving accounts'],['nostroclearing','Registered correspondent banks'],['paymentregister','Payment register'],['bankpayments','Bank payments & settlement'],['bankroutes','IBAN to ABIQ routing'],['transactions','Account activity']]},
 marketplace:{title:'Marketplace City',subtitle:'Business shops, multi-shop checkout and escrow settlement.',actions:[['shop','Register shop'],['checkout','Create checkout'],['release','Release escrow'],['refund','Refund checkout']],views:[['shops','Merchant shops'],['checkouts','Checkout & settlement']]},
 cards:{title:'Cards',subtitle:'Card accounts, balances and payment activity.',actions:[['issuecard','Activate card account'],['loadcard','Load card'],['externalcard','Register external card'],['loadexternal','Load external card'],['card','Register existing card'],['redeemcode','Redeem card code'],['cancelcode','Release coded debit'],['opencardmessage','Open encrypted card'],['offlinekeys','Offline keys'],['allowance','Offline allowance'],['offlineclose','Release allowance']],views:[['cardaccounts','Card accounts'],['codedcards','Code-secured card debits'],['offlinegrants','Offline allowances']]},
 pos:{title:'POS',subtitle:'Terminals, authorizations and merchant settlement.',actions:[['checkoutmanagement','Checkout management'],['terminal','Register terminal'],['stripecard','Stripe card payment'],['authorize','Authorize'],['capture','Capture'],['reverse','Reverse'],['offlinesync','Upload signed batch']],views:[['stripepayments','Stripe card payments'],['terminals','POS terminals'],['authorizations','Authorizations & captures'],['gateways','Payment gateways']]},
@@ -233,6 +234,8 @@ html+=results.map((r,i)=>{
  const rows=type?r.value.filter(x=>x.account_type===type):r.value;
  if(view==='accountsummaries')return accountSummaryTable(rows,page.views[i][1]);
  if(view==='backofficeaccounts')return backofficeAccountTable(rows);
+  if(key==='payments'&&identity.admin&&view==='checkoutip')return checkoutIpRegister(rows,cache.checkoutipaccounts||[],cache.nostroclearing||[]);
+  if(key==='payments'&&['checkoutipaccounts','nostroclearing'].includes(view))return '';
   if(view==='nostroclearing')return nostroRegisterTable(rows);
   if(view==='nostromovements')return nostroMovementsTable(rows);
  if(view==='terminals')return posTerminalsTable(rows);
@@ -241,7 +244,16 @@ html+=results.map((r,i)=>{
  if(view==='securityorders')return securityOrdersTable(rows);
  if(view==='exchangebook')return securityBookTable(rows);
  return table(view,page.views[i][1],rows)+(view==='portfolio'&&!rows.length?'<p class="panel-empty">No investment holdings recorded yet.</p>':'');
-}).join('');$('#panels').innerHTML=html;$('#panels').setAttribute('aria-busy','false');accountStatements.bind($('#panels'));portfolioManager.bind($('#panels'));if(key==='pos')bindTerminalControls();
+}).join('');$('#panels').innerHTML=html;$('#panels').setAttribute('aria-busy','false');accountStatements.bind($('#panels'));portfolioManager.bind($('#panels'));
+ if(key==='payments'&&identity.admin)bindCheckoutIp({
+  root:$('#panels'),requests:cache.checkoutip||[],nostros:cache.nostroclearing||[],
+  activate:input=>api('checkout-ip/activation',input),onChange:()=>void render(),
+  openHandler:record=>{
+   const url='https://avis.land/admin/bank/quantum/direct-transfer?checkoutRequest='+encodeURIComponent(record.requestId);
+   const popup=window.open(url,'avispay-ip-transfer-'+record.requestId,'popup=yes,resizable=yes,scrollbars=yes,width=1380,height=940');
+   popup?.focus();
+  }
+ });if(key==='pos')bindTerminalControls();
  document.querySelectorAll('[data-nostro-edit]').forEach(button=>button.onclick=async()=>{
    const cashId=button.dataset.nostroEdit;
    if(!await openForm('editcashaccount'))return;
