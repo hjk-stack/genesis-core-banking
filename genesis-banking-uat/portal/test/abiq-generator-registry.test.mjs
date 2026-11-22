@@ -73,5 +73,7 @@ test('persistent issue, retries, scope, currency, assignment and account opening
  await assert.rejects(attach(admin,code.identifier,common,'incorrect-custody-target'),e=>e.code==='ABIQ_CURRENCY_MISMATCH');
  await attach(admin,code.identifier,custody,'assign-custody');
  assert.equal((await findAbiqAccountIdentifier(db,{identifier:code.identifier,currency:'CHF'})).ledger_account_id,custody);
+ assert.equal((await findAbiqAccountIdentifier(db,{identifier:code.identifier,currency:'579'})).ledger_account_id,custody);
+ assert.equal(await findAbiqAccountIdentifier(db,{identifier:code.identifier,currency:'EUR'}),null);
  assert.equal(await resolveAbiqAccount(db,{identifier:code.identifier,currency:'CHF'}),null);
 });

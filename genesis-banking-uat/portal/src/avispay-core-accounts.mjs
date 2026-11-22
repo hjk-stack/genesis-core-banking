@@ -106,7 +106,8 @@ export async function ensureLedgerAbiq(db,accountId) {
 // Identification covers every bank account; payment routing remains restricted to
 // the funding bridge in resolveAbiqAccount. Custody/system IDs do not grant routing.
 export async function findAbiqAccountIdentifier(db,{identifier,currency}) {
- const route=parseAbiqIban(identifier),curr=currencyCode(currency);
+ const route=parseAbiqIban(identifier);
+ const curr=route.currency==='579' && currency==='579'?null:currencyCode(currency);
  if(route.currency!=='579' && route.currency!==curr)fail('ABIQ_CURRENCY_MISMATCH');
  const result=await db.query(`SELECT i.ledger_account_id,i.abiq_iban,i.participant_code,i.currency_code,i.identifier_source,a.user_id
   FROM avis_core_v2.abiq_account_identifiers i JOIN avis_core_v2.ledger_accounts a ON a.account_id=i.ledger_account_id
@@ -116,7 +117,7 @@ export async function findAbiqAccountIdentifier(db,{identifier,currency}) {
    JOIN avis_core_v2.abiq_routing_bridge b USING(bridge_id) WHERE r.identifier=$1)
    OR i.ledger_account_id IN (SELECT ledger_account_id FROM avis_core_v2.abiq_number_bindings WHERE identifier=$1)
    OR i.ledger_account_id IN (SELECT ledger_account_id FROM avis_core_v2.abiq_ledger_identifiers WHERE abiq_iban=$1))
-   AND i.currency_code=$2 AND i.status='ACTIVE' AND p.is_active`,[route.identifier,curr]);
+   AND ($2::text IS NULL OR i.currency_code=$2) AND i.status='ACTIVE' AND p.is_active`,[route.identifier,curr]);
  return result.rows[0]||null;
 }
 export function normalizeAbiqBankRoute(input) {
