@@ -11,6 +11,8 @@ import {FxBankingServer} from './src/fx.mjs';
 import {TradingRobotCore,ROBOT_MESSAGES} from './src/trading-robot.mjs';
 import {TradingRuntime,engineStatus} from './src/trading/runtime.mjs';
 import {IndexServiceAuthenticator} from './src/index-service-auth.mjs';
+import {CheckoutPosAuthenticator} from './src/checkout-pos-auth.mjs';
+import {CheckoutPosControl} from './src/checkout-pos.mjs';
 import {INDEX_ADVICE_MESSAGES} from './src/index-event-advice.mjs';
 import {TRADING_TEST_MESSAGES} from './src/trading-testing.mjs';
 import {TRADING_INSTRUCTION_MESSAGES} from './src/trading-instructions.mjs';
@@ -114,7 +116,7 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  CHECKOUT_ALREADY_CLOSED:'This checkout has already been completed.',CHECKOUT_NOT_IN_ESCROW:'Select a checkout whose funds are still held in escrow.',
  AUTHORIZATION_ALREADY_CLOSED:'This authorization has already been captured or reversed.',
  SELECT_AVIS_CARD:'Select an active AVIS proprietary card.',CURRENCY_MISMATCH:'Select the card account currency.',
- TERMINAL_NOT_FOUND:'Select an active terminal.',SELECT_BANK_ACCOUNT:'Select AVIS Bank for this account-funded checkout.',
+ TERMINAL_NOT_FOUND:'Select an active terminal.',POS_TERMINAL_ID:'Check the POS terminal identifier and checkout reference.',POS_TERMINAL_CONFLICT:'This terminal ID is assigned to a different checkout.',POS_MERCHANT_REQUIRED:'Register the AVISPay Web POS merchant before assigning checkout terminals.',POS_SERVICE_AUTH:'The checkout service signature could not be verified.',SELECT_BANK_ACCOUNT:'Select AVIS Bank for this account-funded checkout.',
  STRIPE_CONFIGURATION:'Configure the Stripe merchant connection in Banking Administration.',
  STRIPE_PROVIDER_RESPONSE:'The card checkout request could not complete. Retry from this payment.',
  STRIPE_SIGNATURE:'The Stripe event could not be verified.',STRIPE_EVENT_MISMATCH:'The card payment details did not match the original checkout.',
@@ -126,6 +128,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
  const core=new TradingRobotCore(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map(),indexService=new IndexServiceAuthenticator(pool,{env:core.secretEnv,fetcher:transferOptions.indexServiceFetcher||core.cryptoFetch});
  const stripePos=transferOptions.stripePos||new StripeWebPos(pool,{env:transferOptions.secretEnv||process.env,fetcher:transferOptions.stripeFetch||fetch});
  const basket=new CryptoBasket(core,stripePos),storeWallet=new StoreWallet(basket);
+ const posControl=new CheckoutPosControl(pool),posAuth=new CheckoutPosAuthenticator(pool,{fetcher:transferOptions.posServiceFetcher||fetch});
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  return http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
@@ -145,6 +148,17 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
      return send(res,200,await core.ingestIndexCandidates(service,value));
     }
     return send(res,405,{code:'METHOD_NOT_ALLOWED'});
+   }
+   // Authenticated website-to-bank POS activation; not a customer-facing gateway.
+   const posService=/^\/api\/services\/checkout-pos\/(resolve|status|request)$/.exec(path);
+   if(posService){
+    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
+    if(!req.headers['content-type']?.startsWith('application/json'))fault('INVALID_FIELD',null,415);
+    const parts=[];let length=0;for await(const chunk of req){length+=chunk.length;if(length>4096)fault('INVALID_FIELD',null,413);parts.push(chunk);}
+    const raw=Buffer.concat(parts),service=await posAuth.authenticate(req,raw);
+    let input;try{input=JSON.parse(raw.toString('utf8'));}catch{fault('INVALID_FIELD',null,400);}
+    if(!input||typeof input!=='object'||Array.isArray(input))fault('INVALID_FIELD',null,400);
+    return send(res,200,await posControl[posService[1]](service,input));
    }
    if(req.method==='GET'&&path==='/readyz'){await pool.query('SELECT 1');return send(res,200,{status:'ready',release});}
    const bridge=/^\/api\/basket-bridge\/(state|quote|card|transfer|price|store-open|store-quote|store-receipt)$/.exec(path);
@@ -338,6 +352,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if((path==='/api/abiq'||path==='/api/bankpayments/dispatch')&&!actor.admin)fault('FORBIDDEN',null,403);
    if(path==='/api/abiq')return send(res,200,await processAbiqRequest(core,actor,body));
    if(path==='/api/bankpayments/dispatch')return send(res,200,await dispatchPayment(core,actor,body,req.headers['idempotency-key']));
+   if(path==='/api/terminals/activation'){if(!actor.admin)fault('FORBIDDEN',null,403);return send(res,200,await posControl.setActive(actor,body));}
    if(path==='/api/stripe/webpos/checkout')return send(res,200,await stripePos.createCheckout(actor,body,req.headers['idempotency-key']));
    const routes={'cards/issue':'issueManagedCard','cards/load':'loadManagedCard','cards/status':'setCardStatus','cards/pin':'resetCardPin','cards/delivery':'managedCardDelivery','accounts/suspense':'moveToSuspense','access/customer':'bindCustomerLogin','crypto/sell':'sellCrypto','cards/external':'registerExternalCard','cards/redeem-code':'redeemCode','cards/cancel-code':'cancelCodedDebit','cards/pickup-details':'externalCardDetails','payments/pickup':'pickupTransfer','payments/settle-manual':'settleManualTransfer','crypto/offers':'registerCryptoOffer','crypto/purchase':'purchaseCrypto','payments/review':'preparePayment','payments/transfer':'confirmPayment','payments/cancel':'cancelPayment','customers/profile':'saveCustomerProfile',customers:'openCustomer',currencies:'addCurrencies',transfers:'transfer',shops:'registerShop',
     correspondents:'registerCashAccount',bankprofiles:'registerBankConnector',bankroutes:'linkBankAccount',bankpayments:'initiatePayment','clearing/reconcile':'reconcileStatement',
