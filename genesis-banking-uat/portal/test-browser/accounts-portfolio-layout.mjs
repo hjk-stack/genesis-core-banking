@@ -234,53 +234,81 @@ test('the banking form shows server validation beside its field and accepts a co
  }finally{await page.close();}
 });
 
-test('NOSTRO and intermediary banking desk uses one Accounts & ABIQ page and floating registration forms',async()=>{
+
+test('NOSTRO creation uses one floating desk with intermediary details below the bank and one submit',async()=>{
  const page=await browser.newPage({viewport:{width:1080,height:980}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
  try{
   await page.goto(base+'/admin#accounts');
-  const primary=page.locator('[data-nostro-register]'),transit=page.locator('[data-intermediary-register]');
-  await primary.waitFor();await transit.waitFor();
-  assert.match(await primary.innerText(),/1 Original Street/);
-  assert.match(await primary.innerText(),/ORIGINAL-REF/);
-  assert.match(await transit.innerText(),/INTERMEDIARY-REF/);
+  const main=page.locator('[data-nostro-register]');
+  await main.waitFor();
+  assert.equal(await page.getByRole('button',{name:'Register intermediary bank',exact:true}).count(),0);
+  assert.equal(await page.locator('[data-intermediary-register]').count(),0);
+  assert.equal(await page.getByRole('heading',{name:'Intermediary bank register',exact:true}).count(),0);
+  assert.match(await main.innerText(),/Global Transit Bank/);
+  assert.match(await main.innerText(),/INTERMEDIARY-REF/);
+  assert.equal(await main.locator('[data-nostro-row="'+nostroCash.cash_account_id+'"] [data-nostro-intermediary="'+intermediary.intermediary_id+'"]').count(),1);
   await page.getByRole('button',{name:'Register NOSTRO',exact:true}).click();
   const dialog=page.locator('#form-dialog');
   await dialog.waitFor({state:'visible'});
-  for(const label of ['Bank name','Bank address','Account name','ABA routing number','Reference'])
-   assert.equal(await dialog.getByLabel(label,{exact:label!=='ABA routing number'}).count(),1,label);
-  assert.equal(await dialog.evaluate(x=>x.parentElement.tagName),'BODY');
-  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
-  await primary.getByRole('button',{name:'Edit bank details'}).click();
+  assert.equal(await dialog.evaluate(el=>el.parentElement.tagName),'BODY');
+  const primary=dialog.locator('fieldset.nostro-primary-fields'),incoming=dialog.locator('fieldset.incoming-intermediary-fields');
+  assert.equal(await primary.count(),1);assert.equal(await incoming.count(),1);
+  assert.equal(await dialog.locator('fieldset').evaluateAll(fs=>fs[0].getBoundingClientRect().top<fs[1].getBoundingClientRect().top),true);
+  assert.equal(await dialog.getByRole('button',{name:'Register NOSTRO & intermediary',exact:true}).count(),1);
+  await primary.getByLabel('Bank name',{exact:true}).fill('New NOSTRO Bank');
+  await primary.getByLabel('Account class',{exact:true}).selectOption('CORRESPONDENT_BANK');
+  await primary.getByLabel('Bank BIC',{exact:true}).fill('CHASUS33XXX');
+  await primary.getByLabel('External account number',{exact:true}).fill('NEW-SETTLEMENT-01');
+  await primary.getByLabel('Currency',{exact:true}).selectOption('USD');
+  await primary.getByLabel('Bank address',{exact:true}).fill('1 Bank Road, USA');
+  await primary.getByLabel('Account name',{exact:true}).fill('AVISPay PLC');
+  await primary.getByLabel('Reference',{exact:true}).fill('NOSTRO-REF-01');
+  await incoming.getByLabel('Intermediary bank name',{exact:true}).fill('Receiving Intermediary');
+  await incoming.getByLabel('Intermediary bank address',{exact:true}).fill('2 Transit Street, USA');
+  await incoming.getByLabel('Intermediary account name',{exact:true}).fill('AVISPay PLC Incoming');
+  await incoming.getByLabel('Intermediary reference',{exact:true}).fill('INT-REF-01');
+  const start=calls.length;
+  await dialog.getByRole('button',{name:'Register NOSTRO & intermediary',exact:true}).click();
+  await page.getByText('Saved successfully.',{exact:true}).waitFor();
+  const writes=calls.slice(start);
+  assert.equal(writes.length,1);
+  assert.equal(writes[0].path,'/api/correspondents');
+  assert.equal(writes[0].body.institutionName,'New NOSTRO Bank');
+  assert.equal(writes[0].body.intermediary.bankName,'Receiving Intermediary');
+  assert.equal(writes[0].body.intermediary.reference,'INT-REF-01');
+  assert.equal(writes[0].body.intermediary.accountName,'AVISPay PLC Incoming');
+  assert.equal(writes[0].body.intermediaryBankName,undefined);
+  assert.deepEqual(errors,[]);
+ }finally{await page.close();}
+});
+test('editing a registered NOSTRO manages its existing intermediary in the same floating window',async()=>{
+ const page=await browser.newPage({viewport:{width:1080,height:980}}),errors=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ try{
+  await page.goto(base+'/admin#accounts');
+  const main=page.locator('[data-nostro-register]');
+  await main.waitFor();
+  await main.getByRole('button',{name:'Edit NOSTRO & intermediary'}).click();
+  const dialog=page.locator('#form-dialog');
   await dialog.getByLabel('Bank name',{exact:true}).waitFor();
+  assert.equal(await dialog.locator('fieldset').count(),2);
   assert.equal(await dialog.getByLabel('Bank name',{exact:true}).inputValue(),'Existing NOSTRO Bank');
-  assert.equal(await dialog.getByLabel('Reference',{exact:true}).inputValue(),'ORIGINAL-REF');
-  await dialog.getByLabel('Bank address',{exact:true}).fill('7 Updated Street, New York');
-  await dialog.getByRole('button',{name:'Save bank details'}).click();
+  assert.equal(await dialog.getByLabel('Incoming intermediary selection',{exact:true}).inputValue(),intermediary.intermediary_id);
+  assert.equal(await dialog.getByLabel('Intermediary bank name',{exact:true}).inputValue(),'Global Transit Bank');
+  assert.equal(await dialog.getByLabel('Intermediary reference',{exact:true}).inputValue(),'INTERMEDIARY-REF');
+  await dialog.getByLabel('Bank address',{exact:true}).fill('New Main Bank Street');
+  await dialog.getByLabel('Intermediary bank address',{exact:true}).fill('New Transit Street');
+  const start=calls.length;
+  await dialog.getByRole('button',{name:'Save NOSTRO & intermediary',exact:true}).click();
   await page.getByText('Saved successfully.',{exact:true}).waitFor();
-  assert.equal(calls.at(-1).path,'/api/correspondents/details');
-  assert.equal(calls.at(-1).body.bankAddress,'7 Updated Street, New York');
-  assert.equal(calls.at(-1).body.cashAccountId,nostroCash.cash_account_id);
-  await primary.getByRole('button',{name:'Intermediary bank',exact:true}).click();
-  await dialog.getByLabel('Bank name',{exact:true}).waitFor();
-  assert.equal(await dialog.getByLabel('Related NOSTRO account').inputValue(),nostroCash.cash_account_id);
-  await dialog.getByLabel('Bank name',{exact:true}).fill('Another Clearing Bank');
-  await dialog.getByLabel('Bank address',{exact:true}).fill('2 Intermediary Square');
-  await dialog.getByLabel('Account name',{exact:true}).fill('AVISPay PLC transit');
-  await dialog.getByLabel('Reference',{exact:true}).fill('INT-NEW');
-  await dialog.getByRole('button',{name:'Register intermediary bank'}).click();
-  await page.getByText('Saved successfully.',{exact:true}).waitFor();
-  assert.equal(calls.at(-1).path,'/api/nostro/intermediary');
-  assert.equal(calls.at(-1).body.cashAccountId,nostroCash.cash_account_id);
-  await transit.getByRole('button',{name:'Edit',exact:true}).click();
-  await dialog.getByLabel('Bank name',{exact:true}).waitFor();
-  assert.equal(await dialog.getByLabel('Bank name',{exact:true}).inputValue(),'Global Transit Bank');
-  assert.equal(await dialog.getByLabel('ABA routing number').inputValue(),'021000021');
-  assert.equal(await dialog.getByLabel('Reference',{exact:true}).inputValue(),'INTERMEDIARY-REF');
-  await dialog.getByRole('button',{name:'Save intermediary bank'}).click();
-  await page.getByText('Saved successfully.',{exact:true}).waitFor();
-  assert.equal(calls.at(-1).path,'/api/nostro/intermediary/edit');
-  assert.equal(calls.at(-1).body.intermediaryId,intermediary.intermediary_id);
+  const writes=calls.slice(start);
+  assert.equal(writes.length,1);
+  assert.equal(writes[0].path,'/api/correspondents/details');
+  assert.equal(writes[0].body.cashAccountId,nostroCash.cash_account_id);
+  assert.equal(writes[0].body.bankAddress,'New Main Bank Street');
+  assert.equal(writes[0].body.intermediary.intermediaryId,intermediary.intermediary_id);
+  assert.equal(writes[0].body.intermediary.bankAddress,'New Transit Street');
   assert.deepEqual(errors,[]);
  }finally{await page.close();}
 });
