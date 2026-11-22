@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {CardManagement} from './card-management.mjs';
-import {ABIQ_PARTITIONS,ensureLedgerAbiq} from './avispay-core-accounts.mjs';
+import {ABIQ_PARTITIONS,ABIQ_ISSUER,provisionHolderAccounts,ensureLedgerAbiq} from './avispay-core-accounts.mjs';
 import {fault,text} from './core.mjs';
 import {enrichPortfolioHistory} from './crypto-asset-routing.mjs';
 
@@ -29,7 +29,29 @@ const adminOnly=actor=>{if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN'
 export class AccountManagement extends CardManagement {
  async openAccount(actor,input,key){
   adminOnly(actor);
-  if(['PERSONAL','BUSINESS'].includes(input.accountType))return this.openCustomer(actor,input,key);
+  if(['PERSONAL','BUSINESS'].includes(input.accountType)){
+   // A registered holder keeps the same primary identity, funding route and journal history.
+   // New-holder registration remains the existing openCustomer operation.
+   if(input.userId==null||input.userId==='')return this.openCustomer(actor,input,key);
+   if(input.fullName!==undefined||!/^[1-9][0-9]{0,13}$/.test(String(input.userId)))fault('INVALID_FIELD','userId');
+   const currencies=input.currencies;
+   if(!Array.isArray(currencies)||!currencies.length||currencies.length>14||currencies.some(c=>!Object.hasOwn(ABIQ_PARTITIONS,c)))fault('INVALID_FIELD','currencies');
+   return this.operation(actor,'OPEN_REGISTERED_ACCOUNT',input,key,async(db,k)=>{
+    const holder=(await db.query(`SELECT user_id,full_name,account_type FROM avis_core_v2.holder_identities
+      WHERE user_id=$1::bigint AND record_user_id=user_id AND account_type=$2`,
+      [String(input.userId),input.accountType])).rows[0];
+    if(!holder)fault('ACCOUNT_HOLDER_NOT_FOUND','userId',404);
+    const accounts=await provisionHolderAccounts(db,{
+     userId:String(holder.user_id),participantCode:input.participantCode||ABIQ_ISSUER.participantCode,
+     currencies,idempotencyKey:k
+    });
+    for(const account of accounts)for(const scope of ['MARGIN','CUSTODY'])
+     await db.query(`INSERT INTO avis_core_v2.ledger_accounts(owner_type,user_id,sub_account_code,currency_code,wallet_scope,account_category)
+       SELECT 'USER',user_id,sub_account_code,currency_code,$2,'LIABILITY'
+       FROM avis_core_v2.ledger_accounts WHERE account_id=$1 ON CONFLICT DO NOTHING`,[account.accountId,scope]);
+    return {userId:String(holder.user_id),fullName:holder.full_name,accountType:holder.account_type,accounts};
+   });
+  }
   if(!['COMMON','SUSPENSE'].includes(input.accountType))fault('INVALID_FIELD','accountType');
   const name=text(input.fullName,'fullName',120),currencies=input.currencies;
   if(!Array.isArray(currencies)||!currencies.length||currencies.length>14||currencies.some(c=>!Object.hasOwn(ABIQ_PARTITIONS,c)))fault('INVALID_FIELD','currencies');

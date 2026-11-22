@@ -46,7 +46,7 @@ before(async()=>{
    if(!input.active){terminal.requested_at=null;terminal.expires_at=null}
    return respond({terminalId:terminal.terminal_id,state:terminal.activation_state,requestedAt:terminal.requested_at,approvedAt:terminal.approved_at,expiresAt:terminal.expires_at,expiredAt:terminal.expired_at});
   }return respond({id:'fixture'});}
-  if(['/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/approved-robot.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/trading-panel.mjs','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/app.mjs','/abiq-generator.mjs','/abiq-number.mjs','/portfolio.mjs','/exchange-intent.mjs','/accounts.mjs','/cards.mjs','/payment-wizard.mjs','/card-message.mjs','/styles.css'].includes(req.url.split('?')[0])){const asset=req.url.split('?')[0];res.setHeader('content-type',asset.endsWith('.css')?'text/css':'text/javascript');return res.end(await readFile(new URL('../public'+asset,import.meta.url)));}
+  if(['/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/approved-robot.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/trading-panel.mjs','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/app.mjs','/open-account-register.mjs','/abiq-generator.mjs','/abiq-number.mjs','/portfolio.mjs','/exchange-intent.mjs','/accounts.mjs','/cards.mjs','/payment-wizard.mjs','/card-message.mjs','/styles.css'].includes(req.url.split('?')[0])){const asset=req.url.split('?')[0];res.setHeader('content-type',asset.endsWith('.css')?'text/css':'text/javascript');return res.end(await readFile(new URL('../public'+asset,import.meta.url)));}
   res.writeHead(404);res.end();
  });
  await new Promise(r=>server.listen(0,'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
@@ -213,6 +213,7 @@ test('the banking form shows server validation beside its field and accepts a co
   await page.getByRole('button',{name:'Open account',exact:true}).click();
   const dialog=page.locator('#form-dialog'),name=dialog.getByLabel('Account name / holder',{exact:true});
   await dialog.getByLabel('Account type',{exact:true}).selectOption('BUSINESS');
+  await dialog.getByLabel('Account holder register',{exact:true}).selectOption('NEW');
   await name.fill('First holder');await dialog.locator('[name=currency]').selectOption('EUR');
   await dialog.getByRole('button',{name:'Open account',exact:true}).click();
   await dialog.locator('#action-field-error').waitFor();assert.equal(await name.getAttribute('aria-invalid'),'true');
