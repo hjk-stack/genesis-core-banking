@@ -5,7 +5,7 @@ import {PGlite} from '@electric-sql/pglite';
 import pg from 'pg';
 import {migrate} from '../src/migrate.mjs';
 import {PaymentServer} from '../src/payments.mjs';
-import {nostroRegisterTable,nostroMovementsTable} from '../public/nostro-clearing.mjs';
+import {nostroRegisterTable,nostroMovementsTable,intermediaryBankTable} from '../public/nostro-clearing.mjs';
 
 const admin={id:'nostro-clearing-regression',admin:true},key=()=>randomUUID();
 let db,pool,core,cash;
@@ -100,4 +100,69 @@ test('provider-reconciled references cannot be mirrored again and manual mirror 
  await assert.rejects(pool.query('DELETE FROM avis_core_v2.nostro_manual_mirrors WHERE mirror_id=$1',[row.mirror_id]),/APPEND_ONLY_RECORD/);
  const invalid=(await pool.query("SELECT count(*)::int AS count FROM avis_core_v2.ledger_journals WHERE event_type='NOSTRO_MANUAL_MIRROR'")).rows[0].count;
  assert.equal(invalid,2);
+});
+
+test('external bank register retains bank address, account name, ABA, reference and existing ledger after edits',async()=>{
+ const source=await core.registerCashAccount(admin,{
+  institutionType:'CORRESPONDENT_BANK',institutionName:'Initial institution',
+  bankName:'First Registered Bank',bankAddress:'100 Treasury Avenue, New York, NY, USA',
+  accountName:'AVISPay PLC NOSTRO',aba:'021000021',reference:'EXT-BANK-REG-1',
+  bic:'CHASUS33XXX',accountNumber:'US-NOSTRO-987',currency:'USD'
+ },key());
+ const row=(await core.list(admin,'nostroclearing')).find(x=>x.cash_account_id===source.id);
+ assert.equal(row.institution_name,'First Registered Bank');
+ assert.equal(row.bank_address,'100 Treasury Avenue, New York, NY, USA');
+ assert.equal(row.account_name,'AVISPay PLC NOSTRO');
+ assert.equal(row.aba,'021000021');
+ assert.equal(row.bank_reference,'EXT-BANK-REG-1');
+ assert.match(nostroRegisterTable([row]),/AVISPay PLC NOSTRO/);
+ const before=(await pool.query('SELECT * FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[source.accountId])).rows[0];
+ const update={cashAccountId:source.id,bankName:'First Registered Bank - Main',bankAddress:'100 Treasury Avenue, New York, NY, USA',
+  accountName:'AVISPay PLC settlement',aba:'021000021',reference:'EXT-BANK-REG-2'};
+ const saved=await core.updateCashAccountDetails(admin,update,key());
+ assert.equal(saved.cashAccountId,source.id);
+ const amended=(await core.list(admin,'nostroclearing')).find(x=>x.cash_account_id===source.id);
+ assert.equal(amended.account_name,'AVISPay PLC settlement');
+ assert.equal(amended.bank_reference,'EXT-BANK-REG-2');
+ assert.equal(amended.institution_name,'First Registered Bank - Main');
+ assert.deepEqual((await pool.query('SELECT * FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[source.accountId])).rows[0],before);
+ await assert.rejects(core.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Bad ABA',
+  bic:'CHASUS33XXX',accountNumber:'BAD-ABA',currency:'USD',aba:'123456789'},key()),e=>e.code==='INVALID_FIELD'&&e.field==='aba');
+ await assert.rejects(core.updateCashAccountDetails({id:'public',admin:false},update,key()),e=>e.code==='FORBIDDEN');
+});
+
+test('intermediary banks register under the selected NOSTRO without creating or altering balances',async()=>{
+ const cashBefore=await balance(cash.accountId);
+ const input={cashAccountId:cash.id,bankName:'Global Intermediary',bankAddress:'45 Clearing Square, London, UK',
+  accountName:'AVISPay PLC transit',aba:'021000021',reference:'INT-TRANSIT-001',
+  bic:'CHASUS33XXX',accountNumber:'INT-ACC-0001'};
+ const request=key();
+ const saved=await core.registerIntermediaryBank(admin,input,request);
+ assert.equal(saved.cashAccountId,cash.id);
+ assert.deepEqual(await core.registerIntermediaryBank(admin,input,request),saved);
+ let rows=await core.list(admin,'nostrointermediaries'),record=rows.find(r=>r.intermediary_id===saved.id);
+ assert.equal(record.bank_name,input.bankName);
+ assert.equal(record.parent_bank_name,'Clearing Regression Bank');
+ assert.equal(record.account_name,input.accountName);
+ assert.equal(record.aba,input.aba);
+ assert.equal(record.reference,input.reference);
+ assert.match(intermediaryBankTable([record]),/Global Intermediary/);
+ assert.ok(!intermediaryBankTable([{...record,bank_name:'<img src=x>'}]).includes('<img src=x>'));
+ assert.equal(await balance(cash.accountId),cashBefore);
+ const changes={intermediaryId:saved.id,bankName:'Global Intermediary II',
+  bankAddress:'46 Clearing Square, London, UK',accountName:'AVISPay correspondent',
+  aba:'',reference:'INT-TRANSIT-002',bic:'',accountNumber:''};
+ const edit=await core.updateIntermediaryBank(admin,changes,key());
+ assert.equal(edit.id,saved.id);
+ rows=await core.list(admin,'nostrointermediaries');record=rows.find(r=>r.intermediary_id===saved.id);
+ assert.equal(record.bank_name,'Global Intermediary II');
+ assert.equal(record.aba,null);
+ assert.equal(record.bic_code,null);
+ assert.equal(record.account_number,null);
+ assert.equal(record.reference,'INT-TRANSIT-002');
+ assert.equal(await balance(cash.accountId),cashBefore);
+ const duplicate={...changes,cashAccountId:cash.id};
+ await assert.rejects(core.registerIntermediaryBank(admin,duplicate,key()),/duplicate key/i);
+ await assert.rejects(core.list({id:'guest',admin:false},'nostrointermediaries'),e=>e.code==='FORBIDDEN');
+ await assert.rejects(core.registerIntermediaryBank({id:'guest',admin:false},input,key()),e=>e.code==='FORBIDDEN');
 });

@@ -121,6 +121,7 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  STRIPE_PROVIDER_RESPONSE:'The card checkout request could not complete. Retry from this payment.',
  STRIPE_SIGNATURE:'The Stripe event could not be verified.',STRIPE_EVENT_MISMATCH:'The card payment details did not match the original checkout.',
  DUPLICATE_RECORD:'This reference is already registered.',INVALID_REFERENCE:'Select a valid record.',
+ INTERMEDIARY_NOT_FOUND:'Select an existing intermediary bank entry.',
  NOSTRO_ACCOUNT_NOT_FOUND:'Select a registered NOSTRO clearing account.',
  NOSTRO_ALREADY_SETTLED:'This external payment reference is already recorded as settled or reconciled.',
  NOSTRO_GATEWAY_NOT_FOUND:'Select a registered card settlement gateway.',
@@ -361,7 +362,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(path==='/api/terminals/activation'){if(!actor.admin)fault('FORBIDDEN',null,403);return send(res,200,await posControl.setActive(actor,body));}
    if(path==='/api/stripe/webpos/checkout')return send(res,200,await stripePos.createCheckout(actor,body,req.headers['idempotency-key']));
    const routes={'cards/issue':'issueManagedCard','cards/load':'loadManagedCard','cards/status':'setCardStatus','cards/pin':'resetCardPin','cards/delivery':'managedCardDelivery','accounts/suspense':'moveToSuspense','access/customer':'bindCustomerLogin','crypto/sell':'sellCrypto','cards/external':'registerExternalCard','cards/redeem-code':'redeemCode','cards/cancel-code':'cancelCodedDebit','cards/pickup-details':'externalCardDetails','payments/pickup':'pickupTransfer','payments/settle-manual':'settleManualTransfer','crypto/offers':'registerCryptoOffer','crypto/purchase':'purchaseCrypto','payments/review':'preparePayment','payments/transfer':'confirmPayment','payments/cancel':'cancelPayment','customers/profile':'saveCustomerProfile',customers:'openCustomer',currencies:'addCurrencies',transfers:'transfer',shops:'registerShop',
-    correspondents:'registerCashAccount','nostro/mirror':'mirrorNostroMovement','nostro/gateway':'linkNostroGateway',bankprofiles:'registerBankConnector',bankroutes:'linkBankAccount',bankpayments:'initiatePayment','clearing/reconcile':'reconcileStatement',
+    correspondents:'registerCashAccount','correspondents/details':'updateCashAccountDetails','nostro/intermediary':'registerIntermediaryBank','nostro/intermediary/edit':'updateIntermediaryBank','nostro/mirror':'mirrorNostroMovement','nostro/gateway':'linkNostroGateway',bankprofiles:'registerBankConnector',bankroutes:'linkBankAccount',bankpayments:'initiatePayment','clearing/reconcile':'reconcileStatement',
     'fx/rates/refresh':'refreshFxRates','fx/quote':'quoteFx','fx/execute':'executeFx','fx/cancel':'cancelFx',
     'offline/keys':'configureOffline','offline/allowances':'issueOfflineAllowance','offline/sync':'settleOfflineBatch','offline/close':'closeOfflineAllowance',
     'checkouts/capture':'captureCheckout','checkouts/release':'releaseCheckout','checkouts/refund':'refundCheckout',

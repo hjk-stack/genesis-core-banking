@@ -4,12 +4,17 @@ const money=value=>String(value??'0').replace(/(\.\d*?[1-9])0+$|\.0+$/,'$1');
 export function nostroRegisterTable(rows=[]){
  return '<section class="panel" data-nostro-register>'+
   '<div class="panel-header"><h2>NOSTRO Clearing · Settlement network</h2><span>'+rows.length+' registered accounts</span></div>'+
-  '<div class="table-wrap"><table><thead><tr><th>Institution / type</th><th>External settlement account</th><th>Currency</th><th>Booked balance</th><th>Reserved</th><th>Bank network</th><th>Card settlement</th><th>Manage</th></tr></thead><tbody>'+
-  rows.map(row=>'<tr><td><strong>'+esc(row.institution_name)+'</strong><small>'+esc(row.institution_type?.replaceAll('_',' '))+'</small></td>'+
+  '<div class="table-wrap"><table><thead><tr><th>Bank / account details</th><th>External settlement account</th><th>Currency</th><th>Booked balance</th><th>Reserved</th><th>Bank network</th><th>Card settlement</th><th>Manage</th></tr></thead><tbody>'+
+  rows.map(row=>'<tr><td><strong>'+esc(row.institution_name)+'</strong><small>'+esc(row.institution_type?.replaceAll('_',' '))+'</small>'+
+   '<small>'+esc(row.bank_address||'Address not recorded')+'</small>'+
+   '<small>Account name: '+esc(row.account_name||'—')+'</small>'+
+   '<small>ABA: '+esc(row.aba||'—')+' · Reference: '+esc(row.bank_reference||'—')+'</small></td>'+
    '<td class="account-number">'+esc(row.iban_or_account_no)+'<small>BIC '+esc(row.bic_code||'—')+'</small></td>'+
    '<td>'+esc(row.currency_code)+'</td><td>'+esc(money(row.available_balance))+'</td><td>'+esc(money(row.locked_balance))+'</td>'+
    '<td>'+esc(row.bank_connectors||'—')+'</td><td>'+esc(row.card_gateways||'—')+'</td>'+
-   '<td><button type="button" data-nostro-mirror="'+esc(row.cash_account_id)+'">Mirror movement</button> '+
+   '<td><button type="button" data-nostro-edit="'+esc(row.cash_account_id)+'">Edit bank details</button> '+
+   '<button type="button" data-nostro-add-intermediary="'+esc(row.cash_account_id)+'">Intermediary bank</button> '+
+   '<button type="button" data-nostro-mirror="'+esc(row.cash_account_id)+'">Mirror movement</button> '+
    '<button type="button" data-nostro-gateway="'+esc(row.cash_account_id)+'">Card gateway</button> '+
    '<button type="button" data-nostro-bank="'+esc(row.cash_account_id)+'">Bank API / ISO</button></td></tr>').join('')+
   '</tbody></table></div>'+(!rows.length?'<p class="panel-empty">Register the first clearing account to configure settlement routes.</p>':'')+
@@ -24,4 +29,17 @@ export function nostroMovementsTable(rows=[]){
    '<td>'+esc(money(row.running_balance))+'</td><td>'+esc(row.external_reference||'—')+'</td>'+
    '<td>'+esc(row.rail||'—')+'</td><td>'+esc(row.source)+' · '+esc(row.event_type)+'</td></tr>').join('')+
   '</tbody></table></div></details>';
+}
+
+export function intermediaryBankTable(rows=[]){
+ return '<section class="panel" data-intermediary-register>'+
+  '<div class="panel-header"><h2>Intermediary bank register</h2><span>'+rows.length+' linked intermediary banks</span></div>'+
+  '<div class="table-wrap"><table><thead><tr><th>Related NOSTRO bank</th><th>Intermediary bank</th>'+
+  '<th>Bank address</th><th>Account name</th><th>ABA</th><th>Reference</th><th>BIC / Account</th><th>Manage</th></tr></thead><tbody>'+
+  rows.map(row=>'<tr><td>'+esc(row.parent_bank_name)+'<small>'+esc(row.parent_currency)+' · '+esc(row.parent_account)+'</small></td>'+
+   '<td><strong>'+esc(row.bank_name)+'</strong></td><td>'+esc(row.bank_address)+'</td>'+
+   '<td>'+esc(row.account_name)+'</td><td>'+esc(row.aba||'—')+'</td><td>'+esc(row.reference)+'</td>'+
+   '<td>'+esc(row.bic_code||'—')+'<small>'+esc(row.account_number||'—')+'</small></td>'+
+   '<td><button type="button" data-intermediary-edit="'+esc(row.intermediary_id)+'">Edit</button></td></tr>').join('')+
+  '</tbody></table></div>'+(!rows.length?'<p class="panel-empty">Intermediary banks can be linked to an existing NOSTRO account.</p>':'')+'</section>';
 }
