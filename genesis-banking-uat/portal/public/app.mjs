@@ -2,7 +2,7 @@ import {createAbiqGenerator} from './abiq-generator.mjs';
 import {createCryptoWorkspace} from './crypto-workspace.mjs';
 import {readExchangeIntent} from './exchange-intent.mjs';
 import {createPortfolio,securitiesTable,stockRegisterTable,securityOrdersTable,securityBookTable} from './portfolio.mjs';
-import {nostroRegisterTable,nostroMovementsTable,intermediaryBankTable} from './nostro-clearing.mjs';
+import {nostroRegisterTable,nostroMovementsTable} from './nostro-clearing.mjs';
 import {accountTypes,accountSummaryTable,backofficeAccountTable,createAccountStatements} from './accounts.mjs';
 import {holderRegisterField,connectAccountHolderRegister,buildAccountOpeningRequest} from './open-account-register.mjs';
 import {createCardManager,cardAccountTable,cardProducts} from './cards.mjs';
@@ -180,7 +180,7 @@ clearing:[['provider_reference','Statement'],['currency_code','Currency'],['open
 });
 const pages={
 fx:{title:'Fiat converter',subtitle:'AVISPay treasury quotes, commission and settlement between your currency accounts.',actions:[['fxquote','Get quote'],['fxexecute','Execute conversion'],['fxcancel','Cancel quote'],['fxrefresh','Refresh reference rates']],views:[['fxquotes','Conversion quotes & settlements'],['fxrates','Published reference rates']]},
-accounts:{title:'Accounts & ABIQ',subtitle:'Account summaries, currency accounts and backoffice account management.',actions:[['customer','Open account'],['currency','Add currencies'],['abiqgenerator','Generate ABIQ number'],['accountcleanup','Review legacy accounts'],['customerprofile','Account holder details'],['suspense','Move to suspense'],['cashaccount','Register NOSTRO'],['intermediarybank','Register intermediary bank']],views:[['accountsummaries','Account summary'],['backofficeaccounts','Backoffice accounts'],['nostroclearing','NOSTRO Clearing'],['nostrointermediaries','Intermediary bank register'],['nostromovements','Clearing network movements']]},
+accounts:{title:'Accounts & ABIQ',subtitle:'Account summaries, currency accounts and backoffice account management.',actions:[['customer','Open account'],['currency','Add currencies'],['abiqgenerator','Generate ABIQ number'],['accountcleanup','Review legacy accounts'],['customerprofile','Account holder details'],['suspense','Move to suspense'],['cashaccount','Register NOSTRO']],views:[['accountsummaries','Account summary'],['backofficeaccounts','Backoffice accounts'],['nostroclearing','NOSTRO Clearing'],['nostromovements','Clearing network movements']]},
 portfolio:{title:'Portfolio management',subtitle:'Securities, investment values and exchange orders.',actions:[['recordsecurity','Record holding'],['buysecurity','Buy'],['sellsecurity','Sell'],['syncsecurities','Refresh Green Bond catalogue']],views:[['treasurypositions','AVISPay PLC Treasury opening positions'],['securitypositions','Securities portfolio'],['securityorders','Exchange orders'],['exchangebook','AVISPay Exchange'],['portfolio','Portfolio holdings']]},
 payments:{title:'Payments',subtitle:'Register, review and transfer payments from your accounts.',actions:[['newpayment','New payment']],views:[['paymentregister','Payment register'],['bankpayments','Bank payments & settlement'],['bankroutes','IBAN to ABIQ routing'],['transactions','Account activity']]},
 marketplace:{title:'Marketplace City',subtitle:'Business shops, multi-shop checkout and escrow settlement.',actions:[['shop','Register shop'],['checkout','Create checkout'],['release','Release escrow'],['refund','Refund checkout']],views:[['shops','Merchant shops'],['checkouts','Checkout & settlement']]},
@@ -227,14 +227,13 @@ if(key==='accounts'&&identity.admin&&!accountTypeFilter&&results.slice(0,2).ever
 if(key==='pos')html+=`<div class="rail-grid"><div class="rail"><p class="eyebrow">AVIS PROPRIETARY</p><h2>Own-network processing</h2><p>Authorization · capture · reversal · merchant settlement</p></div><div class="rail"><p class="eyebrow">GLOBAL CARD SCHEMES</p><h2>Scheme gateway bridge</h2><p>Separate issuing, acquiring and clearing routes</p></div><div class="rail"><p class="eyebrow">POS & INDUSTRIAL</p><h2>Terminal network</h2><p>Merchant ownership and terminal registration</p></div></div>`;
 html+=results.map((r,i)=>{
  const view=page.views[i][0],type=key==='accounts'&&identity.admin?accountTypeFilter:'';
- if(type&&['nostroclearing','nostrointermediaries','nostromovements'].includes(view))return '';
+ if(type&&['nostroclearing','nostromovements'].includes(view))return '';
   if(type&&(['COMMON','SUSPENSE'].includes(type)?view!=='backofficeaccounts':view==='backofficeaccounts'))return '';
  if(r.status!=='fulfilled')return `<section class="panel"><div class="panel-header"><h2>${esc(page.views[i][1])}</h2></div><p class="panel-error">${esc(r.reason.message)}</p></section>`;
  const rows=type?r.value.filter(x=>x.account_type===type):r.value;
  if(view==='accountsummaries')return accountSummaryTable(rows,page.views[i][1]);
  if(view==='backofficeaccounts')return backofficeAccountTable(rows);
   if(view==='nostroclearing')return nostroRegisterTable(rows);
-   if(view==='nostrointermediaries')return intermediaryBankTable(rows);
   if(view==='nostromovements')return nostroMovementsTable(rows);
  if(view==='terminals')return posTerminalsTable(rows);
  if(view==='cardaccounts')return cardAccountTable(rows);
@@ -243,16 +242,28 @@ html+=results.map((r,i)=>{
  if(view==='exchangebook')return securityBookTable(rows);
  return table(view,page.views[i][1],rows)+(view==='portfolio'&&!rows.length?'<p class="panel-empty">No investment holdings recorded yet.</p>':'');
 }).join('');$('#panels').innerHTML=html;$('#panels').setAttribute('aria-busy','false');accountStatements.bind($('#panels'));portfolioManager.bind($('#panels'));if(key==='pos')bindTerminalControls();
- document.querySelectorAll('[data-nostro-edit],[data-nostro-add-intermediary],[data-intermediary-edit]').forEach(button=>button.onclick=async()=>{
-   const id=button.dataset.nostroEdit||button.dataset.nostroAddIntermediary||button.dataset.intermediaryEdit;
-   const kind=button.dataset.nostroEdit?'editcashaccount':button.dataset.nostroAddIntermediary?'intermediarybank':'editintermediary';
-   if(!await openForm(kind))return;
-   const fields=$('#action-form').elements;
-   const record=kind==='editintermediary'?(cache.nostrointermediaries||[]).find(x=>x.intermediary_id===id):(cache.nostroclearing||[]).find(x=>x.cash_account_id===id);
+ document.querySelectorAll('[data-nostro-edit]').forEach(button=>button.onclick=async()=>{
+   const cashId=button.dataset.nostroEdit;
+   if(!await openForm('editcashaccount'))return;
+   const form=$('#action-form'),fields=form.elements;
+   const record=(cache.nostroclearing||[]).find(x=>x.cash_account_id===cashId);
    if(!record)return;
-   const values=kind==='editcashaccount'?{cashAccountId:id,bankName:record.institution_name,bankAddress:record.bank_address||'',accountName:record.account_name||'',aba:record.aba||'',reference:record.bank_reference||''}:
-    kind==='editintermediary'?{intermediaryId:id,cashAccountId:record.cash_account_id,bankName:record.bank_name,bankAddress:record.bank_address,accountName:record.account_name,aba:record.aba||'',reference:record.reference,bic:record.bic_code||'',accountNumber:record.account_number||''}:{cashAccountId:id};
+   const values={cashAccountId:cashId,bankName:record.institution_name,bankAddress:record.bank_address||'',
+    accountName:record.account_name||'',aba:record.aba||'',reference:record.bank_reference||''};
    for(const [name,value]of Object.entries(values))if(fields.namedItem(name))fields.namedItem(name).value=value;
+   const intermediaryRows=Array.isArray(record.intermediaries)?record.intermediaries:[];
+   const selector=fields.namedItem('intermediarySelector');
+   selector.innerHTML='<option value="NEW">Add new incoming intermediary</option>'+
+    intermediaryRows.map(row=>'<option value="'+esc(row.intermediaryId)+'">'+esc(row.bankName)+' · '+esc(row.reference)+'</option>').join('');
+   const populate=()=>{
+    const row=intermediaryRows.find(x=>x.intermediaryId===selector.value);
+    const details={intermediaryBankName:row?.bankName||'',intermediaryBankAddress:row?.bankAddress||'',
+     intermediaryAccountName:row?.accountName||'',intermediaryAba:row?.aba||'',
+     intermediaryReference:row?.reference||'',intermediaryBic:row?.bic||'',intermediaryAccountNumber:row?.accountNumber||''};
+    for(const [name,value]of Object.entries(details))fields.namedItem(name).value=value;
+   };
+   selector.value=intermediaryRows[0]?.intermediaryId||'NEW';
+   selector.onchange=populate;populate();
   });
   document.querySelectorAll('[data-nostro-mirror],[data-nostro-gateway],[data-nostro-bank]').forEach(button=>button.onclick=async()=>{
   const action=button.hasAttribute('data-nostro-mirror')?'nostromirror':button.hasAttribute('data-nostro-gateway')?'nostrogateway':'bankprofile';
@@ -282,6 +293,27 @@ const bankDirectoryFields=(includeName=true)=>(includeName?input('bankName','Ban
  input('accountName','Account name','text','maxlength="140"')+
  '<label>ABA routing number (US banks)<input name="aba" aria-label="ABA routing number" inputmode="numeric" maxlength="9" pattern="[0-9]{9}" placeholder="9 digits, where applicable"></label>'+
  input('reference','Reference','text','maxlength="140"');
+const intermediaryFields=(editing=false)=>'<fieldset class="incoming-intermediary-fields"><legend>Incoming intermediary bank · linked to this NOSTRO</legend>'+
+ (editing?'<label>Existing intermediary / new intermediary<select name="intermediarySelector" aria-label="Incoming intermediary selection"><option value="NEW">Add new incoming intermediary</option></select></label>':'')+
+ input('intermediaryBankName','Intermediary bank name','text','maxlength="100"')+
+ input('intermediaryBankAddress','Intermediary bank address','text','maxlength="300"')+
+ input('intermediaryAccountName','Intermediary account name','text','maxlength="140"')+
+ '<label>Intermediary ABA (US banks)<input name="intermediaryAba" aria-label="Intermediary ABA" pattern="[0-9]{9}" inputmode="numeric" maxlength="9"></label>'+
+ input('intermediaryReference','Intermediary reference','text','maxlength="140"')+
+ '<label>Intermediary BIC (optional)<input name="intermediaryBic" aria-label="Intermediary BIC" maxlength="11"></label>'+
+ '<label>Intermediary account number (optional)<input name="intermediaryAccountNumber" aria-label="Intermediary account number" maxlength="128"></label></fieldset>';
+const combinedNostroInput=data=>{
+ const input=Object.fromEntries(data);
+ const intermediary={
+  bankName:input.intermediaryBankName,bankAddress:input.intermediaryBankAddress,
+  accountName:input.intermediaryAccountName,aba:input.intermediaryAba,
+  reference:input.intermediaryReference,bic:input.intermediaryBic,
+  accountNumber:input.intermediaryAccountNumber
+ };
+ if(input.intermediarySelector&&input.intermediarySelector!=='NEW')intermediary.intermediaryId=input.intermediarySelector;
+ for(const field of ['intermediarySelector','intermediaryBankName','intermediaryBankAddress','intermediaryAccountName','intermediaryAba','intermediaryReference','intermediaryBic','intermediaryAccountNumber'])delete input[field];
+ return {...input,intermediary};
+};
 const forms={
  issuecard:{title:'Activate card account',path:'cards/issue',button:'Issue card',fields:()=>select('product','Card / account type',cardProducts)+select('from','My currency account',accountOptions()),build:f=>({...Object.fromEntries(f),currency:cache.accounts.find(a=>a.abiq_iban===f.get('from'))?.currency_code})},
  loadcard:{title:'Load card account',path:'cards/load',button:'Load card',fields:()=>select('from','Pay from currency account',accountOptions())+select('cardId','Card',(cache.transfercards||[]).map(c=>[c.card_id,`${c.full_name} · ${c.card_number} · ${c.currency_code}`]))+input('amount','Amount','text','inputmode="decimal"')+input('reference','Reference'),build:f=>({...Object.fromEntries(f),currency:cache.accounts.find(a=>a.abiq_iban===f.get('from'))?.currency_code})},
@@ -299,13 +331,16 @@ const forms={
 
 fxquote:{title:'Quote currency conversion',path:'fx/quote',button:'Reserve quote',fields:()=>select('from','Pay from',accountOptions())+select('to','Receive into',accountOptions())+input('amount','You pay','text','inputmode="decimal"')+input('commissionBps','Commission in basis points','number','min="0" max="9999" value="0"'),build:f=>({...Object.fromEntries(f),fromCurrency:cache.accounts.find(a=>a.abiq_iban===f.get('from'))?.currency_code,toCurrency:cache.accounts.find(a=>a.abiq_iban===f.get('to'))?.currency_code,commissionBps:Number(f.get('commissionBps'))})},
 fxexecute:{title:'Execute currency conversion',path:'fx/execute',button:'Execute conversion',fields:()=>select('quoteId','Reserved quote',(cache.fxquotes||[]).filter(q=>q.status==='OPEN').map(q=>[q.quote_id,number(q.from_amount)+' '+q.from_currency+' → '+number(q.to_amount)+' '+q.to_currency+' · fee '+number(q.fee_amount)+' '+q.from_currency+' · until '+new Date(q.expires_at).toLocaleTimeString()]))},
-fxcancel:{title:'Cancel reserved quote',path:'fx/cancel',button:'Release quote',fields:()=>select('quoteId','Quote',(cache.fxquotes||[]).filter(q=>q.status==='OPEN').map(q=>[q.quote_id,q.from_currency+' → '+q.to_currency+' · '+q.quote_id]))},
-fxrefresh:{title:'Refresh published reference rates',path:'fx/rates/refresh',button:'Refresh rates',fields:()=>'<p>Retrieve the latest ECB publication. Its source date is retained with every conversion quote.</p>'},
-
-offlinekeys:{title:'Configure offline public key',path:'offline/keys',button:'Save public key',fields:()=>select('kind','Key belongs to',[['CARD','AVIS card'],['TERMINAL','POS terminal']])+input('reference','Card token or terminal ID')+`<label>Public key (PEM)<textarea name="publicKey" rows="6" required></textarea></label>`+input('floorLimit','Terminal transaction limit (EUR)','text','value="50"')+input('batchCap','Terminal batch limit (EUR)','text','value="10000"')},
-allowance:{title:'Reserve offline card allowance',path:'offline/allowances',button:'Issue signed allowance',fields:()=>input('cardReference','AVIS card token')+input('amount','Allowance (EUR)','text','inputmode="decimal"')+input('maxTransactions','Maximum transactions','number','min="1" max="5000" value="5"')+input('expiresAt','Valid until','datetime-local'),build:f=>({...Object.fromEntries(f),maxTransactions:Number(f.get('maxTransactions')),expiresAt:new Date(f.get('expiresAt')).toISOString()})},
-offlinesync:{title:'Settle signed offline batch',path:'offline/sync',button:'Verify and settle batch',fields:()=>`<label>Signed terminal batch (JSON)<textarea name="batch" rows="12" required></textarea></label>`,build:f=>JSON.parse(f.get('batch'))},
-offlineclose:{title:'Release remaining offline allowance',path:'offline/close',button:'Release remaining balance',fields:()=>select('grantId','Allowance',(cache.offlinegrants||[]).filter(g=>g.status==='ACTIVE'&&new Date(g.settle_by).getTime()<Date.now()).map(g=>[g.grant_id,`${g.last_four_digits} · ${g.grant_id}`]))},
+fxcancel:{title:'Cancel reserved quote',path:'fx/cancel',button:'Release quote',ficashaccount:{title:'Register NOSTRO & incoming intermediary',path:'correspondents',button:'Register NOSTRO & intermediary',
+ fields:()=>'<fieldset class="nostro-primary-fields"><legend>NOSTRO bank</legend>'+
+ input('institutionName','Bank name','text','maxlength="100"')+
+ select('institutionType','Account class',['CENTRAL_BANK','CORRESPONDENT_BANK','CORE_BANK_OMNIBUS','CARD_SCHEME_SETTLEMENT'].map(x=>[x,label(x)]))+
+ input('bic','Bank BIC','text','maxlength="11"')+input('accountNumber','External account number','text','maxlength="128"')+
+ currencySelect()+bankDirectoryFields(false)+'</fieldset>'+intermediaryFields(),build:combinedNostroInput},
+ editcashaccount:{title:'NOSTRO & incoming intermediary',path:'correspondents/details',button:'Save NOSTRO & intermediary',
+ fields:()=>'<input type="hidden" name="cashAccountId"><fieldset class="nostro-primary-fields"><legend>NOSTRO bank</legend>'+
+ bankDirectoryFields()+'</fieldset>'+intermediaryFields(true),build:combinedNostroInput},
+.map(g=>[g.grant_id,`${g.last_four_digits} · ${g.grant_id}`]))},
 
 cashaccount:{title:'Register NOSTRO clearing account',path:'correspondents',button:'Register account',
  fields:()=>input('institutionName','Bank name','text','maxlength="100"')+
@@ -355,7 +390,7 @@ async function openForm(id){
  if(id==='buycrypto'){try{await openCryptoBasket(api);}catch(e){pageError(e);}return;}
  const epoch=sessionEpoch,hash=location.hash,generation=++formGeneration;
  const current=()=>epoch===sessionEpoch&&hash===location.hash&&generation===formGeneration;
- try{if(['recordsecurity','buysecurity','sellsecurity','syncsecurities'].includes(id)){await portfolioManager.open(id);return;}if(id==='opencardmessage'){openCardMessage();return;}if(id==='newpayment'){paymentWizard.open({loadRows:readPaymentRows});return;}const dependencies={issuecard:['accounts'],loadcard:['accounts','transfercards'],externalcard:['accounts'],loadexternal:['accounts','externalcards'],suspense:['accounts'],bindlogin:['customers'],sellcrypto:['accounts','cryptooffers','cryptoholdings'],settletransfer:['ledger'],redeemcode:['accounts'],cancelcode:['codedcards'],cryptooffer:['accounts','cryptoholdings'],buycrypto:['accounts','cryptooffers'],customerprofile:['customers'],fxquote:['accounts'],fxexecute:['fxquotes'],fxcancel:['fxquotes'],fxrefresh:[],offlinekeys:[],allowance:[],offlinesync:[],offlineclose:['offlinegrants'],cashaccount:[],editcashaccount:['nostroclearing'],intermediarybank:['nostroclearing'],editintermediary:['nostrointermediaries'],nostromirror:['nostroclearing'],nostrogateway:['nostroclearing','nostrogateways'],bankprofile:['correspondents'],bankroute:['accounts','bankprofiles'],bankpayment:['accounts','bankprofiles'],dispatch:['bankpayments'],statement:['bankprofiles'],customer:['customers'],currency:['customers'],transfer:['accounts'],shop:['customers'],checkout:['accounts','shops'],release:['checkouts'],refund:['checkouts'],card:['accounts'],terminal:['shops'],stripecard:['terminals'],authorize:['terminals'],capture:['authorizations'],reverse:['authorizations']}[id];await Promise.all(dependencies.map(getRows));if(!current())return false;activeForm=forms[id];requestKey=crypto.randomUUID();$('#dialog-title').textContent=activeForm.title;$('#form-fields').innerHTML=activeForm.fields();$('#submit-action').textContent=activeForm.button;$('#submit-action').disabled=false;$('#action-form .form-error').textContent='';if(id==='customer'){
+ try{if(['recordsecurity','buysecurity','sellsecurity','syncsecurities'].includes(id)){await portfolioManager.open(id);return;}if(id==='opencardmessage'){openCardMessage();return;}if(id==='newpayment'){paymentWizard.open({loadRows:readPaymentRows});return;}const dependencies={issuecard:['accounts'],loadcard:['accounts','transfercards'],externalcard:['accounts'],loadexternal:['accounts','externalcards'],suspense:['accounts'],bindlogin:['customers'],sellcrypto:['accounts','cryptooffers','cryptoholdings'],settletransfer:['ledger'],redeemcode:['accounts'],cancelcode:['codedcards'],cryptooffer:['accounts','cryptoholdings'],buycrypto:['accounts','cryptooffers'],customerprofile:['customers'],fxquote:['accounts'],fxexecute:['fxquotes'],fxcancel:['fxquotes'],fxrefresh:[],offlinekeys:[],allowance:[],offlinesync:[],offlineclose:['offlinegrants'],cashaccount:[],editcashaccount:['nostroclearing'],nostromirror:['nostroclearing'],nostrogateway:['nostroclearing','nostrogateways'],bankprofile:['correspondents'],bankroute:['accounts','bankprofiles'],bankpayment:['accounts','bankprofiles'],dispatch:['bankpayments'],statement:['bankprofiles'],customer:['customers'],currency:['customers'],transfer:['accounts'],shop:['customers'],checkout:['accounts','shops'],release:['checkouts'],refund:['checkouts'],card:['accounts'],terminal:['shops'],stripecard:['terminals'],authorize:['terminals'],capture:['authorizations'],reverse:['authorizations']}[id];await Promise.all(dependencies.map(getRows));if(!current())return false;activeForm=forms[id];requestKey=crypto.randomUUID();$('#dialog-title').textContent=activeForm.title;$('#form-fields').innerHTML=activeForm.fields();$('#submit-action').textContent=activeForm.button;$('#submit-action').disabled=false;$('#action-form .form-error').textContent='';if(id==='customer'){
   if(accountTypeFilter)$('#action-form').elements.accountType.value=accountTypeFilter;
   connectAccountHolderRegister($('#action-form'),cache.customers);
  }if(id==='checkout'){addSplit();$('#add-split').onclick=addSplit;}if(id==='customerprofile')$('#action-form').elements.userId.onchange=e=>{const address=(cache.customers||[]).find(c=>String(c.user_id)===e.target.value)?.postal_address;for(const n of ['street','city','postalCode','country'])$('#action-form').elements[n].value=address?.[n]||'';};if(id==='buycrypto'||id==='sellcrypto'){
