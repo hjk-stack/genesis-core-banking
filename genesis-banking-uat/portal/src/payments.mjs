@@ -142,7 +142,7 @@ export class PaymentServer extends SovereignCore {
   const memo=input.memo?text(input.memo,'memo',250):null;
   return this.operation(actor,'MIRROR_NOSTRO_MOVEMENT',input,key,async(db,k)=>{
    const cash=(await db.query(`SELECT c.*,a.available_balance::text,a.locked_balance::text
-    FROM avis_core_v2.external_cash_accounts c JOIN avis_core_v2.ledger_accounts a USING(ledger_account_id)
+    FROM avis_core_v2.external_cash_accounts c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.ledger_account_id
     WHERE c.cash_account_id=$1 AND c.is_active FOR UPDATE OF c,a`,[cashAccountId])).rows[0];
    if(!cash)fault('NOSTRO_ACCOUNT_NOT_FOUND','cashAccountId',404);
    if(cash.currency_code!==input.currency)fault('CURRENCY_MISMATCH','currency');
@@ -191,7 +191,7 @@ export class PaymentServer extends SovereignCore {
      FROM avis_core_v2.bank_connector_profiles p WHERE p.cash_account_id=c.cash_account_id),'') AS bank_connectors,
     COALESCE((SELECT string_agg(g.display_name,', ' ORDER BY g.gateway_code)
      FROM avis_core_v2.payment_gateway_bridges g WHERE g.clearing_account_id=c.cash_account_id),'') AS card_gateways
-    FROM avis_core_v2.external_cash_accounts c JOIN avis_core_v2.ledger_accounts a USING(ledger_account_id)
+    FROM avis_core_v2.external_cash_accounts c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.ledger_account_id
     ORDER BY c.institution_name,c.currency_code LIMIT 300`,
    nostromovements:`SELECT e.entry_id,e.created_at,c.cash_account_id,c.institution_name,c.currency_code,
     e.direction,e.amount::text,e.running_balance::text,j.event_type,
