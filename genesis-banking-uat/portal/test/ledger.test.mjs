@@ -6,7 +6,7 @@ import {migrate} from '../src/migrate.mjs';
 import {SovereignCore} from '../src/core.mjs';
 import {parseAbiqIban} from '../src/avispay-core-accounts.mjs';
 
-let db,pool,core,sameName,treasury,unmapped;
+let db,pool,core,sameName,treasury,unmapped,existingCustody;
 const actor={id:'ledger-details',admin:true};
 const rows=async(sql,args=[])=>(await pool.query(sql,args)).rows;
 before(async()=>{
@@ -20,6 +20,7 @@ before(async()=>{
  }
  const client=await pool.connect();try{await migrate(client);}finally{client.release();}
  core=new SovereignCore(pool);
+ existingCustody=new Set((await rows("SELECT account_id FROM avis_core_v2.ledger_accounts WHERE wallet_scope='CUSTODY'")).map(row=>row.account_id));
  // Independent businesses can share a name and retain separate account roles.
  const otherInstitution=await core.openCustomer(actor,{fullName:'Harbour Cooperative',accountType:'BUSINESS',currencies:['EUR']},'other-institution');
  await pool.query("UPDATE avis_core_v2.sovereign_users SET account_role='INSTITUTION' WHERE user_id=$1",[otherInstitution.userId]);
@@ -46,7 +47,9 @@ test('ledger details resolve the full account reference for each holder, currenc
   for(const row of group){
    if(row.wallet_scope==='FUNDING')assert.equal(row.abiq_iban,account.abiq_iban);
    else assert.notEqual(row.abiq_iban,account.abiq_iban);
-   assert.equal(parseAbiqIban(row.abiq_iban).currency,row.currency_code);
+   const newCustody=row.wallet_scope==='CUSTODY' && !existingCustody.has(row.account_id);
+   assert.equal(parseAbiqIban(row.abiq_iban).currency,newCustody?'579':row.currency_code);
+   assert.equal(row.currency_code,account.currency_code);
    assert.equal(row.account_reference,row.abiq_iban);
    assert.equal(row.account_holder,account.full_name);
    assert.equal(row.owner_class,account.account_role);
