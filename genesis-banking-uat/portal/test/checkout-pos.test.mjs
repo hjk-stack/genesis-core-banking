@@ -8,7 +8,7 @@ import {CheckoutPosControl} from '../src/checkout-pos.mjs';
 import {CheckoutPosAuthenticator} from '../src/checkout-pos-auth.mjs';
 import {createBankServer} from '../server.mjs';
 
-const admin={id:'operator:pos',admin:true},customer={id:'buyer',admin:false};
+const admin={id:'operator:pos',username:'admin-fixture',admin:true},customer={id:'buyer',admin:false};
 const milestone={terminalId:'11ITCON03',checkoutKind:'MILESTONE',reference:'AVIS-IT-03',title:'Italy · Construction milestone 03'};
 const basket={terminalId:'SH1234567890ABCDEF1234',checkoutKind:'SHOP',reference:'SHOP-1234567890abcdef1234',title:'AVIS.Land basket checkout'};
 const actor={id:'service:avis-land-checkout',posService:true,admin:false};
