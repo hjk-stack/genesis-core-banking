@@ -1,13 +1,16 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
+import {buildAbiqNumber} from '../public/abiq-number.mjs';
 import {stockRegisterTable} from '../public/portfolio.mjs';
 
 const source={booking_id:'source-stock',owner_user_id:'1',asset_class:'SECURITY',asset_code:'AVISPAY-PLC-SHARES',asset_name:'AVISPay PLC shares',quantity:'100000000.000000000000000000',source_reference:'existing-source-stock'};
+const portfolioId=buildAbiqNumber({country:'TN',holderCode:'AVIP',currencyBlock:'000579',series:'00015',customerNumber:'1000101'});
 const row=html=>{const dom=new JSDOM(html);try{return [...dom.window.document.querySelectorAll('tbody tr')].map(tr=>[...tr.querySelectorAll('td')].map(td=>td.textContent));}finally{dom.window.close();}};
 
 test('Portfolio exposes original stock units with an explicit metadata action and no invented price',()=>{
- const html=stockRegisterTable([source],[]),cells=row(html)[0];
+ const html=stockRegisterTable([{...source,portfolio_abiq_iban:portfolioId}],[]),cells=row(html)[0];
+ assert.equal(cells[6],portfolioId);
  assert.match(html,/AVISPay PLC stock register/);assert.equal(cells[1],'100,000,000.00');
  assert.deepEqual(cells.slice(2,5),['—','—','—']);assert.equal(cells[5],source.source_reference);
  assert.match(html,/data-register-treasury="source-stock"/);

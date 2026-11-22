@@ -811,7 +811,9 @@ def main():
                             or row['account_holder'] != holders[uid]['full_name']):
                         raise RuntimeError('Ledger account details mismatch')
         print('Verified distinct ABIQ references, primary funding identifiers and holder roles for active scopes')
-        review = api(opener, base, '/api/abiq/cleanup')['rows']
+        cleanup = api(opener, base, '/api/abiq/cleanup')
+        print('Applied legacy account corrections: ' + json.dumps(cleanup['totals'], sort_keys=True))
+        review = cleanup['rows']
         print('Legacy accounts awaiting review: ' + json.dumps({action: sum(r['action'] == action for r in review)
               for action in ('DELETE', 'RENUMBER')}))
         for view, crypto_field, crypto_values in [('securitypositions', 'kind', ('token', 'crypto')),

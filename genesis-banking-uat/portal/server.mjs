@@ -249,8 +249,12 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if((path==='/api/abiq/generator'||path.startsWith('/api/abiq/generator/'))&&!session.is_admin)
     fault('FORBIDDEN',null,403);
    if(path==='/api/abiq/cleanup'&&(!session.is_admin||!actor.admin))fault('FORBIDDEN',null,403);
-   if(path==='/api/abiq/cleanup'&&req.method==='GET')
-    return send(res,200,{rows:(await pool.query('SELECT * FROM avis_core_v2.legacy_account_review ORDER BY user_id,currency_code,wallet_scope,account_id')).rows});
+   if(path==='/api/abiq/cleanup'&&req.method==='GET'){
+    const rows=(await pool.query('SELECT * FROM avis_core_v2.legacy_account_review ORDER BY user_id,currency_code,wallet_scope,account_id')).rows;
+    const totals=(await pool.query(`SELECT count(*) FILTER(WHERE action='RENUMBER')::int AS renumbered,
+     count(*) FILTER(WHERE action='DELETE')::int AS removed FROM avis_core_v2.legacy_account_cleanup`)).rows[0];
+    return send(res,200,{rows,totals});
+   }
    if(path==='/api/abiq/generator/available'&&req.method==='GET')
     return send(res,200,await availableGeneratorNumbers(pool,actor,url.searchParams.get('currency'),url.searchParams.get('after'),url.searchParams.get('accountId')));
    if(path==='/api/abiq/generator'&&req.method==='GET')
