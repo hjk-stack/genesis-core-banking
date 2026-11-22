@@ -6,10 +6,10 @@ import {PGlite} from '@electric-sql/pglite';
 import pg from 'pg';
 import {migrate} from '../src/migrate.mjs';
 import {SovereignCore} from '../src/core.mjs';
-import {parseAbiqIban,resolveAbiqAccount} from '../src/avispay-core-accounts.mjs';
+import {findAbiqAccountIdentifier,parseAbiqIban,resolveAbiqAccount} from '../src/avispay-core-accounts.mjs';
 import {bookTreasuryOpening} from '../src/treasury-opening.mjs';
 
-let db,pool,core,snapshot,common,suspense,legacy,cryptoIds,unbridgedFunding;
+let db,pool,core,snapshot,common,commonUsd,suspense,legacy,cryptoIds,unbridgedFunding;
 const actor={id:'bank-identifier-test',admin:true};
 const rows=async(sql,args=[])=>(await pool.query(sql,args)).rows;
 const sequence=async()=>Number((await rows('SELECT last_value FROM avis_core_v2.abiq_account_numbers'))[0].last_value);
@@ -57,6 +57,7 @@ before(async()=>{
    (owner_type,user_id,sub_account_code,currency_code,account_category)
    VALUES('USER',2,'ABIQ:AVIP','CHF','LIABILITY') RETURNING account_id`)).rows[0].account_id;
   common=await core.system(client,'COMMON_POOL','EUR','EXISTING-COMMON');
+  commonUsd=await core.system(client,'COMMON_POOL','USD','EXISTING-COMMON-USD');
   suspense=await core.system(client,'SUSPENSE_INBOUND','EUR','EXISTING-SUSPENSE');
   const reserve=await core.system(client,'CORRESPONDENT_NOSTRO','EUR','EXISTING-RESERVE','ASSET');
   await core.post(client,actor,'numbering-existing-funds','FIXTURE','Preserve funded account',[
@@ -104,9 +105,23 @@ test('populated upgrade adds identifiers without creating accounts or changing f
   const numbered=identifiers.find(i=>i.ledger_account_id===row.account_id);
   assert.ok(numbered,row.account_id);assert.equal(parseAbiqIban(numbered.abiq_iban).currency,row.action==='RENUMBER'&&row.wallet_scope==='CUSTODY'?'579':row.currency_code);
  }
- for(const id of [common,suspense]){
+ for(const id of [common,commonUsd,suspense]){
   const numbered=await account(id);assert.equal(numbered.identifier_source,'LEDGER_REGISTRY');
-  assert.equal(numbered.abiq_iban.length,25);assert.equal(numbered.status,'ACTIVE');
+  assert.equal(numbered.abiq_iban.length,26);assert.equal(numbered.status,'ACTIVE');
+  const currency=id===commonUsd?'USD':'EUR';
+  assert.equal(parseAbiqIban(numbered.abiq_iban).currency,currency);
+  const old=(await rows('SELECT abiq_iban FROM avis_core_v2.abiq_ledger_identifiers WHERE ledger_account_id=$1',[id]))[0].abiq_iban;
+  assert.equal(old.length,25);
+  assert.notEqual(old,numbered.abiq_iban);
+  const repaired=(await rows('SELECT * FROM avis_core_v2.backoffice_abiq_number_repairs WHERE ledger_account_id=$1',[id]))[0];
+  assert.equal(repaired.previous_identifier,old);
+  assert.equal(repaired.replacement_identifier,numbered.abiq_iban);
+  assert.equal(repaired.currency_code,currency);
+  const binding=(await rows('SELECT * FROM avis_core_v2.abiq_number_bindings WHERE ledger_account_id=$1',[id]))[0];
+  assert.equal(binding.identifier,numbered.abiq_iban);
+  assert.equal(binding.primary_for_ledger,true);
+  const formerResolved=await findAbiqAccountIdentifier(pool,{identifier:old,currency});
+  assert.equal(formerResolved.ledger_account_id,id);
  }
  const custody=await rows("SELECT a.account_id FROM avis_core_v2.ledger_accounts a JOIN avis_core_v2.abiq_account_identifiers i ON i.ledger_account_id=a.account_id WHERE a.wallet_scope='CUSTODY' AND a.network IS NULL");
  assert.ok(custody.length>0);
@@ -200,7 +215,8 @@ test('numbered identities cannot be reassigned, changed to crypto, or collide wi
  for(const change of ["owner_type='SUSPENSE_INBOUND'","owner_type='USER',user_id=2","wallet_scope='CUSTODY'","account_category='ASSET'","sub_account_code='REPLACEMENT'"])
   await assert.rejects(pool.query(`UPDATE avis_core_v2.ledger_accounts SET ${change} WHERE account_id=$1`,[common]),/ABIQ_LEDGER_IDENTITY_MISMATCH/);
  await assert.rejects(pool.query('UPDATE avis_core_v2.abiq_routing_bridge SET account_number=$2 WHERE bridge_id=$1',[bridge.bridge_id,numbered.account_number]),/ABIQ_IDENTIFIER_ALREADY_ASSIGNED/);
- await assert.rejects(pool.query('INSERT INTO avis_core_v2.abiq_identifier_aliases(identifier,bridge_id) VALUES($1,$2)',[numbered.abiq_iban,bridge.bridge_id]),/ABIQ_IDENTIFIER_ALREADY_ASSIGNED/);
+ const preservedSerial=(await rows('SELECT abiq_iban FROM avis_core_v2.abiq_ledger_identifiers WHERE ledger_account_id=$1',[common]))[0].abiq_iban;
+ await assert.rejects(pool.query('INSERT INTO avis_core_v2.abiq_identifier_aliases(identifier,bridge_id) VALUES($1,$2)',[preservedSerial,bridge.bridge_id]),/ABIQ_IDENTIFIER_ALREADY_ASSIGNED/);
  const invalidAssignments=[
   {currency:'USD',partition:'0840',serial:99999999999991,expected:/ABIQ_LEDGER_IDENTITY_MISMATCH/},
   {currency:'EUR',partition:'0840',serial:99999999999992,expected:/foreign key/},

@@ -222,6 +222,11 @@ def verify_bank_account_identifiers(opener, base, accounts, ledger):
         expected_type = 'COMMON' if row.get('owner_type') == 'COMMON_POOL' else 'SUSPENSE'
         if row.get('owner_type') not in backoffice_owners or row.get('account_type') != expected_type:
             raise RuntimeError('Backoffice bank account classification mismatch')
+        # Every existing FIAT Common/Suspense account must display its migrated
+        # 26-character ABIQ currency/series number, not the old serial.
+        if (row.get('network') is None and row.get('currency_code') in ABIQ_CURRENCY_NUMBERS
+                and not re.fullmatch(r'TN[0-9]{2}AVIP000[0-9]{15}', row.get('abiq_iban') or '')):
+            raise RuntimeError('Common/Suspense bank account still uses legacy serial')
     crypto_count = bank_count = 0
     for row in ledger:
         if row.get('network') is None and row.get('currency_code') in ABIQ_CURRENCY_NUMBERS:

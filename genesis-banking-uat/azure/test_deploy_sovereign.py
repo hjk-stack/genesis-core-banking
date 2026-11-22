@@ -562,9 +562,9 @@ class BankAccountIdentifierVerificationTests(unittest.TestCase):
         funding = row(1, 'TN89AVIP000978000011000101')
         margin = row(2, 'TN39AVIP97800000000001001', scope='MARGIN')
         custody = row(3, 'TN12AVIP97800000000001002', scope='CUSTODY')
-        common = row(4, 'TN82AVIP97800000000001003', owner='COMMON_POOL')
+        common = row(4, 'TN08AVIP000978000011000104', owner='COMMON_POOL')
         common['account_type'] = 'COMMON'
-        suspense = row(5, 'TN55AVIP97800000000001004', owner='SUSPENSE_INBOUND')
+        suspense = row(5, 'TN78AVIP000978000011000105', owner='SUSPENSE_INBOUND')
         suspense['account_type'] = 'SUSPENSE'
         treasury = row(6, 'TN14AVIP84000000000001005', owner='TREASURY', currency='USD')
         crypto = []
@@ -615,6 +615,16 @@ class BankAccountIdentifierVerificationTests(unittest.TestCase):
                     fixture[2]['/api/views/backofficeaccounts']['rows'][index].update(update)
                     with self.assertRaisesRegex(RuntimeError, 'identifier missing|reference or scope mismatch'):
                         self.verify(fixture)
+
+    def test_rejects_unmigrated_common_or_suspense_primary_numbers(self):
+        for index, serial in ((0, 'TN82AVIP97800000000001003'),
+                              (1, 'TN55AVIP97800000000001004')):
+            with self.subTest(backoffice_index=index):
+                fixture = self.fixture()
+                item = fixture[2]['/api/views/backofficeaccounts']['rows'][index]
+                item.update(abiq_iban=serial, account_reference=serial)
+                with self.assertRaisesRegex(RuntimeError, 'Common/Suspense bank account still uses legacy serial'):
+                    self.verify(fixture)
 
     def test_rejects_network_wallets_and_unnetworked_crypto_in_banking_views(self):
         for index in range(6, 10):
