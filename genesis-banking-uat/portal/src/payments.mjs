@@ -153,8 +153,8 @@ export class PaymentServer extends SovereignCore {
     JOIN avis_core_v2.clearing_statements s USING(statement_id)
     WHERE s.cash_account_id=$1 AND e.bank_reference=$2 LIMIT 1`,[cashAccountId,reference])).rows;
    if(settled.length)fault('NOSTRO_ALREADY_SETTLED','externalReference',409);
-   if(direction==='DEBIT'&&
-    money(amount)>BigInt(Math.round((Number(cash.available_balance)-Number(cash.locked_balance))*1e6))*10n**12n)
+   const rawUnits=value=>{const s=String(value),neg=s.startsWith('-'),[whole,fraction='']=(neg?s.slice(1):s).split('.');const n=BigInt(whole)*10n**18n+BigInt(fraction.padEnd(18,'0'));return neg?-n:n;};
+   if(direction==='DEBIT'&&money(amount)>rawUnits(cash.available_balance)-rawUnits(cash.locked_balance))
     fault('INSUFFICIENT_CLEARING_FUNDS','amount');
    // A dedicated offset per Nostro is never a customer funding balance.
    const offset=await this.system(db,'COMMON_POOL',cash.currency_code,'NOSTRO_MIRROR:'+cashAccountId,'LIABILITY');
