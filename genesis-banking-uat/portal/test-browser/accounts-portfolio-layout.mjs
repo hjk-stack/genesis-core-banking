@@ -70,6 +70,10 @@ test('POS terminal register identifies the exact checkout and shows each blinkin
   const blue=pending.getByRole('switch',{name:'Activate POS 11TNCON12'});
   assert.equal(await blue.getAttribute('data-state'),'REQUESTED');
   assert.equal(await blue.evaluate(el=>getComputedStyle(el).animationName),'pos-request-pulse');
+  assert.equal(await blue.evaluate(el=>getComputedStyle(el).width),'116px','administrator Liquid Glass switch has touch-sized chrome shell');
+  assert.equal(await blue.locator('.pos-liquid-knob').evaluate(el=>getComputedStyle(el).width),'63px','three-state glass capsule is visible');
+  assert.match(await blue.evaluate(el=>getComputedStyle(el,'::before').backgroundImage),/linear-gradient/,'glass control has recessed track');
+  assert.match(await blue.locator('.pos-liquid-knob').evaluate(el=>getComputedStyle(el).backgroundImage),/linear-gradient/,'capsule is colored by its bank state');
   assert.equal(await closed.getByRole('switch',{name:'Activate POS 11ITCON01'}).getAttribute('data-state'),'CLOSED');
   await blue.click();
   await pending.getByRole('switch',{name:'Close POS 11TNCON12'}).waitFor();
