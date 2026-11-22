@@ -30,7 +30,7 @@ test('each checkout has its own unique terminal, blue request, admin approval, c
   assert.equal(shop.state,'CLOSED');assert.notEqual(shop.terminalId,first.terminalId);
   const requested=await control.request(actor,milestone);
   assert.equal(requested.state,'REQUESTED');assert.ok(requested.requestedAt);
-  const duplicate=await control.request(actor,milestone);assert.equal(duplicate.requestedAt,requested.requestedAt);
+  const duplicate=await control.request(actor,milestone);assert.equal(String(duplicate.requestedAt),String(requested.requestedAt));
   assert.equal((await control.status(actor,basket)).state,'CLOSED');
   await assert.rejects(control.setActive(customer,{terminalId:first.terminalId,active:true}),/FORBIDDEN/);
   const approved=await control.setActive(admin,{terminalId:first.terminalId,active:true});
