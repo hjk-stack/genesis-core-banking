@@ -75,5 +75,9 @@ test('unapproved request expires at 60 minutes with immutable audit and cannot b
  assert.equal(await ip.expire(),0);
  await assert.rejects(ip.setActive(admin,{requestId:payload.requestId,active:true,receivingAccountId:accounts.common}),e=>e.code==='CHECKOUT_IP_STATE');
  assert.deepEqual((await pool.query('SELECT event_type FROM avis_core_v2.checkout_ip_events WHERE request_id=$1 ORDER BY event_id',[payload.requestId])).rows.map(x=>x.event_type),['REQUEST','EXPIRE']);
+ const retry=await ip.register(service,payload);
+ assert.equal(retry.status,'REQUESTED');assert.notEqual(String(retry.requestedAt),String(retry.expiresAt));
+ assert.equal(new Date(retry.expiresAt).getTime()-new Date(retry.requestedAt).getTime(),3600000);
+ assert.deepEqual((await pool.query('SELECT event_type FROM avis_core_v2.checkout_ip_events WHERE request_id=$1 ORDER BY event_id',[payload.requestId])).rows.map(x=>x.event_type),['REQUEST','EXPIRE','REQUEST']);
  await assert.rejects(pool.query('DELETE FROM avis_core_v2.checkout_ip_events WHERE request_id=$1',[payload.requestId]),/APPEND_ONLY_RECORD/);
 });
