@@ -48,7 +48,20 @@ export class CheckoutIpControl{
   return this.withTransaction(async db=>{
    await this.expire(db);
    const existing=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_requests WHERE request_id=$1 FOR UPDATE',[input.requestId])).rows[0];
-   if(existing){if(existing.request_fingerprint!==fingerprint)fault('IDEMPOTENCY_CONFLICT','requestId',409);return map(existing);}
+   if(existing){
+    if(existing.request_fingerprint!==fingerprint)fault('IDEMPOTENCY_CONFLICT','requestId',409);
+    if(existing.status==='CLOSED'){
+     const reopened=(await db.query(`UPDATE avis_core_v2.checkout_ip_requests
+      SET status='REQUESTED',requested_at=now(),expires_at=now()+interval '60 minutes',
+       approved_at=NULL,closed_at=NULL,approved_by=NULL,receiving_account_id=NULL,
+       nostro_cash_account_id=NULL,intermediary_id=NULL,updated_at=now()
+      WHERE request_id=$1 RETURNING *`,[input.requestId])).rows[0];
+     await db.query(`INSERT INTO avis_core_v2.checkout_ip_events(request_id,event_type,actor_id)
+      VALUES($1,'REQUEST',$2)`,[input.requestId,actor.id]);
+     return map(reopened);
+    }
+    return map(existing);
+   }
    const row=(await db.query(`INSERT INTO avis_core_v2.checkout_ip_requests(
     request_id,checkout_kind,checkout_reference,checkout_title,source,amount,currency_code,
     sender_bank_name,sender_ip,authorized_person,sender_account,sender_account_name,
