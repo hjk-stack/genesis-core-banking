@@ -117,6 +117,7 @@ function bindTerminalControls(){
 }
 setInterval(()=>{
  if(!csrf||!identity.admin||location.hash!=='#pos')return;
+ let expiredCount=0;
  for(const switchButton of document.querySelectorAll('[data-pos-deadline]')){
   if(Number(switchButton.dataset.posDeadline)>Date.now())continue;
   // Stop the blue flash immediately at sixty minutes, even when a network
@@ -124,9 +125,18 @@ setInterval(()=>{
   switchButton.dataset.state='CLOSED';
   switchButton.setAttribute('aria-checked','false');
   switchButton.removeAttribute('data-pos-deadline');
-  switchButton.closest('tr')?.classList.remove('pos-terminal-awaiting');
+  const row=switchButton.closest('tr');row?.classList.remove('pos-terminal-awaiting');if(row)row.dataset.posRequestState='CLOSED';
+  expiredCount++;
   const status=switchButton.parentElement.querySelector('.pos-activation-label');
   if(status){status.dataset.state='CLOSED';status.textContent='Request expired';}
+ }
+ if(expiredCount){
+  const pending=document.querySelector('[data-pending-count]');
+  if(pending){
+   const remaining=document.querySelectorAll('.pos-liquid-switch[data-state="REQUESTED"]').length;
+   pending.dataset.pendingCount=String(remaining);
+   pending.textContent=remaining+' pending activation'+(remaining===1?'':'s');
+  }
  }
 },1000);
 setInterval(async()=>{
