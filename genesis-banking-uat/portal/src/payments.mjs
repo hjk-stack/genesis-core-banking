@@ -7,14 +7,49 @@ const line=(accountId,direction,amount)=>({accountId,direction,amount});
 const digest=value=>createHash('sha256').update(value).digest('hex');
 const terminal=s=>['ACCC','RJCT'].includes(s);
 const optionalField=(value,field,max)=>value===undefined||value===null||value===''?null:text(value,field,max);
-const abaRouting=value=>{
+const abaRouting=(value,field='aba')=>{
  if(value===undefined||value===null||value==='')return null;
- if(typeof value!=='string'||!/^[0-9]{9}$/.test(value))fault('INVALID_FIELD','aba');
+ if(typeof value!=='string'||!/^[0-9]{9}$/.test(value))fault('INVALID_FIELD',field);
  // ABA routing digits encode the Federal Reserve check sequence.
  const digits=[...value].map(Number),weight=[3,7,1,3,7,1,3,7,1];
- if(digits.reduce((sum,d,i)=>sum+d*weight[i],0)%10!==0)fault('INVALID_FIELD','aba');
+ if(digits.reduce((sum,d,i)=>sum+d*weight[i],0)%10!==0)fault('INVALID_FIELD',field);
  return value;
 };
+// The intermediary is a routing record attached to the NOSTRO. Save both in
+// the same database transaction so the register cannot contain a half-record.
+const incomingIntermediary=data=>{
+ if(data===undefined||data===null)return null; // legacy cash-account APIs remain compatible
+ if(typeof data!=='object'||Array.isArray(data))fault('INVALID_FIELD','intermediaryBankName');
+ const bankName=text(data.bankName,'intermediaryBankName',100);
+ const bankAddress=text(data.bankAddress,'intermediaryBankAddress',300);
+ const accountName=text(data.accountName,'intermediaryAccountName',140);
+ const reference=text(data.reference,'intermediaryReference',140);
+ const aba=abaRouting(data.aba,'intermediaryAba');
+ const bic=optionalField(data.bic,'intermediaryBic',11);
+ const accountNumber=optionalField(data.accountNumber,'intermediaryAccountNumber',128);
+ if(bic&&!/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(bic))fault('INVALID_FIELD','intermediaryBic');
+ const id=optionalField(data.intermediaryId,'intermediaryId',36);
+ if(id&&!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id))fault('INVALID_FIELD','intermediaryId');
+ return {id,bankName,bankAddress,accountName,reference,aba,bic,accountNumber};
+};
+async function saveIncomingIntermediary(db,cashAccountId,intermediary,actorId){
+ if(!intermediary)return null;
+ const values=[cashAccountId,intermediary.bankName,intermediary.bankAddress,intermediary.accountName,
+  intermediary.aba,intermediary.reference,intermediary.bic,intermediary.accountNumber];
+ if(intermediary.id){
+  const row=(await db.query(`UPDATE avis_core_v2.nostro_intermediary_banks SET
+   bank_name=$2,bank_address=$3,account_name=$4,aba=$5,reference=$6,bic_code=$7,account_number=$8,updated_at=now()
+   WHERE cash_account_id=$1 AND intermediary_id=$9 RETURNING intermediary_id`,
+   [...values,intermediary.id])).rows[0];
+  if(!row)fault('INTERMEDIARY_NOT_FOUND','intermediaryId',404);
+  return row.intermediary_id;
+ }
+ const id=randomUUID();
+ await db.query(`INSERT INTO avis_core_v2.nostro_intermediary_banks
+  (intermediary_id,cash_account_id,bank_name,bank_address,account_name,aba,reference,bic_code,account_number,created_by)
+  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[id,...values,actorId]);
+ return id;
+}
 const zeroMoney=v=>/^0(?:\.0+)?$/.test(v)?0n:money(v);
 export class PaymentServer extends SovereignCore {
  async registerCashAccount(actor,input,key){
@@ -22,6 +57,7 @@ export class PaymentServer extends SovereignCore {
   const bankName=text(input.bankName??input.institutionName,'bankName',100);
   const bankAddress=optionalField(input.bankAddress,'bankAddress',300),accountName=optionalField(input.accountName,'accountName',140);
   const aba=abaRouting(input.aba),bankReference=optionalField(input.reference,'reference',140);
+  const intermediary=incomingIntermediary(input.intermediary);
   if(!['CENTRAL_BANK','CORRESPONDENT_BANK','CORE_BANK_OMNIBUS','CARD_SCHEME_SETTLEMENT'].includes(input.institutionType))fault('INVALID_FIELD','institutionType');
   if(!/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(input.bic))fault('INVALID_FIELD','bic');
   return this.operation(actor,'REGISTER_CASH_ACCOUNT',input,key,async db=>{
@@ -30,20 +66,23 @@ export class PaymentServer extends SovereignCore {
    await db.query(`INSERT INTO avis_core_v2.external_cash_accounts
     (cash_account_id,ledger_account_id,institution_type,institution_name,bic_code,iban_or_account_no,currency_code,is_active,bank_address,account_name,aba,bank_reference)
     VALUES($1,$2,$3,$4,$5,$6,$7,true,$8,$9,$10,$11)`,[id,accountId,input.institutionType,bankName,input.bic,input.accountNumber,input.currency,bankAddress,accountName,aba,bankReference]);
-   return {id,accountId};
+   const intermediaryId=await saveIncomingIntermediary(db,id,intermediary,actor.id);
+   return {id,accountId,intermediaryId};
   });
  }
  async updateCashAccountDetails(actor,input,key){
   const cashAccountId=text(input.cashAccountId,'cashAccountId',36),bankName=text(input.bankName,'bankName',100);
   const bankAddress=text(input.bankAddress,'bankAddress',300),accountName=text(input.accountName,'accountName',140);
   const aba=abaRouting(input.aba),reference=text(input.reference,'reference',140);
+  const intermediary=incomingIntermediary(input.intermediary);
   return this.operation(actor,'UPDATE_EXTERNAL_BANK_DIRECTORY',input,key,async db=>{
    const updated=(await db.query(`UPDATE avis_core_v2.external_cash_accounts
      SET institution_name=$2,bank_address=$3,account_name=$4,aba=$5,bank_reference=$6
      WHERE cash_account_id=$1 AND is_active RETURNING cash_account_id`,
      [cashAccountId,bankName,bankAddress,accountName,aba,reference])).rows[0];
    if(!updated)fault('NOSTRO_ACCOUNT_NOT_FOUND','cashAccountId',404);
-   return {id:cashAccountId,cashAccountId};
+   const intermediaryId=await saveIncomingIntermediary(db,cashAccountId,intermediary,actor.id);
+   return {id:cashAccountId,cashAccountId,intermediaryId};
   });
  }
  async registerIntermediaryBank(actor,input,key){
@@ -251,6 +290,12 @@ export class PaymentServer extends SovereignCore {
    nostroclearing:`SELECT c.cash_account_id,c.ledger_account_id,c.institution_type,c.institution_name,c.bic_code,c.iban_or_account_no,
     c.bank_address,c.account_name,c.aba,c.bank_reference,
     c.currency_code,c.is_active,a.available_balance::text,a.locked_balance::text,
+    COALESCE((SELECT json_agg(json_build_object(
+      'intermediaryId',i.intermediary_id,'bankName',i.bank_name,'bankAddress',i.bank_address,
+      'accountName',i.account_name,'aba',i.aba,'reference',i.reference,
+      'bic',i.bic_code,'accountNumber',i.account_number) ORDER BY i.created_at,i.intermediary_id)
+     FROM avis_core_v2.nostro_intermediary_banks i
+     WHERE i.cash_account_id=c.cash_account_id),'[]'::json) AS intermediaries,
     COALESCE((SELECT string_agg(p.profile_id||' ('||p.protocol||')',', ' ORDER BY p.profile_id)
      FROM avis_core_v2.bank_connector_profiles p WHERE p.cash_account_id=c.cash_account_id),'') AS bank_connectors,
     COALESCE((SELECT string_agg(g.display_name,', ' ORDER BY g.gateway_code)
