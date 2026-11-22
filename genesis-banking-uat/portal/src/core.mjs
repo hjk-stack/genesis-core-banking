@@ -194,6 +194,8 @@ export class SovereignCore {
    const m=(await db.query("SELECT merchant_id FROM avis_core_v2.marketplace_merchants WHERE merchant_id=$1 AND status='ACTIVE'",[input.merchantId])).rows[0];
    if(!m)fault('SHOP_NOT_FOUND','merchantId');
    await db.query('INSERT INTO avis_core_v2.pos_terminals(terminal_id,merchant_id,terminal_type) VALUES($1,$2,$3)',[input.terminalId,input.merchantId,input.terminalType]);
+   if(input.terminalType==='WEB_POS')await db.query(`INSERT INTO avis_core_v2.checkout_pos_controls
+    (terminal_id,checkout_kind,checkout_reference,checkout_title) VALUES($1,'REGISTERED',$1,$1)`,[input.terminalId]);
    return {id:input.terminalId};
   });
  }
@@ -263,7 +265,11 @@ export class SovereignCore {
    shops:`SELECT m.merchant_id,m.shop_name,u.user_id AS owner_user_id,u.full_name,m.commission_rate_bps,m.status FROM avis_core_v2.marketplace_merchants m JOIN avis_core_v2.holder_identities u ON u.record_user_id=m.owner_user_id ORDER BY m.created_at DESC LIMIT 300`,
    checkouts:'SELECT checkout_id,marketplace_order_ref,buyer_user_id,payment_rail,total_amount_eur::text,status,created_at FROM avis_core_v2.checkout_payment_sessions ORDER BY created_at DESC LIMIT 300',
    cards:'SELECT card_id,user_id,last_four_digits,card_type,card_rail_mode,status FROM avis_core_v2.avis_cards ORDER BY created_at DESC LIMIT 300',
-   terminals:'SELECT terminal_id,merchant_id,terminal_type,offline_enabled,status FROM avis_core_v2.pos_terminals ORDER BY terminal_id LIMIT 300',
+   terminals:`SELECT t.terminal_id,t.merchant_id,t.terminal_type,t.offline_enabled,t.status,
+    COALESCE(c.state,'CLOSED') AS activation_state,c.checkout_kind,c.checkout_reference,c.checkout_title,
+    c.requested_at,c.approved_at,c.updated_at AS activation_updated_at
+    FROM avis_core_v2.pos_terminals t LEFT JOIN avis_core_v2.checkout_pos_controls c USING(terminal_id)
+    ORDER BY (c.state='REQUESTED') DESC,c.requested_at DESC NULLS LAST,t.terminal_id LIMIT 300`,
    authorizations:'SELECT authorization_id,terminal_id,network_reference,amount::text,currency_code,status,created_at FROM avis_core_v2.card_authorizations ORDER BY created_at DESC LIMIT 300',
    gateways:'SELECT gateway_code,display_name,gateway_category,settlement_cycle FROM avis_core_v2.payment_gateway_bridges ORDER BY gateway_code LIMIT 300',
    correspondents:'SELECT cash_account_id,institution_type,institution_name,bic_code,iban_or_account_no,currency_code FROM avis_core_v2.external_cash_accounts ORDER BY institution_name LIMIT 300',
