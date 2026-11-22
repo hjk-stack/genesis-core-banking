@@ -141,6 +141,33 @@ test('customer actions, crypto openings and sources with the wrong owner are rej
  assert.deepEqual(await position(foreign.id),original);
 });
 
+
+test('Treasury portfolio revision updates units, prices and security identity atomically with movement audit',async()=>{
+ const booking=await source({name:'Registered corporate stock',quantity:'80'});
+ const registered=await security({name:'Registered corporate stock',shortName:'CORP'});
+ const opened=await register(booking,registered.id,{issuingPrice:'2',marketPrice:'3'});
+ const originalBooking=(await pool.query('SELECT * FROM avis_core_v2.treasury_opening_positions WHERE booking_id=$1',[booking.booking_id])).rows[0];
+ const before=await financialState(),version=(await position(opened.positionId)).version;
+ const edit={bookingId:booking.booking_id,securityId:registered.id,version,
+  quantity:'75',issuingPrice:'5',marketPrice:'14',name:'Corporate stock corrected',
+  shortName:'CORP',isin:'',cusip:'',reference:'Board stock revision'};
+ const updated=await core.editTreasurySecuritySource(admin,edit,key());
+ assert.equal(updated.positionId,opened.positionId);assert.equal(updated.quantity,'75.000000000000000000');
+ const p=await position(opened.positionId);assert.equal(p.issuing_price,'5.000000000000000000');
+ assert.equal(p.market_price,'14.000000000000000000');assert.equal(p.version,version+1);
+ const metadata=(await core.list(admin,'securities')).find(s=>s.security_id===registered.id);
+ assert.equal(metadata.name,'Corporate stock corrected');
+ const movement=(await pool.query('SELECT * FROM avis_core_v2.portfolio_movements WHERE position_id=$1 ORDER BY movement_id DESC LIMIT 1',[opened.positionId])).rows[0];
+ assert.equal(movement.quantity_delta,'-5.000000000000000000');
+ assert.equal(movement.reference,'Board stock revision');
+ assert.deepEqual((await pool.query('SELECT * FROM avis_core_v2.treasury_opening_positions WHERE booking_id=$1',[booking.booking_id])).rows[0],originalBooking);
+ assert.deepEqual(await financialState(),before,'securities registration never posts an unrelated cash or wallet ledger');
+ await assert.rejects(core.editTreasurySecuritySource(admin,edit,key()),e=>e.code==='POSITION_CHANGED');
+ await pool.query('UPDATE avis_core_v2.portfolio_positions SET reserved_quantity=50 WHERE position_id=$1',[opened.positionId]);
+ await assert.rejects(core.editTreasurySecuritySource(admin,{...edit,version:p.version,quantity:'49'},key()),e=>e.code==='SECURITY_QUANTITY_RESERVED');
+ assert.equal((await position(opened.positionId)).quantity,'75.000000000000000000');
+});
+
 test('long original source references remain intact in the immutable source and operation receipt',async()=>{
  const reference='ORIGINAL-'.repeat(17),booking=await source({reference}),registered=await security(),result=await register(booking,registered.id);
  assert.equal(result.sourceReference,reference);

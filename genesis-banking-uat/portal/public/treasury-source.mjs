@@ -8,6 +8,8 @@ const currencies=['EUR','USD','GBP','CHF','SEK','NOK','DKK','PLN','CZK','HUF','R
 // Registration connects an existing Treasury source to its Portfolio record.
 // Only an explicit form submission writes metadata; opening this window is read-only.
 export async function openTreasurySource({api,modal,bookingId,isCurrent=()=>true,onRegistered=()=>{}}){
+ // Load valuation only when Treasury registration is opened; avoid adding a portfolio dependency to the crypto workspace.
+ const {portfolioValue}=await import('./portfolio.mjs');
  let dialog=null,epoch=0,closed=false,securities=[],positions=[],source=null;
  const active=serial=>!closed&&isCurrent()&&dialog?.isConnected&&serial===epoch;
  const [treasury,registered,holdings]=await Promise.all([
@@ -17,7 +19,7 @@ export async function openTreasurySource({api,modal,bookingId,isCurrent=()=>true
  source=treasury.rows?.find(row=>row.booking_id===bookingId&&row.asset_class==='SECURITY');
  if(!source)throw new Error('Select an existing Treasury security source.');
  securities=registered.rows||[];positions=holdings.rows||[];
- const candidates=()=>securities.filter(row=>row.isin&&(!source.isin||row.isin===source.isin)&&
+ const candidates=()=>securities.filter(row=>(!source.isin||row.isin===source.isin)&&
   (source.asset_code!=='AVISPAY-PLC-SHARES'||row.kind==='share'));
  const existing=id=>positions.find(row=>String(row.user_id)===String(source.owner_user_id)&&row.security_id===id);
  const sourceSummary=()=>`<dl class="crypto-details" data-treasury-source><dt>Recorded security</dt><dd>${esc(source.asset_name)}</dd><dt>Recorded quantity</dt><dd>${esc(decimal(source.quantity))}</dd><dt>Source reference</dt><dd>${esc(source.source_reference)}</dd></dl>`;
@@ -34,35 +36,58 @@ export async function openTreasurySource({api,modal,bookingId,isCurrent=()=>true
  const receiptKey=()=>{let prior='',key='';return value=>{const next=JSON.stringify(value);if(next!==prior){prior=next;key=crypto.randomUUID();}return key;};};
 
  function registration(selectedId=source.security_id||'',saved={}){
-  const {el,serial,form}=show('Register Treasury source in Portfolio',
+  const {el,serial,form}=show(existing(selectedId)?'Edit Treasury portfolio holding':'Register Treasury source in Portfolio',
    `<form><fieldset class="crypto-source-fields">${sourceSummary()}<div class="crypto-form-grid">`+
    select('securityId','Registered security',candidates().map(row=>[row.security_id,row.short_name+' · '+row.isin+' · '+row.currency_code]),'required')+
    '<button type="button" data-source-add-security>＋ Add security details</button><div data-source-metadata></div>'+
+   field('quantity','Holding units','required inputmode="decimal"')+
    field('issuingPrice','Issuing price','required inputmode="decimal"')+
    field('marketPrice','Market price','required inputmode="decimal"')+
-   '</div><p data-source-position></p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" data-source-cancel>Cancel</button><button class="primary" type="submit">Register source holding</button></div></fieldset></form>');
+   '<div data-source-identity hidden>'+
+   field('name','Security name','maxlength="200"')+
+   field('shortName','Short name','maxlength="80"')+
+   field('isin','ISIN','maxlength="12" autocapitalize="characters"')+
+   field('cusip','CUSIP','maxlength="9" autocapitalize="characters"')+
+   field('reference','Revision reference','maxlength="128"')+'</div>'+
+   '</div><p data-source-value></p><p data-source-position></p><p class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" data-source-cancel>Cancel</button><button class="primary" type="submit" data-source-submit>Register source holding</button></div></fieldset></form>');
   form.elements.securityId.value=selectedId;
   let busy=false;const key=receiptKey();
   const sync=()=>{
    const security=candidates().find(row=>row.security_id===form.elements.securityId.value),position=security&&existing(security.security_id);
    form.querySelector('[data-source-metadata]').innerHTML=security?`<dl class="crypto-details"><dt>Currency</dt><dd>${esc(security.currency_code)}</dd><dt>Denomination</dt><dd>${esc(decimal(security.denomination))}</dd><dt>Price basis</dt><dd>${security.quote_basis==='PERCENT'?'% of denomination':'Price per unit'}</dd></dl>`:'';
+   form.elements.securityId.disabled=Boolean(source.security_id);
+   form.querySelector('[data-source-add-security]').hidden=Boolean(position);
+   form.elements.quantity.value=decimal(position?.quantity??source.quantity);
+   form.elements.quantity.readOnly=!position;
    for(const [name,column]of [['issuingPrice','issuing_price'],['marketPrice','market_price']]){
-    const input=form.elements[name];input.readOnly=!!position;input.value=position?decimal(position[column]):'';
+    const input=form.elements[name];input.readOnly=false;input.value=position?decimal(position[column]):'';
    }
-   form.querySelector('[data-source-position]').textContent=position?'Use the existing Portfolio holding and its recorded prices.':'The recorded Treasury quantity will be linked to this Portfolio security.';
+   const identity=form.querySelector('[data-source-identity]');identity.hidden=!position;
+   for(const name of ['name','shortName','isin','cusip','reference']){
+    const input=form.elements[name];input.disabled=!position;input.required=Boolean(position)&&['name','shortName','reference'].includes(name);
+   }
+   if(position){for(const [name,value]of Object.entries({name:security.name,shortName:security.short_name,isin:security.isin||'',cusip:security.cusip||''}))form.elements[name].value=value;}
+   form.querySelector('[data-source-submit]').textContent=position?'Save holding changes':'Register source holding';
+   form.querySelector('[data-source-position]').textContent=position?'Original Treasury source is retained. Edits are recorded against the linked Portfolio holding.':'The original Treasury units will be linked without altering the source booking.';
+   calculate();
   };
   sync();if(!existing(selectedId))for(const name of ['issuingPrice','marketPrice'])if(saved[name]!==undefined)form.elements[name].value=saved[name];
-  form.elements.securityId.onchange=sync;
+  function calculate(){const security=candidates().find(row=>row.security_id===form.elements.securityId.value);try{form.querySelector('[data-source-value]').textContent='Portfolio market value: '+portfolioValue(form.elements.quantity.value,security.denomination,form.elements.marketPrice.value,security.quote_basis,security.currency_code)+' '+security.currency_code;}catch{form.querySelector('[data-source-value]').textContent='';}}
+  form.elements.securityId.onchange=sync;form.elements.quantity.oninput=calculate;form.elements.marketPrice.oninput=calculate;
   form.querySelector('[data-source-cancel]').onclick=()=>el.close();
   form.querySelector('[data-source-add-security]').onclick=()=>{
    const values=Object.fromEntries(new FormData(form));addSecurity(values);
   };
   form.onsubmit=async event=>{
    event.preventDefault();if(busy||!active(serial)||!form.reportValidity())return;
-   const input={bookingId:source.booking_id,...Object.fromEntries(new FormData(form))};
+   const values=Object.fromEntries(new FormData(form)),linked=existing(form.elements.securityId.value);
+   const input=linked?{bookingId:source.booking_id,securityId:form.elements.securityId.value,
+    version:linked.version,quantity:values.quantity,issuingPrice:values.issuingPrice,marketPrice:values.marketPrice,
+    name:values.name,shortName:values.shortName,isin:values.isin,cusip:values.cusip,reference:values.reference}:
+    {bookingId:source.booking_id,securityId:form.elements.securityId.value,issuingPrice:values.issuingPrice,marketPrice:values.marketPrice};
    form.querySelector('.form-error').textContent='';busy=true;lock(form,true);
    try{
-    const result=await api('portfolio/treasury-source',input,key(input));
+    const result=await api(linked?'portfolio/treasury-source/edit':'portfolio/treasury-source',input,key(input));
     if(!active(serial))return;
     if(result.bookingId!==source.booking_id||result.securityId!==input.securityId||!result.positionId)
      throw new Error('The source registration receipt did not match this holding.');
@@ -76,11 +101,11 @@ export async function openTreasurySource({api,modal,bookingId,isCurrent=()=>true
  function addSecurity(saved){
   const {el,serial,form}=show('Add source security details',
    `<form><fieldset class="crypto-source-fields">${sourceSummary()}<div class="crypto-form-grid">`+
-   field('name','Name of security','required maxlength="200" readonly')+
+   field('name','Name of security','required maxlength="200"')+
    field('shortName','Short name','required maxlength="80"')+
    select('currency','Currency',currencies.map(code=>[code,code]),'required')+
    select('kind','Security type',[['share','Share'],['bond','Bond'],['note','Note'],['cd','Certificate of deposit'],['fund','Fund'],['token','Security token'],['other','Other']],'required')+
-   field('isin','ISIN','required minlength="12" maxlength="12" autocapitalize="characters"')+
+   field('isin','ISIN','maxlength="12" autocapitalize="characters"')+
    field('cusip','CUSIP','maxlength="9" autocapitalize="characters"')+
    field('denomination','Denomination','required inputmode="decimal"')+
    select('quoteBasis','Price basis',[['UNIT','Price per unit'],['PERCENT','% of denomination']],'required')+
