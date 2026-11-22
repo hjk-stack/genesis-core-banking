@@ -153,3 +153,12 @@ textarea{box-sizing:border-box;width:100%;font:inherit;border:1px solid #d6dbe3;
 .pos-activation-cell .pos-liquid-switch{margin-right:0}
 .pos-activation-cell .pos-activation-label{display:block;margin-top:7px;font-size:12px;line-height:1.35}
 @media(max-width:860px){.pos-terminal-table{min-width:950px}.pos-terminal-table .pos-activation-cell{min-width:136px;max-width:144px}}
+
+/* NOSTRO account directory: readable secondary bank fields and narrow screens. */
+[data-nostro-register] td small,[data-intermediary-register] td small{display:block;font-family:Inter,Arial,sans-serif;font-size:11px;color:var(--muted);margin-top:5px;max-width:320px;white-space:normal;overflow-wrap:anywhere}
+[data-nostro-register] td button,[data-intermediary-register] td button{margin:2px;white-space:nowrap}
+[data-nostro-register] td:first-child,[data-intermediary-register] td{vertical-align:top}
+#form-dialog:has([name="bankAddress"]) {width:min(780px,calc(100vw - 24px));max-height:min(90dvh,900px);overflow:auto}
+#form-dialog:has([name="bankAddress"]) #form-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}
+#form-dialog:has([name="bankAddress"]) #form-fields>fieldset{grid-column:1/-1}
+@media(max-width:620px){#form-dialog:has([name="bankAddress"]) #form-fields{grid-template-columns:1fr}}
