@@ -35,8 +35,21 @@ export class CheckoutPosControl{
   if(!existing||existing.terminal_type!=='WEB_POS'||existing.merchant_id!==merchant.merchant_id)fault('POS_TERMINAL_CONFLICT',null,409);
   await db.query(`INSERT INTO avis_core_v2.checkout_pos_controls(terminal_id,checkout_kind,checkout_reference,checkout_title)
    VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,[c.id,c.checkoutKind,c.reference,c.title]);
-  const control=(await db.query(rowSql+' FOR UPDATE OF c',[c.id])).rows[0];
-  if(!control||control.checkout_kind!==c.checkoutKind||control.checkout_reference!==c.reference||control.checkout_title!==c.title)fault('POS_TERMINAL_CONFLICT',null,409);
+  let control=(await db.query(rowSql+' FOR UPDATE OF c',[c.id])).rows[0];
+  if(!control)fault('POS_TERMINAL_CONFLICT',null,409);
+  // A bank operator may have registered the terminal ID before the first
+  // checkout opened. Bind that placeholder once to the authoritative package.
+  if(control.checkout_kind==='REGISTERED'&&control.checkout_reference===c.id){
+   await db.query(`UPDATE avis_core_v2.checkout_pos_controls SET
+    checkout_kind=$2,checkout_reference=$3,checkout_title=$4,updated_at=now() WHERE terminal_id=$1`,
+    [c.id,c.checkoutKind,c.reference,c.title]);
+  }else{
+   if(control.checkout_kind!==c.checkoutKind||control.checkout_reference!==c.reference)fault('POS_TERMINAL_CONFLICT',null,409);
+   // Product titles can change without moving the terminal to another invoice.
+   if(control.checkout_title!==c.title)await db.query(`UPDATE avis_core_v2.checkout_pos_controls
+    SET checkout_title=$2,updated_at=now() WHERE terminal_id=$1`,[c.id,c.title]);
+  }
+  control=(await db.query(rowSql,[c.id])).rows[0];
   return control;
  }
  async resolve(_actor,input){
