@@ -6,7 +6,7 @@ import {PGlite} from '@electric-sql/pglite';
 import pg from 'pg';
 import {migrate} from '../src/migrate.mjs';
 import {SovereignCore} from '../src/core.mjs';
-import {parseAbiqIban,resolveAbiqAccount} from '../src/avispay-core-accounts.mjs';
+import {findAbiqAccountIdentifier,parseAbiqIban,resolveAbiqAccount} from '../src/avispay-core-accounts.mjs';
 import {bookTreasuryOpening} from '../src/treasury-opening.mjs';
 
 let db,pool,core,snapshot,common,commonUsd,suspense,legacy,cryptoIds,unbridgedFunding;
@@ -120,9 +120,8 @@ test('populated upgrade adds identifiers without creating accounts or changing f
   const binding=(await rows('SELECT * FROM avis_core_v2.abiq_number_bindings WHERE ledger_account_id=$1',[id]))[0];
   assert.equal(binding.identifier,numbered.abiq_iban);
   assert.equal(binding.primary_for_ledger,true);
-  const formerResolved=await rows(`SELECT i.ledger_account_id FROM avis_core_v2.abiq_account_identifiers i
-   WHERE i.ledger_account_id IN (SELECT ledger_account_id FROM avis_core_v2.abiq_ledger_identifiers WHERE abiq_iban=$1)`,[old]);
-  assert.equal(formerResolved[0].ledger_account_id,id);
+  const formerResolved=await findAbiqAccountIdentifier(pool,{identifier:old,currency});
+  assert.equal(formerResolved.ledger_account_id,id);
  }
  const custody=await rows("SELECT a.account_id FROM avis_core_v2.ledger_accounts a JOIN avis_core_v2.abiq_account_identifiers i ON i.ledger_account_id=a.account_id WHERE a.wallet_scope='CUSTODY' AND a.network IS NULL");
  assert.ok(custody.length>0);
