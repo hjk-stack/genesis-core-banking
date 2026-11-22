@@ -130,9 +130,79 @@ export class PaymentServer extends SovereignCore {
    return {id,matched,unmatched:input.entries.length-matched};
   });
  }
+
+ async mirrorNostroMovement(actor,input,key){
+  const cashAccountId=text(input.cashAccountId,'cashAccountId',36);
+  if(!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(cashAccountId))fault('NOSTRO_ACCOUNT_NOT_FOUND','cashAccountId');
+  const reference=text(input.externalReference,'externalReference',128);
+  const direction=input.direction,rail=input.rail;
+  if(!['CREDIT','DEBIT'].includes(direction))fault('INVALID_FIELD','direction');
+  if(!['BANK_TRANSFER','CARD','IP_TO_IP','ISO20022','BANK_API','OTHER'].includes(rail))fault('INVALID_FIELD','rail');
+  const amount=decimal(money(input.amount));
+  const memo=input.memo?text(input.memo,'memo',250):null;
+  return this.operation(actor,'MIRROR_NOSTRO_MOVEMENT',input,key,async(db,k)=>{
+   const cash=(await db.query(`SELECT c.*,a.available_balance::text,a.locked_balance::text
+    FROM avis_core_v2.external_cash_accounts c JOIN avis_core_v2.ledger_accounts a USING(ledger_account_id)
+    WHERE c.cash_account_id=$1 AND c.is_active FOR UPDATE OF c,a`,[cashAccountId])).rows[0];
+   if(!cash)fault('NOSTRO_ACCOUNT_NOT_FOUND','cashAccountId',404);
+   if(cash.currency_code!==input.currency)fault('CURRENCY_MISMATCH','currency');
+   // Existing reconciled/settled provider transactions already affect this asset ledger.
+   const settled=(await db.query(`SELECT 1 FROM avis_core_v2.interbank_ip_transfers
+    WHERE cash_account_id=$1 AND bank_reference=$2 AND iso_status='ACCC'
+    UNION ALL SELECT 1 FROM avis_core_v2.clearing_statement_entries e
+    JOIN avis_core_v2.clearing_statements s USING(statement_id)
+    WHERE s.cash_account_id=$1 AND e.bank_reference=$2 LIMIT 1`,[cashAccountId,reference])).rows;
+   if(settled.length)fault('NOSTRO_ALREADY_SETTLED','externalReference',409);
+   if(direction==='DEBIT'&&
+    money(amount)>BigInt(Math.round((Number(cash.available_balance)-Number(cash.locked_balance))*1e6))*10n**12n)
+    fault('INSUFFICIENT_CLEARING_FUNDS','amount');
+   // A dedicated offset per Nostro is never a customer funding balance.
+   const offset=await this.system(db,'COMMON_POOL',cash.currency_code,'NOSTRO_MIRROR:'+cashAccountId,'LIABILITY');
+   const journalId=await this.post(db,actor,k,'NOSTRO_MANUAL_MIRROR',reference,[
+    line(cash.ledger_account_id,direction==='CREDIT'?'DEBIT':'CREDIT',amount),
+    line(offset,direction==='CREDIT'?'CREDIT':'DEBIT',amount)
+   ]);
+   const mirrorId=randomUUID();
+   await db.query(`INSERT INTO avis_core_v2.nostro_manual_mirrors
+    (mirror_id,cash_account_id,journal_id,external_reference,direction,rail,amount,currency_code,memo,actor_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [mirrorId,cashAccountId,journalId,reference,direction,rail,amount,cash.currency_code,memo,actor.id]);
+   return {id:mirrorId,journalId,cashAccountId,externalReference:reference,direction,amount,currency:cash.currency_code};
+  });
+ }
+ async linkNostroGateway(actor,input,key){
+  const gatewayCode=text(input.gatewayCode,'gatewayCode',32),cashAccountId=text(input.cashAccountId,'cashAccountId',36);
+  return this.operation(actor,'LINK_NOSTRO_CARD_GATEWAY',input,key,async db=>{
+   const cash=(await db.query('SELECT cash_account_id,is_active FROM avis_core_v2.external_cash_accounts WHERE cash_account_id=$1 FOR SHARE',[cashAccountId])).rows[0];
+   if(!cash?.is_active)fault('NOSTRO_ACCOUNT_NOT_FOUND','cashAccountId',404);
+   const gateway=(await db.query('SELECT gateway_code,clearing_account_id FROM avis_core_v2.payment_gateway_bridges WHERE gateway_code=$1 FOR UPDATE',[gatewayCode])).rows[0];
+   if(!gateway)fault('NOSTRO_GATEWAY_NOT_FOUND','gatewayCode',404);
+   if(gateway.clearing_account_id&&gateway.clearing_account_id!==cashAccountId)fault('NOSTRO_GATEWAY_ALREADY_LINKED','gatewayCode',409);
+   await db.query('UPDATE avis_core_v2.payment_gateway_bridges SET clearing_account_id=$2 WHERE gateway_code=$1',[gatewayCode,cashAccountId]);
+   return {id:gatewayCode,gatewayCode,cashAccountId};
+  });
+ }
  async list(actor,view){
   if(!actor?.admin)fault('FORBIDDEN',null,403);
   const queries={
+   nostroclearing:`SELECT c.cash_account_id,c.ledger_account_id,c.institution_type,c.institution_name,c.bic_code,c.iban_or_account_no,
+    c.currency_code,c.is_active,a.available_balance::text,a.locked_balance::text,
+    COALESCE((SELECT string_agg(p.profile_id||' ('||p.protocol||')',', ' ORDER BY p.profile_id)
+     FROM avis_core_v2.bank_connector_profiles p WHERE p.cash_account_id=c.cash_account_id),'') AS bank_connectors,
+    COALESCE((SELECT string_agg(g.display_name,', ' ORDER BY g.gateway_code)
+     FROM avis_core_v2.payment_gateway_bridges g WHERE g.clearing_account_id=c.cash_account_id),'') AS card_gateways
+    FROM avis_core_v2.external_cash_accounts c JOIN avis_core_v2.ledger_accounts a USING(ledger_account_id)
+    ORDER BY c.institution_name,c.currency_code LIMIT 300`,
+   nostromovements:`SELECT e.entry_id,e.created_at,c.cash_account_id,c.institution_name,c.currency_code,
+    e.direction,e.amount::text,e.running_balance::text,j.event_type,
+    COALESCE(m.external_reference,j.reference_id) AS external_reference,m.rail,m.memo,
+    CASE WHEN m.mirror_id IS NOT NULL THEN 'MANUAL' ELSE 'SETTLEMENT' END AS source
+    FROM avis_core_v2.ledger_entries e JOIN avis_core_v2.external_cash_accounts c ON c.ledger_account_id=e.account_id
+    JOIN avis_core_v2.ledger_journals j USING(journal_id)
+    LEFT JOIN avis_core_v2.nostro_manual_mirrors m ON m.journal_id=e.journal_id
+    ORDER BY e.entry_id DESC LIMIT 300`,
+   nostrogateways:`SELECT gateway_code,display_name,gateway_category,is_active,clearing_account_id
+    FROM avis_core_v2.payment_gateway_bridges ORDER BY gateway_code`,
    bankprofiles:`SELECT p.profile_id,c.display_name,p.protocol,p.local_bic,p.peer_bic,p.cash_account_id,a.currency_code,c.endpoint_url FROM avis_core_v2.bank_connector_profiles p JOIN avis_core_v2.platform_connectors c ON c.connector_code=p.profile_id JOIN avis_core_v2.external_cash_accounts a USING(cash_account_id) ORDER BY profile_id`,
    bankroutes:`SELECT b.abiq_iban,r.account_number,r.bank_bic,r.currency_code,r.connector_code FROM avis_core_v2.abiq_bank_routes r JOIN avis_core_v2.abiq_routing_bridge b USING(bridge_id) ORDER BY b.user_id LIMIT 300`,
    bankpayments:`SELECT t.transfer_id,t.uetr,t.direction,t.profile_id,t.debtor_iban,t.creditor_iban,t.raw_iso_payload->>'creditorName' AS creditor_name,COALESCE(t.raw_iso_payload->>'reference',j.reference_id) AS payment_reference,t.amount::text,t.currency_code,t.iso_status AS status,t.bank_reference,t.created_at,o.status AS delivery FROM avis_core_v2.interbank_ip_transfers t LEFT JOIN avis_core_v2.payment_outbox o USING(transfer_id) LEFT JOIN avis_core_v2.ledger_journals j ON j.journal_id=t.journal_id ORDER BY t.created_at DESC LIMIT 300`,
