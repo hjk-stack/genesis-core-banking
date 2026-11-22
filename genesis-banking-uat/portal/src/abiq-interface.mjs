@@ -21,7 +21,11 @@ export async function processAbiqRequest(core,actor,input) {
   try {
    const parsed=parseAbiqIban(request.ABIQ_INFO?.abiqIBAN);
    const account=await findAbiqAccountIdentifier(core.pool,{identifier:parsed.identifier,currency:parsed.currency});
-   return response(h,account?'00':'34',account?'Request processed successfully':'Invalid account');
+   const portfolio=!account && parsed.currency==='579' && (await core.pool.query(
+    'SELECT 1 FROM avis_core_v2.portfolio_abiq_accounts WHERE identifier=$1 AND ($2::bigint IS NULL OR user_id=$2)',
+    [parsed.identifier,actor.customerUserId||null])).rowCount>0;
+   const found=Boolean(account||portfolio);
+   return response(h,found?'00':'34',found?'Request processed successfully':'Invalid account');
   } catch(e) {if(e.code?.startsWith('ABIQ_'))return response(h,'34','Invalid account');throw e;}
  }
  const code=h.function==='ORDER'?request.ORDER_INFO?.abiqCODE:request.ABIQ_INFO?.abiqCODE;

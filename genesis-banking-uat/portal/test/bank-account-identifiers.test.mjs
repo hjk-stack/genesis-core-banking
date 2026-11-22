@@ -95,14 +95,14 @@ after(async()=>{if(db)await db.close();else await pool.end();});
 test('populated upgrade adds identifiers without creating accounts or changing financial and securities history',async()=>{
  const expected={...snapshot,sovereign_users:snapshot.sovereign_users.map(user=>({...user,merged_into_user_id:null}))};
  assert.deepEqual(await financialSnapshot(),expected);
- const eligible=await rows(`SELECT a.account_id,a.currency_code FROM avis_core_v2.ledger_accounts a
+ const eligible=await rows(`SELECT a.account_id,a.currency_code,a.wallet_scope,r.action FROM avis_core_v2.ledger_accounts a LEFT JOIN avis_core_v2.legacy_account_cleanup r USING(account_id)
   JOIN avis_core_v2.abiq_currencies c USING(currency_code) WHERE a.network IS NULL ORDER BY a.account_id`);
  const identifiers=await rows('SELECT * FROM avis_core_v2.abiq_account_identifiers ORDER BY ledger_account_id');
  assert.equal(identifiers.length,eligible.length);
  assert.equal(new Set(identifiers.map(a=>a.abiq_iban)).size,identifiers.length);
  for(const row of eligible){
   const numbered=identifiers.find(i=>i.ledger_account_id===row.account_id);
-  assert.ok(numbered,row.account_id);assert.equal(parseAbiqIban(numbered.abiq_iban).currency,row.currency_code);
+  assert.ok(numbered,row.account_id);assert.equal(parseAbiqIban(numbered.abiq_iban).currency,row.action==='RENUMBER'&&row.wallet_scope==='CUSTODY'?'579':row.currency_code);
  }
  for(const id of [common,suspense]){
   const numbered=await account(id);assert.equal(numbered.identifier_source,'LEDGER_REGISTRY');

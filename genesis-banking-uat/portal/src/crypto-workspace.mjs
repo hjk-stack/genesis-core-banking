@@ -213,8 +213,9 @@ export class CryptoWorkspace extends SecuritiesPortfolio {
    if(actor.customerUserId)fault('FORBIDDEN',null,403);
    return (await this.pool.query(`SELECT t.booking_id,t.source_system,t.source_reference,t.owner_user_id,t.asset_class,
     t.asset_code,t.asset_name,t.isin,t.quantity::text,t.destination,t.ledger_account_id,t.journal_id,t.booking_reference,t.booked_by,t.booked_at,
-    p.position_id,p.security_id
+    p.position_id,p.security_id,pa.identifier AS portfolio_abiq_iban
     FROM avis_core_v2.treasury_opening_positions t LEFT JOIN avis_core_v2.portfolio_positions p ON p.treasury_booking_id=t.booking_id
+    LEFT JOIN avis_core_v2.portfolio_abiq_accounts pa ON pa.user_id=t.owner_user_id AND t.asset_class='SECURITY'
     ORDER BY t.asset_class,t.asset_code`)).rows;
   }
   if(view==='cryptomarkets')return (await this.pool.query('SELECT * FROM avis_core_v2.crypto_assets WHERE market_rank IS NOT NULL ORDER BY market_rank LIMIT 200')).rows;

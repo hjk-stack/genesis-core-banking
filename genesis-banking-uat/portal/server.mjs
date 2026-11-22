@@ -188,7 +188,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const reply=await buildPacs002({messageId:randomBytes(16).toString('hex'),uetr:original.uetr,senderBic:p.local_bic,receiverBic:p.peer_bic,status:receipt.status,bankReference:receipt.id.replaceAll('-','')});
     res.setHeader('content-type','application/xml');return res.end(reply);
    }
-   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/portfolio.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
+   if(req.method==='GET'&&['/','/card-message','/app.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
     const file=path==='/'?'index.html':path==='/card-message'?'public/card-message.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     // Always present the deployed UAT revision's current application source after an update.
@@ -248,6 +248,9 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    }
    if((path==='/api/abiq/generator'||path.startsWith('/api/abiq/generator/'))&&!session.is_admin)
     fault('FORBIDDEN',null,403);
+   if(path==='/api/abiq/cleanup'&&(!session.is_admin||!actor.admin))fault('FORBIDDEN',null,403);
+   if(path==='/api/abiq/cleanup'&&req.method==='GET')
+    return send(res,200,{rows:(await pool.query('SELECT * FROM avis_core_v2.legacy_account_review ORDER BY user_id,currency_code,wallet_scope,account_id')).rows});
    if(path==='/api/abiq/generator/available'&&req.method==='GET')
     return send(res,200,await availableGeneratorNumbers(pool,actor,url.searchParams.get('currency'),url.searchParams.get('after'),url.searchParams.get('accountId')));
    if(path==='/api/abiq/generator'&&req.method==='GET')
@@ -282,6 +285,21 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    }
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
+   if(path==='/api/abiq/cleanup'){
+    if(!Array.isArray(body.rows)||!body.rows.length||body.rows.length>500)fault('INVALID_FIELD','rows');
+    const result=await core.operation(actor,'REPAIR_LEGACY_ACCOUNTS',body,req.headers['idempotency-key'],async db=>{
+     await db.query('LOCK TABLE avis_core_v2.portfolio_positions,avis_core_v2.portfolio_securities,avis_core_v2.sovereign_users IN SHARE MODE');
+     let removed=0,renumbered=0;
+     for(const row of [...body.rows].sort((a,b)=>String(a.account_id).localeCompare(String(b.account_id)))){
+      if(!row||!['DELETE','RENUMBER'].includes(row.action)||!/^[a-f0-9-]{36}$/i.test(row.account_id))fault('INVALID_FIELD','rows');
+      try{await db.query('SELECT avis_core_v2.repair_legacy_account($1,$2,$3)',[row.account_id,row.action,actor.id]);}
+      catch(e){if(e.message==='ACCOUNT_REVIEW_CHANGED')fault('ACCOUNT_REVIEW_CHANGED','rows',409);throw e;}
+      if(row.action==='DELETE')removed++;else renumbered++;
+     }
+     return {removed,renumbered};
+    });
+    return send(res,200,result);
+   }
    if(path==='/api/abiq/generator'||path==='/api/abiq/generator/assign'){
     const scoped=actor.admin?actor:customerAccess.operator(actor);
     const operation=path.endsWith('/assign')?assignGeneratorNumber:issueGeneratorNumber;

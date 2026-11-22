@@ -77,8 +77,9 @@ export async function greenBondCatalogue(fetcher=fetch){
 const securitySelect=`SELECT security_id,name,short_name,currency_code,isin,cusip,denomination::text,quote_basis,quantity_decimals,kind,source,exchange_symbol,reference_price::text,source_updated_at FROM avis_core_v2.portfolio_securities`;
 const positionSelect=`SELECT p.position_id,p.user_id,u.full_name,u.account_role,s.security_id,s.name,s.short_name,s.currency_code,s.isin,s.cusip,s.denomination::text,s.quote_basis,s.kind,s.source,s.exchange_symbol,
  p.quantity::text,p.reserved_quantity::text,(p.quantity-p.reserved_quantity)::text AS available_quantity,p.issuing_price::text,p.market_price::text,p.version,p.updated_at,
- p.treasury_booking_id,t.source_reference AS treasury_source_reference
+ pa.identifier AS portfolio_abiq_iban,p.treasury_booking_id,t.source_reference AS treasury_source_reference
  FROM avis_core_v2.portfolio_positions p JOIN avis_core_v2.portfolio_securities s USING(security_id) JOIN avis_core_v2.sovereign_users u USING(user_id)
+ LEFT JOIN avis_core_v2.portfolio_abiq_accounts pa ON pa.user_id=p.user_id AND s.kind NOT IN ('token','crypto')
  LEFT JOIN avis_core_v2.treasury_opening_positions t ON t.booking_id=p.treasury_booking_id`;
 
 export class SecuritiesPortfolio extends AccountManagement {

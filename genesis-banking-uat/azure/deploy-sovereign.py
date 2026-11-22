@@ -161,7 +161,7 @@ ABIQ_CURRENCY_NUMBERS = {
 }
 
 
-def validate_bank_identifier(identifier, currency):
+def validate_bank_identifier(identifier, currency, scope=None):
     """Validate supported primary, serial and legacy ABIQ identifiers without logging them."""
     if not isinstance(identifier, str) or currency not in ABIQ_CURRENCY_NUMBERS:
         raise RuntimeError('Bank account identifier missing or currency unsupported')
@@ -170,6 +170,8 @@ def validate_bank_identifier(identifier, currency):
     legacy = re.fullmatch(r'AQ[0-9]{2}[A-Z0-9]{4}0([0-9]{3})([0-9]{14})', identifier)
     match = numbered or serial or legacy
     iso_numeric, series = ABIQ_CURRENCY_NUMBERS[currency]
+    if numbered and scope == 'CUSTODY' and numbered[1] == '579':
+        iso_numeric, series = '579', 15
     if (not match or match[1] != iso_numeric
             or numbered and (int(numbered[2]) != series or int(numbered[3]) < 1000101)
             or not numbered and int(match[2]) < 1):
@@ -192,7 +194,7 @@ def verify_bank_account_identifiers(opener, base, accounts, ledger):
         if not isinstance(row, dict) or row.get('network') is not None:
             raise RuntimeError('Crypto wallet appeared as a bank account')
         identifier, account_id = row.get('abiq_iban'), row.get('account_id')
-        validate_bank_identifier(identifier, row.get('currency_code'))
+        validate_bank_identifier(identifier, row.get('currency_code'), row.get('wallet_scope'))
         if (not isinstance(account_id, str) or not account_id
                 or row.get('account_reference') != identifier
                 or row.get('wallet_scope') not in ('FUNDING', 'MARGIN', 'CUSTODY')):
@@ -800,14 +802,33 @@ def main():
             for currency in ['EUR', 'USD', 'GBP']:
                 account = next(a for a in accounts if str(a['user_id']) == uid and a['currency_code'] == currency and a['participant_code'] == 'AVIP')
                 scopes = [row for row in ledger if str(row['user_id']) == uid and row['currency_code'] == currency and row['sub_account_code'] == 'ABIQ:AVIP' and row['network'] is None]
-                if {row['wallet_scope'] for row in scopes} != {'FUNDING', 'MARGIN', 'CUSTODY'} or len(scopes) != 3:
+                scope_names = [row['wallet_scope'] for row in scopes]
+                if scope_names.count('FUNDING') != 1 or len(scope_names) != len(set(scope_names)) or not set(scope_names) <= {'FUNDING', 'MARGIN', 'CUSTODY'}:
                     raise RuntimeError('Ledger account scopes mismatch')
                 for row in scopes:
                     if (row['wallet_scope'] == 'FUNDING' and row['abiq_iban'] != account['abiq_iban']
                             or row['owner_class'] != holders[uid]['account_role']
                             or row['account_holder'] != holders[uid]['full_name']):
                         raise RuntimeError('Ledger account details mismatch')
-        print('Verified distinct ABIQ references, preserved primary funding identifiers, institution/customer roles and all three ledger scopes')
+        print('Verified distinct ABIQ references, primary funding identifiers and holder roles for active scopes')
+        review = api(opener, base, '/api/abiq/cleanup')['rows']
+        print('Legacy accounts awaiting review: ' + json.dumps({action: sum(r['action'] == action for r in review)
+              for action in ('DELETE', 'RENUMBER')}))
+        for view, crypto_field, crypto_values in [('securitypositions', 'kind', ('token', 'crypto')),
+                                                 ('treasurypositions', 'asset_class', ('CRYPTO',))]:
+            portfolio_rows = api(opener, base, '/api/views/' + view)['rows']
+            for row in portfolio_rows:
+                identifier = row.get('portfolio_abiq_iban')
+                if row[crypto_field] in crypto_values:
+                    if identifier is not None:
+                        raise RuntimeError('Crypto holding received a portfolio ABIQ')
+                else:
+                    if not re.fullmatch(r'TN[0-9]{2}AVIP00057900015[0-9]{7}', identifier or ''):
+                        raise RuntimeError('Missing portfolio custody ABIQ')
+                    expanded = ''.join(str(ord(c) - 55) if c.isalpha() else c for c in identifier[4:] + identifier[:4])
+                    if int(expanded) % 97 != 1:
+                        raise RuntimeError('Portfolio custody checksum mismatch')
+            print('Verified portfolio ABIQ assignments for ' + view + ': ' + str(len(portfolio_rows)) + ' rows')
         stage = 'published FX data verification'
         expected_fx = {'EUR', 'GBP', 'CHF', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'HUF', 'RON', 'USD', 'SGD', 'JPY'}
         # Startup refresh is asynchronous. Read public price metadata only; never submit a conversion.
