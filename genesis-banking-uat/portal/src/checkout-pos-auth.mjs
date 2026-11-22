@@ -4,7 +4,7 @@ import {fault} from './core.mjs';
 // The website's existing Ed25519 public key is used with a distinct POS-only
 // audience and token type; INDEX credentials cannot authorize this interface.
 const JWKS='https://avis.land/press/api/index-service/jwks';
-const ROUTES=new Set(['/api/services/checkout-pos/resolve','/api/services/checkout-pos/status','/api/services/checkout-pos/request']);
+const ROUTES=new Set(['/api/services/checkout-pos/resolve','/api/services/checkout-pos/status','/api/services/checkout-pos/request','/api/services/checkout-ip/register','/api/services/checkout-ip/status']);
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const deny=()=>fault('POS_SERVICE_AUTH',null,401);
 const decode=value=>{
