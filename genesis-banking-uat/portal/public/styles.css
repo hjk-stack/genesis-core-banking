@@ -186,29 +186,3 @@ textarea{box-sizing:border-box;width:100%;font:inherit;border:1px solid #d6dbe3;
 .checkout-ip-table [data-ip-handler]{white-space:nowrap;border:1px solid #8a9cad;border-radius:10px;padding:9px 12px;cursor:pointer;background:#f5f8fc}
 .checkout-ip-table .pos-liquid-switch[data-state="REQUESTED"]{animation:pos-request-pulse 1.15s ease-in-out infinite}
 @media(prefers-reduced-motion:reduce){.checkout-ip-table .pos-liquid-switch[data-state="REQUESTED"]{animation:none}}
-
-
-/* AVIS IP-to-IP handler: a single resizable, movable floating desk, never a browser popup. */
-.ip-handler-desk{
- position:fixed;z-index:2147483000;left:50%;top:50%;transform:translate(-50%,-50%);
- width:min(94vw,1380px);height:min(88vh,940px);min-width:340px;min-height:260px;
- display:flex;flex-direction:column;resize:both;overflow:hidden;
- background:#0b1018;border:1px solid #a5b7c8a8;border-radius:17px;
- box-shadow:0 22px 70px #000b,0 0 0 1px #fff3 inset;
-}
-.ip-handler-desk-bar{
- flex:none;height:52px;display:flex;align-items:center;justify-content:space-between;
- padding:0 12px 0 22px;cursor:move;touch-action:none;user-select:none;
- background:linear-gradient(120deg,#253747,#121922 60%,#354657);
- border-bottom:1px solid #ffffff42;color:#f6f9fc;
-}
-.ip-handler-desk-bar strong{font-size:14px;letter-spacing:.035em}
-.ip-handler-desk-bar button{
- border-radius:999px;background:linear-gradient(#f0f4fa,#a8b2be);
- color:#131923;border:1px solid #ffffffa0;width:32px;height:32px;
- font-size:25px;line-height:20px;cursor:pointer;
-}
-.ip-handler-desk-frame{flex:1;width:100%;min-height:0;border:0;background:#101620}
-@media(max-width:600px){
- .ip-handler-desk{width:96vw;height:88dvh;min-width:0;max-height:94dvh}
-}
