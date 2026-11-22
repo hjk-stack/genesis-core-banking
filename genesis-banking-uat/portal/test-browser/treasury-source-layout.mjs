@@ -147,7 +147,7 @@ for(const width of [1440,834,390])test('recorded Treasury source registers throu
   await dialog().locator('[name=shortName]').waitFor();
   await geometry(page,'security metadata form '+width);
   assert.equal(await dialog().locator('[name=name]').inputValue(),source.asset_name);
-  assert.equal(await dialog().locator('[name=name]').getAttribute('readonly'),'');
+  assert.equal(await dialog().locator('[name=name]').getAttribute('readonly'),null,'security name can be edited in the registration window');
   for(const name of ['currency','isin','cusip','denomination','quoteBasis','quantityDecimals'])assert.equal(await dialog().locator('[name='+name+']').inputValue(),'',name+' has no invented value');
   assert.equal(await dialog().locator('[name=kind]').inputValue(),'share');assert.equal(await dialog().locator('[name=kind]').isDisabled(),true);
   await dialog().locator('[name=shortName]').fill('AVISP');
