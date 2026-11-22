@@ -19,6 +19,11 @@ const intermediary={intermediary_id:'99999999-9999-4999-8999-999999999992',
  account_name:'AVISPay PLC intermediary',aba:'021000021',reference:'INTERMEDIARY-REF',
  bic_code:'CHASUS33XXX',account_number:'TRANSIT-001',
  parent_bank_name:nostroCash.institution_name,parent_currency:'USD',parent_account:nostroCash.iban_or_account_no};
+nostroCash.intermediaries=[{
+ intermediaryId:intermediary.intermediary_id,bankName:intermediary.bank_name,bankAddress:intermediary.bank_address,
+ accountName:intermediary.account_name,aba:intermediary.aba,reference:intermediary.reference,
+ bic:intermediary.bic_code,accountNumber:intermediary.account_number
+}];
 const posRequestAt=new Date(Date.now()-60_000).toISOString(),posExpiresAt=new Date(Date.now()+59*60_000).toISOString();
 const posFixtures=[
  {terminal_id:'11TNCON12',merchant_id:'AVISPAY-WEB-POS',terminal_type:'WEB_POS',status:'ACTIVE',activation_state:'REQUESTED',checkout_kind:'MILESTONE',checkout_reference:'AVIS-TN-12',checkout_title:'Tunisia · Road development',requested_at:posRequestAt,expires_at:posExpiresAt,approved_at:null,expired_at:null},
