@@ -277,7 +277,7 @@ const authOptions=()=> (cache.authorizations||[]).filter(a=>a.status==='AUTHORIZ
 const currencySelect=()=>select('currency','Currency',currencies.map(c=>[c,c]));
 const checkboxCurrencies=()=>`<fieldset><legend>Account currencies</legend><div class="currency-grid">${currencies.map(c=>`<label><input type="checkbox" name="currencies" value="${c}" ${c==='EUR'?'checked':''}>${c}</label>`).join('')}</div></fieldset>`;
 const profiles=()=>select('profileId','Bank connector',(cache.bankprofiles||[]).map(p=>[p.profile_id,`${p.display_name} · ${p.currency_code}`]));
-const bankDirectoryFields=()=>input('bankName','Bank name','text','maxlength="100"')+
+const bankDirectoryFields=(includeName=true)=>(includeName?input('bankName','Bank name','text','maxlength="100"'):'')+
  input('bankAddress','Bank address','text','maxlength="300"')+
  input('accountName','Account name','text','maxlength="140"')+
  '<label>ABA routing number (US banks)<input name="aba" aria-label="ABA routing number" inputmode="numeric" maxlength="9" pattern="[0-9]{9}" placeholder="9 digits, where applicable"></label>'+
@@ -308,10 +308,10 @@ offlinesync:{title:'Settle signed offline batch',path:'offline/sync',button:'Ver
 offlineclose:{title:'Release remaining offline allowance',path:'offline/close',button:'Release remaining balance',fields:()=>select('grantId','Allowance',(cache.offlinegrants||[]).filter(g=>g.status==='ACTIVE'&&new Date(g.settle_by).getTime()<Date.now()).map(g=>[g.grant_id,`${g.last_four_digits} · ${g.grant_id}`]))},
 
 cashaccount:{title:'Register NOSTRO clearing account',path:'correspondents',button:'Register account',
- fields:()=>input('institutionName','Institution name','text','maxlength="100"')+
+ fields:()=>input('institutionName','Bank name','text','maxlength="100"')+
  select('institutionType','Account class',['CENTRAL_BANK','CORRESPONDENT_BANK','CORE_BANK_OMNIBUS','CARD_SCHEME_SETTLEMENT'].map(x=>[x,label(x)]))+
  input('bic','Bank BIC','text','maxlength="11"')+input('accountNumber','External account number','text','maxlength="128"')+
- currencySelect()+bankDirectoryFields()},
+ currencySelect()+bankDirectoryFields(false)},
  editcashaccount:{title:'Edit registered NOSTRO bank details',path:'correspondents/details',button:'Save bank details',
  fields:()=>'<input type="hidden" name="cashAccountId">'+bankDirectoryFields()},
  intermediarybank:{title:'Register intermediary bank',path:'nostro/intermediary',button:'Register intermediary bank',
