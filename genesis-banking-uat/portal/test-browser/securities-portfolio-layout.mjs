@@ -37,6 +37,23 @@ for(const width of [1440,834,390])test('securities columns and five populated ho
   await dialog.getByRole('heading',{name:'Please check your order'}).waitFor();assert.equal(calls.at(-1).path,'/api/portfolio/orders/review');assert.equal(calls.at(-1).body.total,'980.00');assert.equal(calls.at(-1).body.accountId,account.account_id);await dialog.getByRole('button',{name:'Buy',exact:true}).click();await page.getByText('Order entered in AVISPay Exchange.',{exact:true}).waitFor();assert.equal(calls.at(-1).body.reviewHash,'review-fixture');assert.equal(await page.locator('dialog[open]').count(),0);assert.deepEqual(errors,[]);
  }finally{await page.close();}
 });
+for(const width of [1440,834,390])test('Buy Sell Edit buttons remain horizontal at '+width+'px',async()=>{
+ const page=await browser.newPage({viewport:{width,height:950}});
+ try{
+  await page.goto(base+'/admin#portfolio');
+  await page.getByRole('heading',{name:'Securities portfolio',exact:true}).waitFor();
+  const actions=page.locator('.securities-row-actions').first();
+  const buttons=actions.locator('button');
+  assert.deepEqual(await buttons.allTextContents(),['Buy','Sell','Edit']);
+  const positions=await Promise.all([0,1,2].map(i=>buttons.nth(i).boundingBox()));
+  assert.ok(positions.every(Boolean));
+  assert.ok(positions.every(p=>Math.abs(p.y-positions[0].y)<2),'all three actions are on one horizontal row');
+  assert.ok(positions[0].x+positions[0].width<=positions[1].x+1);
+  assert.ok(positions[1].x+positions[1].width<=positions[2].x+1);
+  assert.equal(await actions.evaluate(el=>getComputedStyle(el).flexWrap),'nowrap');
+  await buttons.nth(2).click();await page.locator('#portfolio-dialog').getByRole('heading',{name:'Edit portfolio holding'}).waitFor();
+ }finally{await page.close();}
+});
 for(const method of ['CARD','CRYPTO'])test(method+' order option uses the selected purse/holding and calculates its review',async()=>{
  const page=await browser.newPage();try{await page.goto(base+'/customer#portfolio');await page.locator('.view-header').getByRole('button',{name:'Buy',exact:true}).click();const d=page.locator('#portfolio-dialog');await d.getByLabel('Security · Green Bond / registered securities').selectOption(security.security_id);await d.getByRole('button',{name:'Next',exact:true}).click();await d.getByLabel('Pay with',{exact:true}).selectOption(method);await d.getByRole('button',{name:'Next',exact:true}).click();await d.getByLabel('Quantity',{exact:true}).fill('1');await d.getByRole('button',{name:'Next',exact:true}).click();if(method==='CRYPTO')await d.getByText('Crypto to debit: 490.00 AG',{exact:true}).waitFor();await d.getByLabel('Reference',{exact:true}).fill(method+' purchase');await d.getByRole('button',{name:'Review order',exact:true}).click();await d.getByRole('heading',{name:'Please check your order'}).waitFor();const sent=calls.at(-1).body;assert.equal(sent.paymentMethod,method);assert.equal(sent.accountId,method==='CARD'?card.card_account_id:cryptoHolding.account_id);if(method==='CARD')assert.equal(sent.cardId,card.card_id);else assert.ok(sent.offerId);await page.keyboard.press('Escape');assert.equal(await page.locator('dialog[open]').count(),0);}finally{await page.close();}
 });
