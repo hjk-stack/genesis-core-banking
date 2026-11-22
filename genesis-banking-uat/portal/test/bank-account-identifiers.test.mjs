@@ -215,7 +215,8 @@ test('numbered identities cannot be reassigned, changed to crypto, or collide wi
  for(const change of ["owner_type='SUSPENSE_INBOUND'","owner_type='USER',user_id=2","wallet_scope='CUSTODY'","account_category='ASSET'","sub_account_code='REPLACEMENT'"])
   await assert.rejects(pool.query(`UPDATE avis_core_v2.ledger_accounts SET ${change} WHERE account_id=$1`,[common]),/ABIQ_LEDGER_IDENTITY_MISMATCH/);
  await assert.rejects(pool.query('UPDATE avis_core_v2.abiq_routing_bridge SET account_number=$2 WHERE bridge_id=$1',[bridge.bridge_id,numbered.account_number]),/ABIQ_IDENTIFIER_ALREADY_ASSIGNED/);
- await assert.rejects(pool.query('INSERT INTO avis_core_v2.abiq_identifier_aliases(identifier,bridge_id) VALUES($1,$2)',[numbered.abiq_iban,bridge.bridge_id]),/ABIQ_IDENTIFIER_ALREADY_ASSIGNED/);
+ const preservedSerial=(await rows('SELECT abiq_iban FROM avis_core_v2.abiq_ledger_identifiers WHERE ledger_account_id=$1',[common]))[0].abiq_iban;
+ await assert.rejects(pool.query('INSERT INTO avis_core_v2.abiq_identifier_aliases(identifier,bridge_id) VALUES($1,$2)',[preservedSerial,bridge.bridge_id]),/ABIQ_IDENTIFIER_ALREADY_ASSIGNED/);
  const invalidAssignments=[
   {currency:'USD',partition:'0840',serial:99999999999991,expected:/ABIQ_LEDGER_IDENTITY_MISMATCH/},
   {currency:'EUR',partition:'0840',serial:99999999999992,expected:/foreign key/},
