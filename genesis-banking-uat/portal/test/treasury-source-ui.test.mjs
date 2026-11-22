@@ -39,7 +39,7 @@ function fixture(options={}){
    state.securities=[{security_id:SECURITY,name:input.name,short_name:input.shortName,currency_code:input.currency,isin:input.isin,cusip:input.cusip,kind:input.kind,denomination:input.denomination,quote_basis:input.quoteBasis,quantity_decimals:input.quantityDecimals}];
    return {id:SECURITY};
   }
-  if(path==='portfolio/treasury-source')return {...receipt};
+  if(path==='portfolio/treasury-source'||path==='portfolio/treasury-source/edit')return {...receipt};
   throw Error('Unexpected API '+path);
  };
  const getDialog=()=>dom.window.document.querySelector('dialog');
@@ -60,7 +60,7 @@ test('empty catalogue collects explicit security metadata and prices before link
  assert.match(form.querySelector('[data-treasury-source]').textContent,/30000000000/);
  await submit(form);assert.equal(ui.writes().length,0,'missing security and prices cannot submit');
  form.querySelector('[data-source-add-security]').click();form=ui.form();
- assert.equal(form.elements.name.value,source.asset_name);assert.equal(form.elements.name.readOnly,true);
+ assert.equal(form.elements.name.value,source.asset_name);assert.equal(form.elements.name.readOnly,false);
  for(const name of ['currency','isin','cusip','denomination','quoteBasis','quantityDecimals'])assert.equal(form.elements[name].value,'',name+' must not be invented');
  assert.equal(form.elements.kind.value,'share');assert.equal(form.elements.kind.disabled,true);
  await submit(form);assert.equal(ui.writes().length,0,'metadata requires explicit values');
@@ -78,14 +78,30 @@ test('empty catalogue collects explicit security metadata and prices before link
  assert.deepEqual(ui.registered,[receipt]);assert.equal(ui.dialog(),null);
 });
 
-test('an existing owner position retains its recorded prices and is reused without recording a second holding',async()=>{
- const ui=fixture({source:{security_id:SECURITY},securities:[security],positions:[{position_id:POSITION,user_id:1,security_id:SECURITY,issuing_price:'0.000000000000000000',market_price:'12.123456789012345678'}]});
+test('a linked Treasury holding opens editable units, prices and security identity and saves its revision',async()=>{
+ const linked={position_id:POSITION,user_id:1,security_id:SECURITY,quantity:'30000000000',version:4,
+  issuing_price:'0.000000000000000000',market_price:'12.123456789012345678'};
+ const ui=fixture({source:{security_id:SECURITY},securities:[security],positions:[linked]});
  await ui.open();const form=ui.form();
- assert.equal(form.elements.securityId.value,SECURITY);assert.equal(form.elements.issuingPrice.readOnly,true);assert.equal(form.elements.marketPrice.readOnly,true);
- assert.equal(form.elements.issuingPrice.value,'0');assert.equal(form.elements.marketPrice.value,'12.123456789012345678');
- assert.equal(ui.writes().length,0);await submit(form);
- assert.deepEqual(ui.writes().map(c=>c.path),['portfolio/treasury-source']);
- assert.equal(ui.writes()[0].input.issuingPrice,'0');assert.equal(ui.writes()[0].input.marketPrice,'12.123456789012345678');
+ assert.equal(form.elements.securityId.value,SECURITY);
+ assert.equal(form.elements.quantity.readOnly,false);
+ assert.equal(form.elements.issuingPrice.readOnly,false);
+ assert.equal(form.elements.marketPrice.readOnly,false);
+ assert.equal(form.elements.quantity.value,'30000000000');
+ assert.equal(form.elements.issuingPrice.value,'0');
+ assert.equal(form.elements.marketPrice.value,'12.123456789012345678');
+ assert.equal(form.elements.name.value,source.asset_name);
+ assert.equal(ui.writes().length,0);
+ set(form,'quantity','29999999999');set(form,'marketPrice','15');
+ set(form,'name','AVISPay PLC registered stock');set(form,'cusip','');
+ set(form,'reference','Treasury stock correction #21');
+ await submit(form);
+ assert.equal(ui.writes().length,1);assert.equal(ui.writes()[0].path,'portfolio/treasury-source/edit');
+ assert.deepEqual(ui.writes()[0].input,{bookingId:BOOKING,securityId:SECURITY,version:4,
+  quantity:'29999999999',issuingPrice:'0',marketPrice:'15',name:'AVISPay PLC registered stock',
+  shortName:'AVISP',isin:'CH0000000001',cusip:'',reference:'Treasury stock correction #21'});
+ assert.equal(ui.registered.length,1);
+ assert.equal(ui.state.source.quantity,source.quantity,'the original Treasury booking remains immutable');
 });
 
 test('another holder position supplies no default prices and recorded source identity restricts security choices',async()=>{
