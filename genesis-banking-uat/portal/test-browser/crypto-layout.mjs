@@ -94,9 +94,10 @@ before(async()=>{
    }
    return json({id:'result'});
   }
-  if(['/treasury-source.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(req.url)){
-   res.setHeader('content-type',req.url.endsWith('.jpg')?'image/jpeg':req.url.endsWith('.webp')?'image/webp':req.url.endsWith('.png')?'image/png':req.url.endsWith('.css')?'text/css':'text/javascript');
-   return res.end(await readFile(new URL('../public'+req.url,import.meta.url)));
+  if(['/treasury-source.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(req.url.split('?')[0])){
+   const asset=req.url.split('?')[0];
+   res.setHeader('content-type',asset.endsWith('.jpg')?'image/jpeg':asset.endsWith('.webp')?'image/webp':asset.endsWith('.png')?'image/png':asset.endsWith('.css')?'text/css':'text/javascript');
+   return res.end(await readFile(new URL('../public'+asset,import.meta.url)));
   }
   res.writeHead(404);res.end();
  });
