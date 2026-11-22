@@ -10,6 +10,15 @@ const common={account_id:'11111111-1111-4111-8111-111111111111',account_type:'CO
 const personal={account_id:'33333333-3333-4333-8333-333333333333',account_reference:'TN62AVIP000978000011000102',credit:'1000',debit:'0',reference_id:'Opening fixture',user_id:'2',full_name:'Frontend fixture',account_type:'PERSONAL',account_role:'CUSTOMER',abiq_iban:'TN62AVIP000978000011000102',wallet_scope:'FUNDING',status:'ACTIVE',currency_code:'EUR',available_balance:'1000',locked_balance:'0'},business={...personal,account_id:'44444444-4444-4444-8444-444444444444',account_reference:'TN89AVIP000978000011000101',user_id:'1',account_type:'BUSINESS',account_role:'INSTITUTION',full_name:'AVISPay PLC',abiq_iban:'TN89AVIP000978000011000101'};
 const custody={...business,account_id:'55555555-5555-4555-8555-555555555555',account_reference:issued25(900003),abiq_iban:issued25(900003),wallet_scope:'CUSTODY'},margin={...business,account_id:'66666666-6666-4666-8666-666666666666',account_reference:issued25(900004),abiq_iban:issued25(900004),wallet_scope:'MARGIN'};
 const security={security_id:'77777777-7777-4777-8777-777777777777',name:'Funding source fixture',short_name:'FUNDING EUR',currency_code:'EUR',denomination:'1000',quote_basis:'PERCENT',reference_price:'98'};
+const nostroCash={cash_account_id:'99999999-9999-4999-8999-999999999991',institution_name:'Existing NOSTRO Bank',
+ bank_address:'1 Original Street, New York, USA',account_name:'AVISPay PLC',aba:'021000021',bank_reference:'ORIGINAL-REF',
+ institution_type:'CORRESPONDENT_BANK',bic_code:'CHASUS33XXX',iban_or_account_no:'EXT-0001',
+ currency_code:'USD',available_balance:'20',locked_balance:'0',bank_connectors:'',card_gateways:''};
+const intermediary={intermediary_id:'99999999-9999-4999-8999-999999999992',
+ cash_account_id:nostroCash.cash_account_id,bank_name:'Global Transit Bank',bank_address:'45 London Road, UK',
+ account_name:'AVISPay PLC intermediary',aba:'021000021',reference:'INTERMEDIARY-REF',
+ bic_code:'CHASUS33XXX',account_number:'TRANSIT-001',
+ parent_bank_name:nostroCash.institution_name,parent_currency:'USD',parent_account:nostroCash.iban_or_account_no};
 const posRequestAt=new Date(Date.now()-60_000).toISOString(),posExpiresAt=new Date(Date.now()+59*60_000).toISOString();
 const posFixtures=[
  {terminal_id:'11TNCON12',merchant_id:'AVISPAY-WEB-POS',terminal_type:'WEB_POS',status:'ACTIVE',activation_state:'REQUESTED',checkout_kind:'MILESTONE',checkout_reference:'AVIS-TN-12',checkout_title:'Tunisia · Road development',requested_at:posRequestAt,expires_at:posExpiresAt,approved_at:null,expired_at:null},
@@ -36,7 +45,7 @@ before(async()=>{
     {currency:'579',label:'Custodial account',series:'00015',currencyBlock:'000579'}],
    customerNumbers:req.url.endsWith('holder=AVIP')?['1000101']:[],reusable:[],recent:[]
   });
-  if(req.url.startsWith('/api/views/')){const view=req.url.split('/').at(-1);reads.push(view);const fixtures={accounts:admin?[business,personal]:[personal],accountsummaries:admin?[business,custody,margin,personal]:[personal],customers:[business,personal],backofficeaccounts:[common,suspense],securities:[security],portfolio:[{currency_code:'AG',network:'ETHEREUM',available_balance:admin?'15.000000000000000000':'7.000000000000000000',locked_balance:'0'}],ledger:[{account_holder:'SHOULD NOT RENDER'}],transactions:[{reference_id:'SHOULD NOT RENDER'}],terminals:posFixtures};return respond({rows:fixtures[view]||[]});}
+  if(req.url.startsWith('/api/views/')){const view=req.url.split('/').at(-1);reads.push(view);const fixtures={accounts:admin?[business,personal]:[personal],accountsummaries:admin?[business,custody,margin,personal]:[personal],customers:[business,personal],backofficeaccounts:[common,suspense],nostroclearing:[nostroCash],nostrointermediaries:[intermediary],nostromovements:[],securities:[security],portfolio:[{currency_code:'AG',network:'ETHEREUM',available_balance:admin?'15.000000000000000000':'7.000000000000000000',locked_balance:'0'}],ledger:[{account_holder:'SHOULD NOT RENDER'}],transactions:[{reference_id:'SHOULD NOT RENDER'}],terminals:posFixtures};return respond({rows:fixtures[view]||[]});}
   if(req.method==='GET'&&(req.url.startsWith('/api/backoffice-accounts/')||req.url.startsWith('/api/accounts/'))){const id=req.url.split('/')[3].split('?')[0],account=[common,suspense,personal,business,custody,margin].find(a=>a.account_id===id),older=req.url.includes('?before='),entry={entry_id:older?'1':'2',journal_id:'fixture-journal',event_type:'OPENING',created_at:'2026-11-14T12:00:00Z',reference_id:older?'Earlier statement entry':'Selected account entry',direction:'CREDIT',amount:'100',running_balance:'100'};if(req.url.includes('/movements/'))return respond({account,entry});return respond({account,totals:{incoming:'100',outgoing:'10'},entries:[entry],nextCursor:older?null:'2'});}
   if(req.method==='POST'&&req.url.startsWith('/api/')){let raw='';for await(const chunk of req)raw+=chunk;calls.push({path:req.url,body:JSON.parse(raw)});if(req.url==='/api/terminals/activation'){
    const input=JSON.parse(raw),terminal=posFixtures.find(r=>r.terminal_id===input.terminalId);
@@ -222,5 +231,56 @@ test('the banking form shows server validation beside its field and accepts a co
   await name.fill('Updated holder');assert.equal(await name.getAttribute('aria-invalid'),null);
   await dialog.getByRole('button',{name:'Open account',exact:true}).click();await dialog.waitFor({state:'hidden'});
   assert.equal(attempts,2);
+ }finally{await page.close();}
+});
+
+test('NOSTRO and intermediary banking desk uses one Accounts & ABIQ page and floating registration forms',async()=>{
+ const page=await browser.newPage({viewport:{width:1080,height:980}}),errors=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ try{
+  await page.goto(base+'/admin#accounts');
+  const primary=page.locator('[data-nostro-register]'),transit=page.locator('[data-intermediary-register]');
+  await primary.waitFor();await transit.waitFor();
+  assert.match(await primary.innerText(),/1 Original Street/);
+  assert.match(await primary.innerText(),/ORIGINAL-REF/);
+  assert.match(await transit.innerText(),/INTERMEDIARY-REF/);
+  await page.getByRole('button',{name:'Register NOSTRO',exact:true}).click();
+  const dialog=page.locator('#form-dialog');
+  await dialog.waitFor({state:'visible'});
+  for(const label of ['Bank name','Bank address','Account name','ABA routing number','Reference'])
+   assert.equal(await dialog.getByLabel(label,{exact:label!=='ABA routing number'}).count(),1,label);
+  assert.equal(await dialog.evaluate(x=>x.parentElement.tagName),'BODY');
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  await primary.getByRole('button',{name:'Edit bank details'}).click();
+  await dialog.getByLabel('Bank name',{exact:true}).waitFor();
+  assert.equal(await dialog.getByLabel('Bank name',{exact:true}).inputValue(),'Existing NOSTRO Bank');
+  assert.equal(await dialog.getByLabel('Reference',{exact:true}).inputValue(),'ORIGINAL-REF');
+  await dialog.getByLabel('Bank address',{exact:true}).fill('7 Updated Street, New York');
+  await dialog.getByRole('button',{name:'Save bank details'}).click();
+  await page.getByText('Saved successfully.',{exact:true}).waitFor();
+  assert.equal(calls.at(-1).path,'/api/correspondents/details');
+  assert.equal(calls.at(-1).body.bankAddress,'7 Updated Street, New York');
+  assert.equal(calls.at(-1).body.cashAccountId,nostroCash.cash_account_id);
+  await primary.getByRole('button',{name:'Intermediary bank',exact:true}).click();
+  await dialog.getByLabel('Bank name',{exact:true}).waitFor();
+  assert.equal(await dialog.getByLabel('Related NOSTRO account').inputValue(),nostroCash.cash_account_id);
+  await dialog.getByLabel('Bank name',{exact:true}).fill('Another Clearing Bank');
+  await dialog.getByLabel('Bank address',{exact:true}).fill('2 Intermediary Square');
+  await dialog.getByLabel('Account name',{exact:true}).fill('AVISPay PLC transit');
+  await dialog.getByLabel('Reference',{exact:true}).fill('INT-NEW');
+  await dialog.getByRole('button',{name:'Register intermediary bank'}).click();
+  await page.getByText('Saved successfully.',{exact:true}).waitFor();
+  assert.equal(calls.at(-1).path,'/api/nostro/intermediary');
+  assert.equal(calls.at(-1).body.cashAccountId,nostroCash.cash_account_id);
+  await transit.getByRole('button',{name:'Edit',exact:true}).click();
+  await dialog.getByLabel('Bank name',{exact:true}).waitFor();
+  assert.equal(await dialog.getByLabel('Bank name',{exact:true}).inputValue(),'Global Transit Bank');
+  assert.equal(await dialog.getByLabel('ABA routing number').inputValue(),'021000021');
+  assert.equal(await dialog.getByLabel('Reference',{exact:true}).inputValue(),'INTERMEDIARY-REF');
+  await dialog.getByRole('button',{name:'Save intermediary bank'}).click();
+  await page.getByText('Saved successfully.',{exact:true}).waitFor();
+  assert.equal(calls.at(-1).path,'/api/nostro/intermediary/edit');
+  assert.equal(calls.at(-1).body.intermediaryId,intermediary.intermediary_id);
+  assert.deepEqual(errors,[]);
  }finally{await page.close();}
 });
