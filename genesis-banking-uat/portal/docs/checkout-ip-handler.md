@@ -53,6 +53,15 @@ The original PDF is bounded to **2 MiB**, uses canonical base64, has a valid PDF
 
 Administrator register reads at `GET /api/views/checkoutip` expose `processing` and `processing.proof = {available,fileName,sha256,sizeBytes}` without document bytes. `GET /api/checkout-ip/:requestId/proof.pdf` returns the original PDF only to an administrator session; `?download=1` changes the response to an attachment. Customer workspaces cannot retrieve it. The UI fetches the PDF into one printable popup and revokes the preview URL on close, navigation or sign-out. The handler itself continues to open in a normal browser tab.
 
+## Persistent administrator controls
+
+The administrator Payments page mounts two Liquid Glass controls before loading the request register. Both remain visible with zero requests or while register reads are pending.
+
+- **Checkout access** applies to an explicitly selected existing request. With no selection the switch remains red and sends no activation. Selection preserves the request UUID across sorting and refreshes; removal clears it. A selected request shows the existing red/blue/green state and uses the same routing validation and activation operation as its row control. No placeholder request or new global approval setting is created.
+- **IP-IP management** opens `https://avis.land/admin/bank/quantum/direct-transfer` without a checkout request parameter. Red means the managed tab is closed; green means that tab is open. The switch can close its own tab, and manual closure returns it to red. It does not approve a request, open a receiving window, or indicate bank connectivity. The destination retains its administrator authentication.
+
+The management tab opens synchronously from the switch interaction. Its opener is cleared before navigating to the handler. The controller retains the tab handle to observe closure, rather than persisting an assumed open state. Request refreshes and selection changes do not navigate the management tab. Signing out or changing workspace clears the controls and closes the tab owned by that page.
+
 ## Reproduce the integration evidence
 
 Use Node.js 22.19 or later and both PR branches:

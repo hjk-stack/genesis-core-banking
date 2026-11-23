@@ -198,6 +198,17 @@ textarea{box-sizing:border-box;width:100%;font:inherit;border:1px solid #d6dbe3;
 .ip-request-controls .pos-activation-label{display:block;margin-top:8px;font-size:12px}
 .ip-register-heading{flex-wrap:wrap;gap:12px}
 .ip-register-actions{display:flex;align-items:center;flex-wrap:wrap;gap:16px}
+.ip-admin-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,390px),1fr));gap:24px;padding:20px 22px}
+.ip-admin-controls h2{font-size:16px;margin:0}
+.ip-admin-access,.ip-admin-management{min-width:0}
+.ip-admin-control-title{display:flex;align-items:center;justify-content:space-between;gap:18px;min-height:56px}
+.ip-admin-switch-state{display:flex;align-items:center;gap:12px;flex-shrink:0}
+.ip-admin-controls .pos-liquid-switch{flex-shrink:0}
+.ip-admin-controls .pos-liquid-switch[aria-disabled=true]:not(:disabled){cursor:default}
+.ip-admin-request-label{margin:14px 0 0}
+.ip-admin-request-label select{min-width:0;max-width:100%}
+.ip-admin-controls .form-error{margin-bottom:0}
+@media(max-width:760px){.ip-admin-controls{grid-template-columns:minmax(0,1fr);gap:18px;padding:16px}.ip-admin-control-title{align-items:flex-start;flex-direction:column;gap:12px}.ip-admin-switch-state{min-height:36px}}
 .checkout-ip-table .ip-row-label{font-size:11px;display:block;margin:0 0 10px}
 .checkout-ip-table .ip-row-label select{margin-top:5px;width:100%;min-width:190px;padding:9px 7px;max-width:230px}
 [data-checkout-ip-register] button:not(.pos-liquid-switch){white-space:nowrap;border:1px solid #8a9cad;border-radius:10px;padding:9px 12px;cursor:pointer;background:#f5f8fc;color:var(--ink,#20242b)}

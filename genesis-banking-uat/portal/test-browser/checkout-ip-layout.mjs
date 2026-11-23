@@ -29,26 +29,32 @@ const fixtureScript=()=>{
  franchiseAllocatedPercent:'10.00',operationCompleted:true,manualReport100Digits:'0123456789'.repeat(10),transactionReference:'PAYMENT-002',
  proof:{available:true,fileName:'handler-original.pdf',sizeBytes:pdf.length,sha256:'fixture'}}};
  return [
- "import {checkoutIpRegister,bindCheckoutIp,checkoutIpHandlerUrl,createCheckoutIpProof,replaceCheckoutIpRegister} from '/checkout-ip.mjs';",
+ "import {checkoutIpRegister,checkoutIpAdminControls,createCheckoutIpAdminControls,bindCheckoutIp,checkoutIpHandlerUrl,createCheckoutIpProof,replaceCheckoutIpRegister} from '/checkout-ip.mjs';",
  'let rows='+JSON.stringify([row,completed])+';',
  "const accounts=[{account_id:'common',owner_type:'COMMON_POOL',currency_code:'EUR',abiq_iban:'ABIQ-COMMON'}];",
  "const nostros=[{cash_account_id:'nostro',currency_code:'EUR',is_active:true,institution_name:'Nostro bank',iban_or_account_no:'NOSTRO-IBAN',intermediaries:[]}];",
  'const viewer=createCheckoutIpProof();',
- "function bind(){bindCheckoutIp({root:document,requests:rows,nostros,activate:async input=>{rows=rows.map(row=>row.requestId===input.requestId?{...row,status:input.active?'ACTIVE':'CLOSED',receivingAccountId:input.receivingAccountId}:row);return {};},",
+ "window.fixtureActivations=[];const admin=createCheckoutIpAdminControls({activateRequest:async id=>{const row=[...document.querySelectorAll('[data-checkout-ip]')].find(row=>row.dataset.checkoutIp===id),button=row?.querySelector('[data-ip-toggle]');if(button&&!button.disabled)await button.onclick({currentTarget:button});}});",
+ "function bind(){bindCheckoutIp({root:document,requests:rows,nostros,activate:async input=>{window.fixtureActivations.push(input);rows=rows.map(row=>row.requestId===input.requestId?{...row,status:input.active?'ACTIVE':'CLOSED',receivingAccountId:input.receivingAccountId}:row);return {};},",
  "onChange:()=>{replaceCheckoutIpRegister(document.querySelector('[data-checkout-ip-register]'),rows,accounts,nostros);bind();},",
- "openHandler:record=>window.open(checkoutIpHandlerUrl(record),'_blank','noopener,noreferrer'),openProof:record=>viewer.open(record)});}",
- "document.querySelector('#mount').innerHTML=checkoutIpRegister(rows,accounts,nostros);bind();"
+ "openHandler:record=>window.open(checkoutIpHandlerUrl(record),'_blank','noopener,noreferrer'),openProof:record=>viewer.open(record)});admin.update(rows);}",
+ "document.querySelector('#mount').innerHTML=checkoutIpAdminControls()+checkoutIpRegister(rows,accounts,nostros);admin.bind(document);bind();"
  ].join('\n');
 };
 before(async()=>{
+ const appHtml=await readFile(new URL('../index.html',import.meta.url),'utf8');
  server=http.createServer(async(req,res)=>{
+  const path=new URL(req.url,'http://fixture.invalid').pathname;
   res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; frame-src 'self' blob:; frame-ancestors 'none'");
+  if(path==='/admin'){res.setHeader('content-type','text/html');return res.end(appHtml);}
+  if(path==='/api/session'){res.setHeader('content-type','application/json');return res.end(JSON.stringify({admin:true,canSwitchWorkspace:false,username:'Fixture operator',csrf:'fixture-csrf'}));}
+  if(path==='/api/logout'||path.startsWith('/api/views/')){res.setHeader('content-type','application/json');return res.end(JSON.stringify(path==='/api/logout'?{}:{rows:[]}));}
   if(req.url==='/'){res.setHeader('content-type','text/html');return res.end('<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/fixture.css"><div id="mount" class="fixture"></div><script type="module" src="/fixture.mjs"></script>');}
   if(req.url==='/fixture.css'){res.setHeader('content-type','text/css');return res.end('.fixture{margin:12px;min-width:0}.fixture>.panel{max-width:100%}');}
   if(req.url==='/fixture.mjs'){res.setHeader('content-type','text/javascript');return res.end(fixtureScript());}
   if(req.url==='/api/checkout-ip/'+completedId+'/proof.pdf'){res.setHeader('content-type','application/pdf');res.setHeader('cache-control','no-store');return res.end(pdf);}
-  if(['/styles.css','/checkout-ip.mjs'].includes(req.url)){
-   res.setHeader('content-type',req.url.endsWith('.css')?'text/css':'text/javascript');return res.end(await readFile(new URL('../public'+req.url,import.meta.url)));
+  if(/^\/[a-z][a-z0-9-]*\.(mjs|css)$/.test(path)){
+   try{res.setHeader('content-type',path.endsWith('.css')?'text/css':'text/javascript');return res.end(await readFile(new URL('../public'+path,import.meta.url)));}catch{res.writeHead(404);return res.end();}
   }
   res.writeHead(404);res.end();
  });
@@ -93,12 +99,43 @@ test('IP handler opens an ordinary tab and activation remains an explicit routed
  try{
   await page.route('https://avis.land/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>Handler fixture</title><h1>IP-to-IP handler</h1>'}));
   await page.goto(base);const row=page.locator('[data-checkout-ip="'+id+'"]');await row.waitFor();
-  await row.locator('[data-ip-toggle]').click();assert.equal(await row.locator('[data-ip-toggle]').getAttribute('data-state'),'REQUESTED');
-  await row.locator('[data-ip-account]').selectOption('common');await row.locator('[data-ip-toggle]').click();
+  const access=page.locator('[data-ip-admin-access]');assert.equal(await access.getAttribute('data-state'),'CLOSED');assert.equal(await page.locator('[data-ip-admin-request]').inputValue(),'');
+  await page.locator('[data-ip-admin-request]').selectOption(id);assert.equal(await access.getAttribute('data-state'),'REQUESTED');
+  await access.click();assert.equal(await row.locator('[data-ip-toggle]').getAttribute('data-state'),'REQUESTED');assert.equal(await row.locator('[data-ip-account]').evaluate(el=>el===document.activeElement),true);
+  assert.deepEqual(await page.evaluate(()=>window.fixtureActivations),[]);
+  await row.locator('[data-ip-account]').selectOption('common');await access.click();
   await page.locator('[data-checkout-ip="'+id+'"] [data-ip-toggle][data-state="ACTIVE"]').waitFor();
+  assert.equal(await access.getAttribute('data-state'),'ACTIVE');assert.equal((await page.evaluate(()=>window.fixtureActivations)).length,1);
   const [tab]=await Promise.all([page.context().waitForEvent('page'),page.locator('[data-checkout-ip="'+id+'"] [data-ip-handler]').click()]);
   await tab.waitForLoadState();assert.equal(new URL(tab.url()).searchParams.get('checkoutRequest'),id);
   assert.equal(await page.locator('iframe').count(),0);await tab.close();
  }finally{await page.close();}
+});
+
+for(const [width,mode] of [[390,'empty'],[820,'empty'],[1440,'empty'],[820,'stalled'],[1440,'failed']])test('actual Payments app exposes independent switches with '+mode+' requests at '+width+'px',async()=>{
+ const context=await browser.newContext({viewport:{width,height:1000}}),page=await context.newPage(),errors=[],held=[],writes=[];
+ page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.method()==='POST')writes.push(request.url());});
+ await context.route('https://avis.land/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>Management fixture</title><h1>IP-IP management</h1>'}));
+ if(mode==='stalled')await page.route('**/api/views/checkoutip',route=>new Promise(resolve=>held.push({route,resolve})));
+ if(mode==='failed')await page.route('**/api/views/checkoutip',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({message:'Could not read checkout requests.'})}));
+ try{
+  await page.goto(base+'/admin#payments');const controls=page.locator('[data-ip-admin-controls]'),access=controls.locator('[data-ip-admin-access]'),management=controls.locator('[data-ip-admin-management]');await controls.waitFor();
+  if(mode==='empty')await page.locator('[data-checkout-ip-register]').waitFor();
+  if(mode==='stalled')await page.waitForFunction(()=>document.querySelector('#panels')?.getAttribute('aria-busy')==='true');
+  if(mode==='failed')await page.locator('#panels .panel-error').waitFor();
+  assert.equal(await controls.locator('[role=switch]').count(),2);assert.equal(await page.locator('[data-checkout-ip]').count(),0);assert.equal(await access.getAttribute('data-state'),'CLOSED');assert.equal(await access.getAttribute('aria-disabled'),'true');assert.equal(await management.getAttribute('data-state'),'CLOSED');assert.equal(await management.isEnabled(),true);
+  assert.equal(await controls.evaluate(el=>!!el.closest('.table-wrap')),false);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  for(const control of [access,management,controls.locator('[data-ip-admin-request]')]){const box=await control.boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width+1,'administrator control stays inside viewport');}
+  const gradient=await management.evaluate(el=>getComputedStyle(el).backgroundImage);assert.match(gradient,/gradient/);assert.match(gradient,/248, 30, 78/);
+  await page.screenshot({path:'test-results/checkout-ip-admin-'+mode+'-'+width+'.png',fullPage:false});
+  const [tab]=await Promise.all([context.waitForEvent('page'),management.click()]);await tab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer');
+  assert.equal(await tab.evaluate(()=>window.opener===null),true);assert.equal(await management.getAttribute('data-state'),'ACTIVE');assert.match(await management.evaluate(el=>getComputedStyle(el).backgroundImage),/48, 215, 152/);assert.equal(await access.getAttribute('data-state'),'CLOSED');assert.deepEqual(writes,[]);
+  await page.screenshot({path:'test-results/checkout-ip-admin-'+mode+'-management-'+width+'.png',fullPage:false});
+  await Promise.all([tab.waitForEvent('close'),management.click()]);assert.equal(await management.getAttribute('data-state'),'CLOSED');
+  const [manual]=await Promise.all([context.waitForEvent('page'),management.click()]);await manual.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer');await manual.close();
+  await page.waitForFunction(()=>document.querySelector('[data-ip-admin-management]')?.dataset.state==='CLOSED');
+  const [logoutTab]=await Promise.all([context.waitForEvent('page'),management.click()]);await logoutTab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer');
+  await Promise.all([logoutTab.waitForEvent('close'),page.locator('#signout').click()]);await page.locator('#signin').waitFor({state:'visible'});assert.deepEqual(errors,[]);
+ }finally{for(const item of held){await item.route.fulfill({contentType:'application/json',body:'{"rows":[]}'}).catch(()=>{});item.resolve();}await context.close();}
 });
 

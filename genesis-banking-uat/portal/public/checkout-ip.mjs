@@ -12,6 +12,94 @@ const intermediaryLabel=record=>{
  return [...new Set(fields)].join(' · ')||String(record.intermediaryId);
 };
 
+export function checkoutIpAdminControls(){
+ return '<section class="panel ip-admin-controls" data-ip-admin-controls aria-label="IP-to-IP administrator controls">'+
+  '<div class="ip-admin-access"><div class="ip-admin-control-title"><h2>Checkout access</h2><div class="ip-admin-switch-state">'+
+  '<button type="button" class="pos-liquid-switch" role="switch" aria-label="Checkout access" aria-checked="false" aria-disabled="true" data-ip-admin-access data-state="CLOSED"><span class="pos-liquid-knob" aria-hidden="true"></span></button>'+
+  '<span class="pos-activation-label" data-ip-admin-access-state data-state="CLOSED">Closed</span></div></div>'+
+  '<label class="ip-admin-request-label">Checkout request<select data-ip-admin-request aria-label="Checkout request"><option value="">Select checkout request</option></select></label>'+
+  '<p class="form-error" role="alert" data-ip-admin-access-error></p></div>'+
+  '<div class="ip-admin-management"><div class="ip-admin-control-title"><h2>IP-IP management</h2><div class="ip-admin-switch-state">'+
+  '<button type="button" class="pos-liquid-switch" role="switch" aria-label="IP-IP management" aria-checked="false" data-ip-admin-management data-state="CLOSED"><span class="pos-liquid-knob" aria-hidden="true"></span></button>'+
+  '<span class="pos-activation-label" data-ip-admin-management-state data-state="CLOSED">Closed</span></div></div>'+
+  '<p class="form-error" role="alert" data-ip-admin-management-error></p></div></section>';
+}
+
+export function createCheckoutIpAdminControls({root=document,activateRequest,windowApi=root.defaultView}={}){
+ let panel=null,requests=[],selectedId='',loading=true,busy=false,generation=0,managedTab=null,tabTimer=null,focusSelector=null,windowSequence=0;
+ const selected=()=>requests.find(record=>record.requestId===selectedId);
+ const currentState=(record,now=Date.now())=>!record?'CLOSED':record.status==='REQUESTED'&&Date.parse(record.expiresAt)<=now?'CLOSED':record.status;
+ const error=(kind,message)=>{const slot=panel?.querySelector('[data-ip-admin-'+kind+'-error]');if(slot)slot.textContent=message;};
+ const paint=(selector,state)=>{
+  const button=panel?.querySelector('[data-ip-admin-'+selector+']'),label=panel?.querySelector('[data-ip-admin-'+selector+'-state]');if(!button)return;
+  button.dataset.state=state;button.setAttribute('aria-checked',String(state==='ACTIVE'));
+  label.dataset.state=state;label.textContent=state==='REQUESTED'?'Activation requested':state==='ACTIVE'?'Open':'Closed';
+ };
+ function paintAccess(now=Date.now()){
+  if(!panel?.isConnected)return;
+  const record=loading?null:selected(),state=currentState(record,now),button=panel.querySelector('[data-ip-admin-access]');
+  paint('access',state);button.disabled=busy;button.setAttribute('aria-disabled',String(busy||!record||state==='CLOSED'||loading));button.setAttribute('aria-busy',String(busy));
+  panel.querySelector('[data-ip-admin-request]').disabled=busy||loading||!requests.length;
+ }
+ function stopTabTimer(){if(tabTimer!==null){windowApi.clearInterval(tabTimer);tabTimer=null;}}
+ function tabIsOpen(){try{return !!managedTab&&!managedTab.closed;}catch{return false;}}
+ function syncManagement(){
+  if(!tabIsOpen()){managedTab=null;stopTabTimer();}
+  if(panel?.isConnected)paint('management',managedTab?'ACTIVE':'CLOSED');
+ }
+ function toggleManagement(){
+  error('management','');
+  if(tabIsOpen()){
+   try{managedTab.close();syncManagement();}catch{error('management','Could not close the IP-IP management tab. Try again.');}
+   return;
+  }
+  let child;
+  try{
+   managedTab=null;stopTabTimer();
+   const name='avis-ip-management-'+(root.defaultView.crypto?.randomUUID?.()||Date.now().toString(36)+'-'+(++windowSequence));
+   child=windowApi.open('about:blank',name);
+   if(!child)throw Error('Allow this page to open the IP-IP management tab.');
+   child.opener=null;if(child.opener!==null)throw Error('Could not open the IP-IP management tab securely.');
+   child.location.replace(checkoutIpHandlerUrl(null));
+   if(child.closed)throw Error('The IP-IP management tab closed before opening.');
+   managedTab=child;syncManagement();tabTimer=windowApi.setInterval(syncManagement,500);
+  }catch(reason){try{child?.close();}catch{}managedTab=null;stopTabTimer();syncManagement();error('management',reason.message||'Could not open the IP-IP management tab. Try again.');}
+ }
+ function update(rows=[],{loading:pending=false}={}){
+  requests=Array.isArray(rows)?rows:[];loading=pending;
+  if(!pending&&!requests.some(record=>record.requestId===selectedId))selectedId='';
+  if(!panel?.isConnected)return;
+  const selector=panel.querySelector('[data-ip-admin-request]'),Option=root.defaultView.Option;
+  selector.replaceChildren(new Option('Select checkout request',''),...requests.map(record=>new Option([record.checkoutReference||record.requestId,record.title].filter(Boolean).join(' · '),record.requestId)));
+  selector.value=selectedId;paintAccess();syncManagement();
+ }
+ function bind(container=root){
+  const next=container.matches?.('[data-ip-admin-controls]')?container:container.querySelector('[data-ip-admin-controls]');if(!next)return;
+  const mounted=next!==panel;if(mounted){panel=next;requests=[];loading=true;}
+  const selector=panel.querySelector('[data-ip-admin-request]'),access=panel.querySelector('[data-ip-admin-access]');
+  selector.onchange=()=>{if(busy){selector.value=selectedId;return;}selectedId=selector.value;error('access','');paintAccess();};
+  access.onclick=async()=>{
+   const record=selected();if(busy||loading||!record||currentState(record)==='CLOSED'||access.getAttribute('aria-disabled')==='true')return;
+   const requestId=record.requestId,serial=generation;busy=true;error('access','');paintAccess();
+   try{await activateRequest(requestId);}catch(reason){if(serial===generation)error('access',reason.message||'Could not update the selected checkout.');}
+   finally{if(serial===generation){busy=false;paintAccess();}}
+  };
+  panel.querySelector('[data-ip-admin-management]').onclick=toggleManagement;
+  if(mounted){
+   panel.addEventListener('focusin',event=>{focusSelector=['[data-ip-admin-request]','[data-ip-admin-access]','[data-ip-admin-management]'].find(selector=>event.target.matches(selector))||null;});
+   panel.addEventListener('focusout',event=>{if(event.relatedTarget&&!event.currentTarget.contains(event.relatedTarget))focusSelector=null;});
+  }
+  update(requests,{loading});
+  if(focusSelector&&(!root.activeElement||root.activeElement===root.body))panel.querySelector(focusSelector)?.focus({preventScroll:true});
+ }
+ function close(){
+  generation++;requests=[];selectedId='';loading=true;busy=false;focusSelector=null;
+  try{managedTab?.close();}catch{}managedTab=null;stopTabTimer();
+  update([],{loading:true});error('access','');error('management','');
+ }
+ return {bind,update,expire:paintAccess,close};
+}
+
 export function expireCheckoutIpControls(root=document,now=Date.now()){
  const panel=root.querySelector('[data-checkout-ip-register]');if(!panel)return;
  for(const button of panel.querySelectorAll('[data-ip-deadline]')){
@@ -29,7 +117,7 @@ export function checkoutIpRegister(rows=[],accounts=[],nostros=[]){
  const waiting=rows.filter(r=>ipState(r)==='REQUESTED').length;
  return '<section class="panel" data-checkout-ip-register>'+
  '<div class="panel-header ip-register-heading"><h2>Checkout IP-to-IP requests · Payment Server</h2><div class="ip-register-actions"><span data-ip-pending>'+waiting+' awaiting activation</span>'+
- '<button type="button" data-ip-handler-open>Open IP-to-IP handler</button></div></div>'+
+ '</div></div>'+
  '<div class="table-wrap" tabindex="0" role="region" aria-label="IP-to-IP payment processing register"><table class="checkout-ip-table"><thead><tr>'+
  ['Checkout / Request','Sender / Bank','Sender Account','Payment','Currency','NOSTRO','Amount Cleared','Beneficiary name','Beneficiary Account','Franchise Payment','Operation Completed','Proof of Payment'].map(label=>'<th scope="col">'+label+'</th>').join('')+
  '</tr></thead><tbody>'+rows.map(r=>{
@@ -93,7 +181,6 @@ export function replaceCheckoutIpRegister(panel,rows,accounts=[],nostros=[]){
 
 export function bindCheckoutIp({root=document,requests=[],nostros=[],activate,onChange,openHandler,openProof}){
  const panel=root.querySelector('[data-checkout-ip-register]');if(!panel)return;
- panel.querySelector('[data-ip-handler-open]').onclick=()=>openHandler(null);
  for(const row of panel.querySelectorAll('[data-checkout-ip]')){
   const record=requests.find(r=>r.requestId===row.dataset.checkoutIp),bank=row.querySelector('[data-ip-nostro]');
   if(!record)continue;
