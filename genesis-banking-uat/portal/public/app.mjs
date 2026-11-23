@@ -290,7 +290,7 @@ html+=results.map((r,i)=>{
    const record=(cache.nostroclearing||[]).find(x=>x.cash_account_id===cashId);
    if(!record)return;
    const values={cashAccountId:cashId,bankName:record.institution_name,bankAddress:record.bank_address||'',
-    accountName:record.account_name||'',aba:record.aba||'',reference:record.bank_reference||''};
+    accountName:record.account_name||'',aba:record.aba||'',reference:record.bank_reference||'',currency:record.currency_code||'',abiqIban:record.abiq_iban||''};
    for(const [name,value]of Object.entries(values))if(fields.namedItem(name))fields.namedItem(name).value=value;
    bindIntermediaryFields(form,Array.isArray(record.intermediaries)?record.intermediaries:[]);
   });
@@ -355,7 +355,9 @@ cashaccount:{title:'Register NOSTRO',path:'correspondents',button:'Register NOST
  currencySelect()+bankDirectoryFields(false)+'</fieldset>'+intermediaryFields(),build:f=>combinedNostroInput(f,$('#action-form'))},
  editcashaccount:{title:'NOSTRO & incoming intermediary',path:'correspondents/details',button:'Save NOSTRO & intermediary',
  fields:()=>'<input type="hidden" name="cashAccountId"><fieldset class="nostro-primary-fields"><legend>NOSTRO bank</legend>'+
- bankDirectoryFields()+'</fieldset>'+intermediaryFields(true),build:f=>combinedNostroInput(f,$('#action-form'))},
+ bankDirectoryFields()+
+ '<label>ABIQ - IBAN (manual correction)<input name="abiqIban" aria-label="ABIQ - IBAN" maxlength="40" autocomplete="off" placeholder="Issued ABIQ IBAN"></label>'+
+ currencySelect()+'</fieldset>'+intermediaryFields(true),build:f=>combinedNostroInput(f,$('#action-form'))},
 nostromirror:{title:'Record NOSTRO clearing movement',path:'nostro/mirror',button:'Post mirrored movement',fields:()=>select('cashAccountId','NOSTRO settlement account',(cache.nostroclearing||[]).map(c=>[c.cash_account_id,`${c.institution_name} · ${c.currency_code} · ${c.iban_or_account_no}`]))+select('direction','External movement',[['CREDIT','Incoming to NOSTRO'],['DEBIT','Outgoing from NOSTRO']])+select('rail','Settlement rail',[['BANK_TRANSFER','Bank transfer'],['CARD','Card settlement'],['IP_TO_IP','IP-to-IP'],['ISO20022','ISO 20022'],['BANK_API','Bank API'],['OTHER','Other']])+input('externalReference','External bank / payment reference','text','maxlength="128"')+input('amount','Settled amount','text','inputmode="decimal"')+`<label>Memo<textarea name="memo" rows="2" maxlength="250"></textarea></label>`,build:f=>({...Object.fromEntries(f),currency:(cache.nostroclearing||[]).find(c=>c.cash_account_id===f.get('cashAccountId'))?.currency_code})},
  nostrogateway:{title:'Assign NOSTRO card settlement',path:'nostro/gateway',button:'Link card gateway',fields:()=>select('gatewayCode','Card settlement gateway',(cache.nostrogateways||[]).map(g=>[g.gateway_code,`${g.display_name} · ${g.gateway_code}`]))+select('cashAccountId','NOSTRO settlement account',(cache.nostroclearing||[]).map(c=>[c.cash_account_id,`${c.institution_name} · ${c.currency_code} · ${c.iban_or_account_no}`]))},
  bankprofile:{title:'Configure bank connector',path:'bankprofiles',button:'Save connector',fields:()=>input('profileId','Connector code','text','pattern="[A-Z0-9_]{1,35}"')+input('name','Bank / network name')+select('cashAccountId','Clearing account',(cache.correspondents||[]).map(c=>[c.cash_account_id,`${c.institution_name} · ${c.currency_code} · ${c.iban_or_account_no}`]))+select('protocol','Protocol',['IP_TO_IP','SWIFT_ISO20022','BANK_API'].map(x=>[x,label(x)]))+input('localBic','Our BIC')+input('peerBic','Peer bank BIC')+input('endpoint','Bank endpoint','url')+input('credentialReference','Application credential reference','text','pattern="AVIS_CONNECTOR_[A-Z0-9_]+"')},
