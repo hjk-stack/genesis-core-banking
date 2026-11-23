@@ -32,6 +32,19 @@ function completed(input,overrides={}){return processing(input,{handlerStatus:'S
 async function claimPayload(value){return {requestId:value.requestId,handlerTransferId:value.handlerTransferId,
  transactionReference:value.transactionReference,...(await ip.context(handler,{requestId:value.requestId})).routing};}
 async function claim(value){return ip.claim(handler,await claimPayload(value));}
+async function processingEvidence(requestIds){
+ const evidence={};
+ for(const table of ['checkout_ip_processing','checkout_ip_settlement_claims','checkout_ip_processing_events','checkout_ip_proofs'])
+  evidence[table]=(await pool.query(`SELECT * FROM avis_core_v2.${table} WHERE request_id=ANY($1::uuid[]) ORDER BY request_id,${table==='checkout_ip_processing_events'?'revision':'request_id'}`,[requestIds])).rows;
+ return evidence;
+}
+async function ledgerSnapshot(){return {
+ accounts:(await pool.query('SELECT account_id,available_balance::text,locked_balance::text FROM avis_core_v2.ledger_accounts ORDER BY account_id')).rows,
+ entries:(await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.ledger_entries')).rows[0].n
+};}
+async function identityActions(value){const payload=await claimPayload(value);return {
+ publish:()=>ip.processing(handler,value),claim:()=>ip.claim(handler,payload)
+};}
 function token(path,body,{profile='handler',claims={},header={}}={}){
  const now=Math.floor(Date.now()/1000),isHandler=profile==='handler';
  const head=Buffer.from(JSON.stringify({alg:'Ed25519',typ:isHandler?'AVIS-IP-HANDLER-REQUEST+JWT':'AVIS-POS-REQUEST+JWT',kid,...header})).toString('base64url');
@@ -90,6 +103,74 @@ test('handler revision, transaction identity and exact decimal fields survive re
  assert.equal((await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.checkout_ip_processing_events WHERE request_id=$1',[input.requestId])).rows[0].n,2);
 });
 
+test('reports and settlement claims cannot reuse another request\'s transaction reference or handler ID',async()=>{
+ const ledger=await ledgerSnapshot();
+ for(const firstAction of ['publish','claim'])for(const secondAction of ['publish','claim'])for(const field of ['transactionReference','handlerTransferId']){
+  const first=processing(await activeRequest(),{transactionReference:randomUUID()}),second=processing(await activeRequest(),{[field]:first[field]});
+  const firstActions=await identityActions(first),secondActions=await identityActions(second);
+  const saved=await firstActions[firstAction](),before=await processingEvidence([first.requestId,second.requestId]);
+  await assert.rejects(secondActions[secondAction](),e=>e.code==='CHECKOUT_IP_PROCESSING_LINK'&&e.status===409&&e.field===field,
+   `${firstAction} must retain ${field} against ${secondAction}`);
+  assert.deepEqual(await firstActions[firstAction](),saved,'the owning request may retry exactly');
+  assert.deepEqual(await processingEvidence([first.requestId,second.requestId]),before,'rejection and retry preserve both requests\' evidence');
+ }
+ assert.deepEqual(await ledgerSnapshot(),ledger);
+});
+
+test('concurrent publications and claims give each transaction reference and handler ID exactly one owner',async()=>{
+ const ledger=await ledgerSnapshot();
+ // PGlite serializes connections; TEST_DATABASE_URL exercises the same races
+ // on independent PostgreSQL connections in the banking verification job.
+ for(const [firstAction,secondAction] of [['publish','publish'],['publish','claim'],['claim','publish'],['claim','claim']])for(const field of ['transactionReference','handlerTransferId']){
+  const first=processing(await activeRequest(),{transactionReference:randomUUID()}),second=processing(await activeRequest(),{[field]:first[field]});
+  const actions=[(await identityActions(first))[firstAction],(await identityActions(second))[secondAction]];
+  const results=await Promise.allSettled(actions.map(action=>action()));
+  assert.equal(results.filter(result=>result.status==='fulfilled').length,1,`${firstAction}/${secondAction} share ${field}`);
+  const rejected=results.find(result=>result.status==='rejected');
+  assert.equal(rejected.reason.code,'CHECKOUT_IP_PROCESSING_LINK');assert.equal(rejected.reason.status,409);assert.equal(rejected.reason.field,field);
+  const winner=results.findIndex(result=>result.status==='fulfilled'),owner=[first,second][winner],loser=[first,second][1-winner];
+  const evidence=await processingEvidence([first.requestId,second.requestId]);
+  assert.deepEqual([...new Set(Object.values(evidence).flat().map(row=>row.request_id))],[owner.requestId]);
+  assert.equal(evidence.checkout_ip_processing.length,[firstAction,secondAction][winner]==='publish'?1:0);
+  assert.equal(evidence.checkout_ip_processing_events.length,evidence.checkout_ip_processing.length);
+  assert.equal(evidence.checkout_ip_settlement_claims.length,1-evidence.checkout_ip_processing.length);
+  assert.equal(evidence.checkout_ip_proofs.length,0);
+  const context=await ip.context(handler,{requestId:loser.requestId});assert.equal(context.request.processing,null);assert.equal(context.claim,null);
+  assert.deepEqual(await actions[winner](),results[winner].value);
+  assert.deepEqual(await processingEvidence([first.requestId,second.requestId]),evidence);
+ }
+ assert.deepEqual(await ledgerSnapshot(),ledger);
+});
+
+test('distinct identities can publish and claim concurrently while each request retains its own binding',async()=>{
+ const ledger=await ledgerSnapshot(),first=processing(await activeRequest()),second=processing(await activeRequest());
+ const firstActions=await identityActions(first),secondActions=await identityActions(second);
+ const [published,claimed]=await Promise.all([firstActions.publish(),secondActions.claim()]);
+ const [firstClaim,secondReport]=await Promise.all([firstActions.claim(),secondActions.publish()]);
+ assert.equal(firstClaim.handlerTransferId,published.processing.handlerTransferId);
+ assert.equal(secondReport.processing.transactionReference,claimed.transactionReference);
+ const before=await processingEvidence([first.requestId,second.requestId]);
+ assert.deepEqual(await Promise.all([firstActions.publish(),secondActions.claim()]),[published,claimed]);
+ assert.deepEqual(await processingEvidence([first.requestId,second.requestId]),before);
+ assert.deepEqual(await ledgerSnapshot(),ledger);
+});
+
+test('exact retries preserve reports and claims already stored before cross-table identity enforcement',async()=>{
+ const ledger=await ledgerSnapshot(),first=processing(await activeRequest()),second=processing(await activeRequest(),{transactionReference:first.transactionReference});
+ const firstActions=await identityActions(first),saved=await firstActions.publish(),payload=await claimPayload(second);
+ const {requestId,handlerTransferId,transactionReference,...routing}=payload;
+ // The previous claim path accepted this cross-table conflict. Retain that
+ // historical record and acknowledge only its exact no-op retries.
+ await pool.query(`INSERT INTO avis_core_v2.checkout_ip_settlement_claims(request_id,handler_transfer_id,transaction_reference,routing_snapshot,actor_id)
+  VALUES($1,$2,$3,$4::jsonb,$5)`,[requestId,handlerTransferId,transactionReference,JSON.stringify(routing),handler.id]);
+ const storedClaim=(await ip.context(handler,{requestId})).claim,before=await processingEvidence([first.requestId,requestId]);
+ await ip.setActive(admin,{requestId:first.requestId,active:false});await ip.setActive(admin,{requestId,active:false});
+ assert.deepEqual(await firstActions.publish(),saved);
+ assert.deepEqual(await ip.claim(handler,payload),storedClaim);
+ assert.deepEqual(await processingEvidence([first.requestId,requestId]),before);
+ assert.deepEqual(await ledgerSnapshot(),ledger);
+});
+
 test('completion validates the 100-digit report, allocations, original PDF and settled status',async()=>{
  const input=await activeRequest(),value=completed(input);
  for(const manualReport100Digits of ['1'.repeat(99),'1'.repeat(101),'1'.repeat(99)+'x'])
@@ -119,6 +200,10 @@ test('completion validates the 100-digit report, allocations, original PDF and s
 
 test('completed proof, transaction and report remain immutable and retrievable after closure',async()=>{
  const input=await activeRequest(),value=completed(input);await claim(value);await ip.processing(handler,value);
+ const preserved=await processingEvidence([input.requestId]),other=processing(await activeRequest(),{transactionReference:value.transactionReference});
+ await assert.rejects(ip.processing(handler,other),e=>e.code==='CHECKOUT_IP_PROCESSING_LINK'&&e.field==='transactionReference');
+ await assert.rejects(claim(other),e=>e.code==='CHECKOUT_IP_PROCESSING_LINK'&&e.field==='transactionReference');
+ assert.deepEqual(await processingEvidence([input.requestId]),preserved,'reused references cannot change a completed report, audit or original PDF');
  await assert.rejects(ip.cancel(checkout,{requestId:input.requestId}),e=>e.code==='CHECKOUT_IP_COMPLETED');
  await assert.rejects(ip.processing(handler,{...value,revision:2}),e=>e.code==='CHECKOUT_IP_COMPLETED');
  await assert.rejects(pool.query('UPDATE avis_core_v2.checkout_ip_processing SET beneficiary_name=$2 WHERE request_id=$1',[input.requestId,'Changed']),/APPEND_ONLY_RECORD/);
