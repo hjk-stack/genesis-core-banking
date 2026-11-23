@@ -87,14 +87,64 @@ export class PaymentServer extends SovereignCore {
   const bankAddress=text(input.bankAddress,'bankAddress',300),accountName=text(input.accountName,'accountName',140);
   const aba=abaRouting(input.aba),reference=text(input.reference,'reference',140);
   const intermediary=incomingIntermediary(input.intermediary);
+  const correctedCurrency=input.currency===undefined?null:text(input.currency,'currency',3).toUpperCase();
+  const chosenAbiq=input.abiqIban===undefined?null:text(input.abiqIban.replace(/\\s+/g,''),'abiqIban',40).toUpperCase();
+  if(correctedCurrency&&!/^[A-Z]{3}$/.test(correctedCurrency))fault('INVALID_FIELD','currency');
+  if(chosenAbiq&&!/^TN[0-9]{2}AVIP[0-9]{18}$/.test(chosenAbiq))fault('INVALID_FIELD','abiqIban');
   return this.operation(actor,'UPDATE_EXTERNAL_BANK_DIRECTORY',input,key,async db=>{
+   const old=(await db.query(`SELECT c.*,a.available_balance,a.locked_balance,a.owner_type,a.account_category
+    FROM avis_core_v2.external_cash_accounts c
+    JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.ledger_account_id
+    WHERE c.cash_account_id=$1 AND c.is_active FOR UPDATE OF c,a`,[cashAccountId])).rows[0];
+   if(!old)fault('NOSTRO_ACCOUNT_NOT_FOUND','cashAccountId',404);
+   const nextCurrency=correctedCurrency||old.currency_code;
+   if(!(await db.query('SELECT 1 FROM avis_core_v2.abiq_currencies WHERE currency_code=$1',[nextCurrency])).rows.length)fault('INVALID_FIELD','currency');
+   let nextLedger=old.ledger_account_id;
+   if(nextCurrency!==old.currency_code){
+    // A denomination is not a foreign-exchange transaction. Reassign only an
+    // untouched NOSTRO; never rewrite or redenominate booked money.
+    const inUse=(await db.query(`SELECT
+      EXISTS(SELECT 1 FROM avis_core_v2.ledger_entries WHERE account_id=$2)
+      OR EXISTS(SELECT 1 FROM avis_core_v2.nostro_manual_mirrors WHERE cash_account_id=$1)
+      OR EXISTS(SELECT 1 FROM avis_core_v2.clearing_statements WHERE cash_account_id=$1)
+      OR EXISTS(SELECT 1 FROM avis_core_v2.bank_connector_profiles WHERE cash_account_id=$1)
+      OR EXISTS(SELECT 1 FROM avis_core_v2.payment_gateway_bridges WHERE clearing_account_id=$1)
+      OR avis_core_v2.legacy_ledger_referenced($2::uuid) AS in_use`,
+      [cashAccountId,old.ledger_account_id])).rows[0].in_use;
+    if(Number(old.available_balance)!==0||Number(old.locked_balance)!==0||inUse)
+     fault('NOSTRO_CURRENCY_HAS_ACTIVITY','currency',409);
+    nextLedger=await this.system(db,old.owner_type,nextCurrency,cashAccountId,old.account_category);
+   }
+   let preferred=old.preferred_abiq_iban;
+   if(chosenAbiq){
+    const numbers=(await db.query(`SELECT g.identifier,g.currency_code,g.issued_by,b.ledger_account_id
+      FROM avis_core_v2.abiq_generated_numbers g
+      LEFT JOIN avis_core_v2.abiq_number_bindings b USING(identifier)
+      WHERE g.identifier=$1 FOR UPDATE OF g`,[chosenAbiq])).rows[0];
+    if(!numbers||numbers.currency_code!==nextCurrency||
+      (numbers.ledger_account_id&&numbers.ledger_account_id!==nextLedger)||
+      (!numbers.ledger_account_id&&numbers.issued_by!==actor.id))
+     fault('ABIQ_INVALID_IDENTIFIER','abiqIban',409);
+    if(!numbers.ledger_account_id)await db.query(
+     'INSERT INTO avis_core_v2.abiq_number_bindings(identifier,currency_code,ledger_account_id) VALUES($1,$2,$3)',
+     [chosenAbiq,nextCurrency,nextLedger]);
+    preferred=chosenAbiq;
+   }else if(nextCurrency!==old.currency_code)preferred=null;
    const updated=(await db.query(`UPDATE avis_core_v2.external_cash_accounts
-     SET institution_name=$2,bank_address=$3,account_name=$4,aba=$5,bank_reference=$6
+     SET institution_name=$2,bank_address=$3,account_name=$4,aba=$5,bank_reference=$6,
+      currency_code=$7,ledger_account_id=$8,preferred_abiq_iban=$9
      WHERE cash_account_id=$1 AND is_active RETURNING cash_account_id`,
-     [cashAccountId,bankName,bankAddress,accountName,aba,reference])).rows[0];
+     [cashAccountId,bankName,bankAddress,accountName,aba,reference,nextCurrency,nextLedger,preferred])).rows[0];
    if(!updated)fault('NOSTRO_ACCOUNT_NOT_FOUND','cashAccountId',404);
    const intermediaryId=await saveIncomingIntermediary(db,cashAccountId,intermediary,actor.id);
-   return {id:cashAccountId,cashAccountId,intermediaryId};
+   if(nextCurrency!==old.currency_code||preferred!==old.preferred_abiq_iban)
+    await db.query(`INSERT INTO avis_core_v2.nostro_account_corrections
+      (cash_account_id,previous_ledger_account_id,current_ledger_account_id,previous_currency,current_currency,
+       previous_bank_identifier,current_bank_identifier,previous_abiq_identifier,current_abiq_identifier,corrected_by)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [cashAccountId,old.ledger_account_id,nextLedger,old.currency_code,nextCurrency,
+       old.iban_or_account_no,old.iban_or_account_no,old.preferred_abiq_iban,preferred,actor.id]);
+   return {id:cashAccountId,cashAccountId,intermediaryId,currency:nextCurrency,abiqIban:preferred};
   });
  }
  async registerIntermediaryBank(actor,input,key){
@@ -289,7 +339,7 @@ export class PaymentServer extends SovereignCore {
   if(!actor?.admin)fault('FORBIDDEN',null,403);
   const queries={
    nostroclearing:`SELECT c.cash_account_id,c.ledger_account_id,c.institution_type,c.institution_name,c.bic_code,c.iban_or_account_no,
-    c.bank_address,c.account_name,c.aba,c.bank_reference,
+    c.bank_address,c.account_name,c.aba,c.bank_reference,c.preferred_abiq_iban AS abiq_iban,
     c.currency_code,c.is_active,
     COALESCE((SELECT json_agg(json_build_object(
       'intermediaryId',i.intermediary_id,'bankName',i.bank_name,'bankAddress',i.bank_address,
