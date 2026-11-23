@@ -15,6 +15,7 @@ import {CheckoutPosAuthenticator,CheckoutIpHandlerAuthenticator} from './src/che
 import {IP_PROOF_MAX_BYTES} from './src/checkout-ip-processing.mjs';
 import {CheckoutPosControl} from './src/checkout-pos.mjs';
 import {CheckoutIpControl} from './src/checkout-ip.mjs';
+import {NostroStatements} from './src/nostro-statements.mjs';
 import {INDEX_ADVICE_MESSAGES} from './src/index-event-advice.mjs';
 import {TRADING_TEST_MESSAGES} from './src/trading-testing.mjs';
 import {TRADING_INSTRUCTION_MESSAGES} from './src/trading-instructions.mjs';
@@ -136,6 +137,7 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  CHECKOUT_IP_PROOF_INTEGRITY:'This proof PDF could not be verified. Retrieve its original from the IP-to-IP handler.',
  INTERMEDIARY_NOT_FOUND:'Select an existing intermediary bank entry.',
  NOSTRO_ACCOUNT_NOT_FOUND:'Select a registered NOSTRO clearing account.',
+ NOSTRO_STATEMENT_NOT_FOUND:'Select an external statement for this NOSTRO account.',
  NOSTRO_ALREADY_SETTLED:'This external payment reference is already recorded as settled or reconciled.',
  NOSTRO_GATEWAY_NOT_FOUND:'Select a registered card settlement gateway.',
  NOSTRO_GATEWAY_ALREADY_LINKED:'This card gateway is linked to another NOSTRO account.',
@@ -149,6 +151,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
  const basket=new CryptoBasket(core,stripePos),storeWallet=new StoreWallet(basket);
  const posControl=new CheckoutPosControl(pool),ipControl=new CheckoutIpControl(pool),posAuth=new CheckoutPosAuthenticator(pool,{fetcher:transferOptions.posServiceFetcher||fetch});
  const ipHandlerAuth=new CheckoutIpHandlerAuthenticator(pool,{fetcher:transferOptions.ipHandlerServiceFetcher||transferOptions.posServiceFetcher||fetch});
+ const nostroStatements=new NostroStatements(pool);
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  const server=http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
@@ -294,6 +297,14 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    const actor={id:session.actor_id+(session.is_admin&&holder?':customer:'+holder:''),username:session.username,admin:session.is_admin&&!holder,customerUserId:holder?String(holder):null,identityUserId:holder?String(session.identity_user_id):null};
    const sessionData=()=>({username:actor.username,csrf:sessionCsrf(token),admin:actor.admin,customerUserId:actor.identityUserId,canSwitchWorkspace:session.is_admin});
    const invoke=(method,input,key,...extra)=>actor.admin?core[method](actor,input,key,...extra):customerAccess.invoke(actor,method,input,key,...extra);
+   const nostroStatement=/^\/api\/nostro\/([^/]+)\/statements(?:\/([^/]+))?$/.exec(path);
+   if(nostroStatement){
+    if(req.method!=='GET')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
+    const input={cashAccountId:nostroStatement[1],before:url.searchParams.get('before')};
+    return send(res,200,await (nostroStatement[2]
+     ?nostroStatements.read(actor,{...input,statementId:nostroStatement[2]})
+     :nostroStatements.list(actor,input)));
+   }
    const ipProof=/^\/api\/checkout-ip\/([0-9a-f-]{36})\/proof\.pdf$/i.exec(path);
    if(ipProof&&req.method==='GET'){
     const proof=await ipControl.proof(actor,ipProof[1]);

@@ -1,6 +1,10 @@
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {copyFile,mkdtemp,readdir,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {PGlite} from '@electric-sql/pglite';
 import pg from 'pg';
 import {migrate} from '../src/migrate.mjs';
@@ -8,8 +12,15 @@ import {PaymentServer} from '../src/payments.mjs';
 import {nostroRegisterTable,nostroMovementsTable,intermediaryBankTable} from '../public/nostro-clearing.mjs';
 
 const admin={id:'nostro-clearing-regression',admin:true},key=()=>randomUUID();
-let db,pool,core,cash;
+let db,pool,core,cash,legacyIntermediary,upgradeSnapshot;
 const balance=async account=>(await pool.query('SELECT available_balance::text FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[account])).rows[0].available_balance;
+const directoryFields={bankName:'bank_name',bankAddress:'bank_address',accountName:'account_name',aba:'aba',reference:'reference',bic:'bic_code',accountNumber:'account_number'};
+const intermediary=async id=>(await pool.query('SELECT * FROM avis_core_v2.nostro_intermediary_banks WHERE intermediary_id=$1',[id])).rows[0];
+const ledgerSnapshot=async()=>({
+ accounts:(await pool.query('SELECT * FROM avis_core_v2.ledger_accounts ORDER BY account_id')).rows,
+ journals:(await pool.query('SELECT * FROM avis_core_v2.ledger_journals ORDER BY journal_id')).rows,
+ entries:(await pool.query('SELECT * FROM avis_core_v2.ledger_entries ORDER BY entry_id')).rows
+});
 before(async()=>{
  if(process.env.TEST_DATABASE_URL){
   const url=new URL(process.env.TEST_DATABASE_URL);
@@ -20,25 +31,51 @@ before(async()=>{
   db=new PGlite();
   pool={query:(...a)=>db.query(...a),connect:async()=>({query:(...a)=>db.query(...a),exec:s=>db.exec(s),release(){}})};
  }
- const conn=await pool.connect();try{await migrate(conn);}finally{conn.release();}
+ // Populate a real pre-044 database so the additive upgrade is verified against
+ // existing intermediary values, IDs, cash-account links and ledger records.
+ const directory=new URL('../migrations/',import.meta.url),prior=await mkdtemp(join(tmpdir(),'nostro-optional-upgrade-'));
+ const conn=await pool.connect();
+ try{
+  for(const name of (await readdir(directory)).filter(name=>/^\d{3}_[a-z_]+\.sql$/.test(name)&&name<'044_'))
+   await copyFile(new URL(name,directory),join(prior,name));
+  await migrate(conn,pathToFileURL(prior+'/'));
+ }finally{conn.release();await rm(prior,{recursive:true,force:true});}
  core=new PaymentServer(pool);
  cash=await core.registerCashAccount(admin,{
   institutionType:'CORRESPONDENT_BANK',institutionName:'Clearing Regression Bank',
   bic:'TESTGB2LXXX',accountNumber:'EXTERNAL-NOSTRO-001',currency:'EUR'
  },key());
+ legacyIntermediary=await core.registerIntermediaryBank(admin,{cashAccountId:cash.id,bankName:'TBA',bankAddress:'NA',
+  accountName:'Existing transit account',reference:'EXISTING-INTERMEDIARY',aba:'021000021',bic:'CHASUS33XXX',accountNumber:'RETAINED-ACCOUNT'},key());
+ upgradeSnapshot={intermediary:await intermediary(legacyIntermediary.id),ledger:await ledgerSnapshot(),
+  cash:(await pool.query('SELECT * FROM avis_core_v2.external_cash_accounts WHERE cash_account_id=$1',[cash.id])).rows[0]};
+ const upgraded=await pool.connect();try{await migrate(upgraded);}finally{upgraded.release();}
 });
 after(async()=>{if(db)await db.close();else await pool.end();});
 
-test('NOSTRO register exposes existing external-account ledger and bank/card associations without creating additional funds',async()=>{
+test('NOSTRO register exposes the external account directory and associations without internal balances or additional funds',async()=>{
  const rows=await core.list(admin,'nostroclearing');
  const account=rows.find(r=>r.cash_account_id===cash.id);
  assert.equal(account.ledger_account_id,cash.accountId);
- assert.equal(account.available_balance,'0.000000000000000000');
+ assert.equal(Object.hasOwn(account,'available_balance'),false);
+ assert.equal(Object.hasOwn(account,'locked_balance'),false);
+ assert.equal(await balance(cash.accountId),'0.000000000000000000');
  assert.equal(account.iban_or_account_no,'EXTERNAL-NOSTRO-001');
  assert.match(nostroRegisterTable(rows),/NOSTRO Clearing/);
  assert.match(nostroRegisterTable(rows),/data-nostro-mirror/);
  assert.ok(!nostroRegisterTable([{...account,institution_name:'<script>'}]).includes('<script>'),'UI escapes provider names');
  await assert.rejects(core.list({id:'customer',admin:false},'nostroclearing'),/FORBIDDEN/);
+});
+
+test('optional intermediary migration preserves existing supplied values, identities, bindings and ledger data',async()=>{
+ assert.deepEqual(await intermediary(legacyIntermediary.id),upgradeSnapshot.intermediary);
+ assert.deepEqual((await pool.query('SELECT * FROM avis_core_v2.external_cash_accounts WHERE cash_account_id=$1',[cash.id])).rows[0],upgradeSnapshot.cash);
+ assert.deepEqual(await ledgerSnapshot(),upgradeSnapshot.ledger);
+ const columns=(await pool.query(`SELECT column_name,is_nullable,column_default FROM information_schema.columns
+  WHERE table_schema='avis_core_v2' AND table_name='nostro_intermediary_banks'
+  AND column_name=ANY($1::text[])`,[Object.values(directoryFields)])).rows;
+ assert.equal(columns.length,7);
+ assert.ok(columns.every(column=>column.is_nullable==='YES'&&column.column_default===null));
 });
 
 test('idempotent manual NOSTRO mirroring updates only the external asset and a dedicated offset, preserving customer ledgers',async()=>{
@@ -209,4 +246,117 @@ test('combined NOSTRO registration creates its incoming intermediary in one atom
  await assert.rejects(core.updateCashAccountDetails(admin,{...edit,bankName:'MUST ROLLBACK',
   intermediary:{...edit.intermediary,intermediaryId:randomUUID()}},key()),e=>e.code==='INTERMEDIARY_NOT_FOUND');
  assert.equal((await core.list(admin,'nostroclearing')).find(x=>x.cash_account_id===opened.id).institution_name,'Combined Test NOSTRO Corrected');
+});
+
+test('omitted, empty and whitespace-only intermediary details save without creating a blank directory record',async()=>{
+ const blank={bankName:' ',bankAddress:'',accountName:null,reference:'\t ',aba:' ',bic:' ',accountNumber:'  '};
+ const count=async()=>(await pool.query('SELECT count(*)::int AS count FROM avis_core_v2.nostro_intermediary_banks')).rows[0].count;
+ const before=await count(),journals=(await pool.query('SELECT count(*)::int AS count FROM avis_core_v2.ledger_journals')).rows[0].count;
+ for(const details of [undefined,null,{},blank]){
+  const input={institutionType:'CORRESPONDENT_BANK',institutionName:'Optional intermediary bank',
+   bic:'TESTGB2LXXX',accountNumber:randomUUID(),currency:'EUR',...(details===undefined?{}:{intermediary:details})};
+  const token=key(),saved=await core.registerCashAccount(admin,input,token);
+  assert.equal(saved.intermediaryId,null);
+  assert.deepEqual(await core.registerCashAccount(admin,input,token),saved);
+  assert.deepEqual((await core.list(admin,'nostroclearing')).find(row=>row.cash_account_id===saved.id).intermediaries,[]);
+ }
+ const ledger=await ledgerSnapshot();
+ for(const details of [{},blank]){
+  const input={cashAccountId:cash.id,...details},token=key();
+  const saved=await core.registerIntermediaryBank(admin,input,token);
+  assert.deepEqual(saved,{id:null,cashAccountId:cash.id});
+  assert.deepEqual(await core.registerIntermediaryBank(admin,input,token),saved);
+ }
+ assert.equal(await count(),before);
+ assert.deepEqual(await ledgerSnapshot(),ledger);
+ assert.equal((await pool.query('SELECT count(*)::int AS count FROM avis_core_v2.ledger_journals')).rows[0].count,journals);
+ await assert.rejects(core.registerIntermediaryBank(admin,{cashAccountId:randomUUID()},key()),e=>e.code==='NOSTRO_ACCOUNT_NOT_FOUND');
+ await assert.rejects(core.registerIntermediaryBank({id:'customer',admin:false},{cashAccountId:cash.id},key()),e=>e.code==='FORBIDDEN');
+});
+
+test('every intermediary detail can be supplied independently through combined and standalone registration',async()=>{
+ const samples={bankName:'Partial bank',bankAddress:'18 Transit Road',accountName:'Transit holder',
+  aba:'021000021',reference:'PARTIAL-REFERENCE',bic:'CHASUS33XXX',accountNumber:'PARTIAL-ACCOUNT'};
+ for(const [field,value]of Object.entries(samples)){
+  const details={[field]:'  '+value+'  '};
+  const ledger=await ledgerSnapshot();
+  const standalone=await core.registerIntermediaryBank(admin,{cashAccountId:cash.id,...details},key());
+  assert.ok(standalone.id);
+  assert.deepEqual(await ledgerSnapshot(),ledger);
+  const combined=await core.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Partial details '+field,
+   bic:'TESTGB2LXXX',accountNumber:randomUUID(),currency:'EUR',intermediary:details},key());
+  assert.ok(combined.intermediaryId);
+  for(const [id,cashId]of [[standalone.id,cash.id],[combined.intermediaryId,combined.id]]){
+   const row=await intermediary(id);
+   assert.equal(row.cash_account_id,cashId);
+   for(const [name,column]of Object.entries(directoryFields))assert.equal(row[column],name===field?value:null,column);
+  }
+ }
+});
+
+test('omitted intermediary edits preserve records while explicit blank edits keep the selected identity and binding',async()=>{
+ const opened=await core.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Optional edit bank',
+  bic:'TESTGB2LXXX',accountNumber:randomUUID(),currency:'EUR'},key());
+ const details={bankName:'Keep identity',bankAddress:'9 Correspondent Street',accountName:'Transit account',
+  reference:'KEEP-BINDING',aba:'021000021',bic:'CHASUS33XXX',accountNumber:'INT-BOUND'};
+ const selected=await core.registerIntermediaryBank(admin,{cashAccountId:opened.id,...details},key());
+ const unselected=await core.registerIntermediaryBank(admin,{cashAccountId:opened.id,bankName:'Unselected',reference:'KEEP-OTHER'},key());
+ const original=await intermediary(selected.id),otherBefore=await intermediary(unselected.id),ledger=await ledgerSnapshot();
+ const edit={cashAccountId:opened.id,bankName:'Optional edit bank',bankAddress:'1 NOSTRO Street',accountName:'NOSTRO holder',reference:'EXTERNAL-ACCOUNT'};
+ for(const incoming of [undefined,null,{},Object.fromEntries(Object.keys(directoryFields).map(name=>[name,' ']))]){
+  await core.updateCashAccountDetails(admin,{...edit,...(incoming===undefined?{}:{intermediary:incoming})},key());
+  assert.deepEqual(await intermediary(selected.id),original);
+ }
+ const blank=Object.fromEntries(Object.keys(directoryFields).map(name=>[name,' ']));
+ const saved=await core.updateCashAccountDetails(admin,{...edit,intermediary:{intermediaryId:selected.id,...blank}},key());
+ assert.equal(saved.intermediaryId,selected.id);
+ let row=await intermediary(selected.id);
+ assert.equal(row.intermediary_id,selected.id);
+ assert.equal(row.cash_account_id,opened.id);
+ assert.equal(row.created_by,original.created_by);
+ assert.deepEqual(row.created_at,original.created_at);
+ assert.ok(Object.values(directoryFields).every(column=>row[column]===null));
+ assert.deepEqual(await intermediary(unselected.id),otherBefore);
+ const amended=await core.updateIntermediaryBank(admin,{intermediaryId:selected.id,accountName:'Only account name'},key());
+ assert.deepEqual(amended,{id:selected.id,cashAccountId:opened.id});
+ row=await intermediary(selected.id);
+ assert.equal(row.account_name,'Only account name');
+ assert.ok(Object.entries(directoryFields).filter(([name])=>name!=='accountName').every(([,column])=>row[column]===null));
+ const token=key(),input={intermediaryId:selected.id,...blank};
+ const cleared=await core.updateIntermediaryBank(admin,input,token);
+ assert.deepEqual(await core.updateIntermediaryBank(admin,input,token),cleared);
+ row=await intermediary(selected.id);
+ assert.ok(Object.values(directoryFields).every(column=>row[column]===null));
+ assert.equal(row.cash_account_id,opened.id);
+ assert.deepEqual(await intermediary(unselected.id),otherBefore);
+ assert.deepEqual(await ledgerSnapshot(),ledger);
+});
+
+test('optional intermediary fields retain supplied routing validation, selected-account ownership and atomic rollback',async()=>{
+ const saved=await core.registerIntermediaryBank(admin,{cashAccountId:cash.id,bankName:'Protected intermediary'},key());
+ const original=await intermediary(saved.id),ledger=await ledgerSnapshot();
+ const base={institutionType:'CORRESPONDENT_BANK',institutionName:'Rejected combined account',bic:'TESTGB2LXXX',
+  accountNumber:randomUUID(),currency:'EUR'};
+ for(const [field,value]of [['aba','123456789'],['bic','bad'],['bankName',false],['accountNumber','a'.repeat(129)]]){
+  await assert.rejects(core.registerIntermediaryBank(admin,{cashAccountId:cash.id,[field]:value},key()),e=>e.code==='INVALID_FIELD'&&e.field===field);
+  await assert.rejects(core.updateIntermediaryBank(admin,{intermediaryId:saved.id,[field]:value},key()),e=>e.code==='INVALID_FIELD'&&e.field===field);
+  const incomingField='intermediary'+field[0].toUpperCase()+field.slice(1);
+  await assert.rejects(core.registerCashAccount(admin,{...base,intermediary:{[field]:value}},key()),e=>e.code==='INVALID_FIELD'&&e.field===incomingField);
+ }
+ for(const id of [undefined,'','not-a-uuid'])await assert.rejects(core.updateIntermediaryBank(admin,{intermediaryId:id},key()),e=>e.code==='INVALID_FIELD'&&e.field==='intermediaryId');
+ await assert.rejects(core.updateIntermediaryBank(admin,{intermediaryId:randomUUID()},key()),e=>e.code==='INTERMEDIARY_NOT_FOUND');
+ await assert.rejects(core.registerCashAccount(admin,{...base,intermediary:{intermediaryId:'not-a-uuid'}},key()),e=>e.code==='INVALID_FIELD'&&e.field==='intermediaryId');
+ const cashCount=(await pool.query('SELECT count(*)::int AS count FROM avis_core_v2.external_cash_accounts')).rows[0].count;
+ await assert.rejects(core.registerCashAccount(admin,{...base,intermediary:{intermediaryId:saved.id}},key()),e=>e.code==='INTERMEDIARY_NOT_FOUND');
+ assert.equal((await pool.query('SELECT count(*)::int AS count FROM avis_core_v2.external_cash_accounts')).rows[0].count,cashCount);
+ const otherCash=(await pool.query('SELECT cash_account_id FROM avis_core_v2.external_cash_accounts WHERE cash_account_id<>$1 LIMIT 1',[cash.id])).rows[0].cash_account_id;
+ const foreign=await core.registerIntermediaryBank(admin,{cashAccountId:otherCash,accountNumber:'FOREIGN-BOUND-ACCOUNT'},key());
+ const foreignBefore=await intermediary(foreign.id);
+ const parent=(await pool.query('SELECT * FROM avis_core_v2.external_cash_accounts WHERE cash_account_id=$1',[cash.id])).rows[0];
+ await assert.rejects(core.updateCashAccountDetails(admin,{cashAccountId:cash.id,bankName:'Must roll back',bankAddress:'Address',
+  accountName:'Account',reference:'Ref',intermediary:{intermediaryId:foreign.id}},key()),e=>e.code==='INTERMEDIARY_NOT_FOUND');
+ assert.deepEqual((await pool.query('SELECT * FROM avis_core_v2.external_cash_accounts WHERE cash_account_id=$1',[cash.id])).rows[0],parent);
+ assert.deepEqual(await intermediary(saved.id),original);
+ assert.deepEqual(await intermediary(foreign.id),foreignBefore);
+ assert.deepEqual(await ledgerSnapshot(),ledger);
 });

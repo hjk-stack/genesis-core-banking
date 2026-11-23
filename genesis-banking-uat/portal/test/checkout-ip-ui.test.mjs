@@ -98,6 +98,24 @@ test('handler-only report changes refresh rows while pending route selection, de
  }finally{dom.window.close();}
 });
 
+test('partially supplied intermediary details stay optional and are never selected by default',async()=>{
+ const banks=[{...nostros[0],intermediaries:[
+  {intermediaryId:'bic-only',bankName:null,reference:null,bic:'BCMAMAMC'},
+  {intermediaryId:'retained-empty',bankName:'TBA',reference:'NA',bic:null}
+ ]}],record=request({receivingAccountId:'common',nostroCashAccountId:'bank-a'}),calls=[];
+ const dom=new JSDOM('<body>'+checkoutIpRegister([record],accounts,banks)+'</body>',{url:'https://bank.example/'});
+ try{
+  const doc=dom.window.document,select=doc.querySelector('[data-ip-intermediary]');
+  assert.equal(select.value,'');
+  assert.deepEqual([...select.options].map(option=>option.textContent),['No intermediary','BCMAMAMC','retained-empty']);
+  bindCheckoutIp({root:doc,requests:[record],nostros:banks,activate:async payload=>{calls.push(payload);return {};},onChange:()=>{},openHandler:()=>{}});
+  doc.querySelector('[data-ip-nostro]').dispatchEvent(new dom.window.Event('change'));
+  assert.equal(select.value,'');assert.equal(select.options[1].textContent,'BCMAMAMC');
+  doc.querySelector('[data-ip-toggle]').click();await settle();assert.equal(calls[0].intermediaryId,null);
+  select.value='bic-only';doc.querySelector('[data-ip-toggle]').click();await settle();assert.equal(calls[1].intermediaryId,'bic-only');
+ }finally{dom.window.close();}
+});
+
 test('untrusted handler text stays text in the register',()=>{
  const injected='<img src=x onerror=alert(1)>',dom=domFor([request({senderAccount:injected,processing:{...processing,bankName:injected,beneficiaryName:injected,proof:{...processing.proof,fileName:injected}}})]);
  try{assert.equal(dom.window.document.querySelector('img'),null);assert.match(dom.window.document.body.textContent,/<img src=x/);}

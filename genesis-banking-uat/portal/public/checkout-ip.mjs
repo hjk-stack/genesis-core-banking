@@ -6,6 +6,11 @@ export const checkoutIpFingerprint=rows=>JSON.stringify(rows);
 export const checkoutIpHandlerUrl=record=>'https://avis.land/admin/bank/quantum/direct-transfer'+(record?.requestId?'?checkoutRequest='+encodeURIComponent(record.requestId):'');
 const routeSelectors=['[data-ip-account]','[data-ip-nostro]','[data-ip-intermediary]'];
 const controlSelectors=[...routeSelectors,'[data-ip-toggle]','[data-ip-handler]','[data-ip-proof]','[data-ip-completion-report]'];
+const intermediaryLabel=record=>{
+ const fields=[record.bankName,record.reference,record.bic,record.accountName,record.accountNumber,record.bankAddress,record.aba]
+  .map(field=>String(field??'').trim()).filter(field=>field&&!/^(?:n\/?a|tba|tbd|none|not applicable|not available|not provided|not recorded|unknown|[-—–]+)$/i.test(field));
+ return [...new Set(fields)].join(' · ')||String(record.intermediaryId);
+};
 
 export function expireCheckoutIpControls(root=document,now=Date.now()){
  const panel=root.querySelector('[data-checkout-ip-register]');if(!panel)return;
@@ -37,7 +42,7 @@ export function checkoutIpRegister(rows=[],accounts=[],nostros=[]){
    esc(n.institution_name)+' · '+esc(n.iban_or_account_no)+'</option>').join('');
   const selectedBank=banks.find(b=>b.cash_account_id===r.nostroCashAccountId);
   const intermediateRows=Array.isArray(selectedBank?.intermediaries)?selectedBank.intermediaries:[];
-  const intermediateOptions=intermediateRows.map(i=>'<option value="'+esc(i.intermediaryId)+'" '+(i.intermediaryId===r.intermediaryId?'selected':'')+'>'+esc(i.bankName)+' · '+esc(i.reference)+'</option>').join('');
+  const intermediateOptions=intermediateRows.map(i=>'<option value="'+esc(i.intermediaryId)+'" '+(i.intermediaryId===r.intermediaryId?'selected':'')+'>'+esc(intermediaryLabel(i))+'</option>').join('');
   return '<tr data-checkout-ip="'+id+'" data-ip-state="'+esc(state)+'">'+
    '<td class="ip-request-cell"><strong>'+esc(r.checkoutReference)+'</strong><small>'+esc(r.title)+'</small><small>Request '+id+
    '</small><div class="ip-request-controls"><button type="button" role="switch" aria-checked="'+(state==='ACTIVE')+'" aria-label="IP-to-IP '+esc(state)+' '+id+
@@ -95,7 +100,7 @@ export function bindCheckoutIp({root=document,requests=[],nostros=[],activate,on
   const intermediary=row.querySelector('[data-ip-intermediary]'),Option=row.ownerDocument.defaultView.Option;
   bank.onchange=()=>{
    const n=nostros.find(x=>x.cash_account_id===bank.value);
-   intermediary.replaceChildren(new Option('No intermediary',''),...(n?.intermediaries||[]).map(i=>new Option(i.bankName+' · '+i.reference,i.intermediaryId)));
+   intermediary.replaceChildren(new Option('No intermediary',''),...(n?.intermediaries||[]).map(i=>new Option(intermediaryLabel(i),i.intermediaryId)));
   };
   row.querySelector('[data-ip-toggle]').onclick=async e=>{
    const button=e.currentTarget,active=ipState(record)==='REQUESTED';
