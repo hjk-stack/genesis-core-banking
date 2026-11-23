@@ -93,6 +93,26 @@ test('permanent administrator switches render with no requests and no data fetch
  }finally{h.close();}
 });
 
+test('IP sliders keep an explicit knob and accessible three-state status without visible state labels',()=>{
+ const record=request(),h=adminHarness({rows:[record]});try{
+  const access=h.doc.querySelector('[data-ip-admin-access]'),management=h.doc.querySelector('[data-ip-admin-management]');
+  assert.equal(access.getAttribute('aria-description'),'Closed');h.select(id);
+  assert.equal(access.getAttribute('aria-description'),'Waiting for bank approval');assert.equal(access.getAttribute('aria-checked'),'false');
+  h.controller.update([{...record,status:'ACTIVE'}]);assert.equal(h.doc.querySelector('[data-ip-admin-request]').value,id);
+  assert.equal(access.getAttribute('aria-description'),'Approved');assert.equal(access.getAttribute('aria-checked'),'true');
+  h.controller.update([record]);h.controller.expire(Date.parse(record.expiresAt));expireCheckoutIpControls(h.doc,Date.parse(record.expiresAt));
+  for(const button of [access,h.doc.querySelector('[data-ip-toggle]')]){
+   assert.equal(button.dataset.state,'CLOSED');assert.equal(button.getAttribute('aria-description'),'Closed');assert.equal(button.getAttribute('aria-disabled'),'true');
+  }
+  management.click();assert.equal(management.getAttribute('aria-description'),'Management tab open');
+  for(const button of h.doc.querySelectorAll('[data-ip-admin-access],[data-ip-admin-management],[data-ip-toggle]')){
+   assert.equal(button.tagName,'BUTTON');assert.equal(button.type,'button');assert.equal(button.classList.contains('ip-liquid-slider'),true);
+   assert.equal(button.querySelectorAll(':scope > .pos-liquid-knob[aria-hidden=true]').length,1);assert.equal(button.textContent,'');
+  }
+  assert.equal(h.doc.querySelectorAll('.pos-activation-label,[data-ip-admin-access-state],[data-ip-admin-management-state]').length,0);
+ }finally{h.close();}
+});
+
 test('access requires an explicit request and delegates validation to its actual row',async()=>{
  const record=request(),calls=[],h=adminHarness({rows:[record],activateRequest:async requestId=>{
   const row=[...h.doc.querySelectorAll('[data-checkout-ip]')].find(row=>row.dataset.checkoutIp===requestId),button=row.querySelector('[data-ip-toggle]');await button.onclick({currentTarget:button});
