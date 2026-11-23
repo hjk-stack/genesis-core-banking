@@ -158,6 +158,14 @@ textarea{box-sizing:border-box;width:100%;font:inherit;border:1px solid #d6dbe3;
 [data-nostro-register] td small,[data-intermediary-register] td small{display:block;font-family:Inter,Arial,sans-serif;font-size:11px;color:var(--muted);margin-top:5px;max-width:320px;white-space:normal;overflow-wrap:anywhere}
 [data-nostro-register] td button,[data-intermediary-register] td button{margin:2px;white-space:nowrap}
 [data-nostro-register] td:first-child,[data-intermediary-register] td{vertical-align:top}
+[data-nostro-register] .nostro-register-table{table-layout:fixed;min-width:760px}
+[data-nostro-register] .nostro-register-table th:nth-child(1){width:30%}
+[data-nostro-register] .nostro-register-table th:nth-child(2){width:25%}
+[data-nostro-register] .nostro-register-table th:nth-child(3){width:9%}
+[data-nostro-register] .nostro-register-table th:nth-child(4){width:36%}
+[data-nostro-register] .nostro-register-table th,[data-nostro-register] .nostro-register-table td{white-space:normal;overflow-wrap:anywhere;vertical-align:top}
+[data-nostro-register] .nostro-management-actions{display:flex;flex-wrap:wrap;align-items:flex-start;gap:6px}
+[data-nostro-register] .nostro-management-actions button{margin:0;max-width:100%;white-space:normal;text-align:left}
 #form-dialog:has([name="bankAddress"]) {width:min(780px,calc(100vw - 24px));max-height:min(90dvh,900px);overflow:auto}
 #form-dialog:has([name="bankAddress"]) #form-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}
 #form-dialog:has([name="bankAddress"]) #form-fields>fieldset{grid-column:1/-1}

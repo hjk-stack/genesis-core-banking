@@ -57,7 +57,7 @@ export function combinedNostroInput(data,form){
 export function nostroRegisterTable(rows=[]){
  return '<section class="panel" data-nostro-register>'+
   '<div class="panel-header"><h2>NOSTRO Clearing · Settlement network</h2><span>'+rows.length+' registered accounts</span></div>'+
-  '<div class="table-wrap"><table><thead><tr><th>Bank / account details</th><th>External settlement account</th><th>Currency</th><th>Manage</th></tr></thead><tbody>'+
+  '<div class="table-wrap"><table class="nostro-register-table"><thead><tr><th>Bank / account details</th><th>External settlement account</th><th>Currency</th><th>Manage</th></tr></thead><tbody>'+
   rows.map(row=>{
    const intermediaries=Array.isArray(row.intermediaries)?row.intermediaries.filter(hasIntermediaryDetails):[];
    return '<tr data-nostro-row="'+esc(row.cash_account_id)+'"><td><strong>'+esc(row.institution_name)+'</strong><small>'+esc(row.institution_type?.replaceAll('_',' '))+'</small>'+
@@ -67,11 +67,11 @@ export function nostroRegisterTable(rows=[]){
     (intermediaries.length?'<div class="nostro-intermediary-details"><strong>Incoming intermediary bank</strong>'+intermediaries.map(i=>'<div data-nostro-intermediary="'+esc(i.intermediaryId)+'">'+intermediaryLines(i)+'</div>').join('')+'</div>':'')+'</td>'+
     '<td class="account-number">'+esc(row.iban_or_account_no)+'<small>BIC '+esc(row.bic_code||'—')+'</small></td>'+
     '<td>'+esc(row.currency_code)+'</td>'+
-    '<td><button type="button" data-nostro-statements="'+esc(row.cash_account_id)+'">External statements</button> '+
+    '<td><div class="nostro-management-actions"><button type="button" data-nostro-statements="'+esc(row.cash_account_id)+'">External statements</button> '+
     '<button type="button" data-nostro-edit="'+esc(row.cash_account_id)+'">Edit NOSTRO &amp; intermediary</button> '+
     '<button type="button" data-nostro-mirror="'+esc(row.cash_account_id)+'">Mirror movement</button> '+
     '<button type="button" data-nostro-gateway="'+esc(row.cash_account_id)+'">Card gateway</button> '+
-    '<button type="button" data-nostro-bank="'+esc(row.cash_account_id)+'">Bank API / ISO</button></td></tr>';
+    '<button type="button" data-nostro-bank="'+esc(row.cash_account_id)+'">Bank API / ISO</button></div></td></tr>';
   }).join('')+
   '</tbody></table></div>'+(!rows.length?'<p class="panel-empty">Register a NOSTRO account.</p>':'')+
   '</section>';

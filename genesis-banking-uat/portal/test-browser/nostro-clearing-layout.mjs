@@ -69,6 +69,18 @@ for(const width of [390,834,1440])test('NOSTRO register, optional intermediary a
   assert.equal(await table.locator('[data-nostro-intermediary]').count(),1);assert.doesNotMatch(await table.textContent(),/999999999|888888888|PRIVATE_CONNECTOR_VALUE|PRIVATE_GATEWAY_VALUE|TBA|N\/A/);
   for(const action of ['edit','mirror','gateway','bank','statements'])assert.equal(await table.locator('[data-nostro-'+action+']').count(),1);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  const wrap=table.locator('.table-wrap');
+  if(width<1080)await wrap.evaluate(el=>el.scrollLeft=el.scrollWidth);
+  const registerBounds=await table.evaluate(el=>{
+   const wrap=el.querySelector('.table-wrap'),box=wrap.getBoundingClientRect(),cells=el.querySelector('tbody tr').children;
+   return {left:box.left,right:box.right,top:box.top,bottom:box.bottom,clientWidth:wrap.clientWidth,scrollWidth:wrap.scrollWidth,bankWidth:cells[0].getBoundingClientRect().width,accountWidth:cells[1].getBoundingClientRect().width,
+    actions:[...el.querySelectorAll('.nostro-management-actions button')].map(button=>{const r=button.getBoundingClientRect();return {name:button.textContent,left:r.left,right:r.right,top:r.top,bottom:r.bottom};})};
+  });
+  assert.equal(registerBounds.actions.length,5);
+  for(const action of registerBounds.actions){assert.ok(action.left>=registerBounds.left-1&&action.right<=registerBounds.right+1,action.name+' stays inside the visible table area');assert.ok(action.top>=registerBounds.top-1&&action.bottom<=registerBounds.bottom+1,action.name+' fits its register row');}
+  if(width===1440){assert.ok(registerBounds.scrollWidth<=registerBounds.clientWidth+1,'desktop register needs no horizontal scroll');assert.ok(registerBounds.bankWidth>=240,'bank details retain readable width');assert.ok(registerBounds.accountWidth>=220,'external account retains readable width');}
+  if(width===390)assert.ok(registerBounds.scrollWidth>registerBounds.clientWidth,'phone retains horizontal table scrolling');
+  await wrap.evaluate(el=>el.scrollLeft=0);
   await table.scrollIntoViewIfNeeded();await page.screenshot({path:'test-results/nostro-clearing-register-'+width+'.png',fullPage:false});
   await table.locator('[data-nostro-statements]').click();const popup=page.locator('[data-nostro-statement-dialog]');await popup.locator('[data-nostro-statement]').waitFor();await popupFits(popup,width);
   await popup.locator('[data-nostro-statement]').click();await popup.locator('[data-nostro-back]').waitFor();
