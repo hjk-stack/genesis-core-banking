@@ -88,7 +88,7 @@ jobs:
             genesis-banking-uat/portal/test-results/crypto-live-trader-*.png
             genesis-banking-uat/portal/test-results/crypto-trader-instructions-*.png
             genesis-banking-uat/portal/test-results/treasury-source-*.png
-            genesis-banking-uat/portal/test-results/checkout-ip-proof-*.png
+            genesis-banking-uat/portal/test-results/checkout-ip-*.png
             genesis-banking-uat/portal/test-results/nostro-clearing-*.png
             genesis-banking-uat/portal/test-results/nostro-statements-*.png
           if-no-files-found: ignore

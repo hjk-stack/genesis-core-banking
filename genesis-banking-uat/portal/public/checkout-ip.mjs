@@ -26,7 +26,8 @@ export function checkoutIpAdminControls(){
 }
 
 export function createCheckoutIpAdminControls({root=document,activateRequest,windowApi=root.defaultView}={}){
- let panel=null,requests=[],selectedId='',loading=true,busy=false,generation=0,managedTab=null,tabTimer=null,focusSelector=null,windowSequence=0;
+ let panel=null,requests=[],selectedId='',loading=true,busy=false,generation=0,managedSession=null,focusSelector=null;
+ const managementOrigin=new URL(checkoutIpHandlerUrl(null)).origin;
  const selected=()=>requests.find(record=>record.requestId===selectedId);
  const currentState=(record,now=Date.now())=>!record?'CLOSED':record.status==='REQUESTED'&&Date.parse(record.expiresAt)<=now?'CLOSED':record.status;
  const error=(kind,message)=>{const slot=panel?.querySelector('[data-ip-admin-'+kind+'-error]');if(slot)slot.textContent=message;};
@@ -41,29 +42,88 @@ export function createCheckoutIpAdminControls({root=document,activateRequest,win
   paint('access',state);button.disabled=busy;button.setAttribute('aria-disabled',String(busy||!record||state==='CLOSED'||loading));button.setAttribute('aria-busy',String(busy));
   panel.querySelector('[data-ip-admin-request]').disabled=busy||loading||!requests.length;
  }
- function stopTabTimer(){if(tabTimer!==null){windowApi.clearInterval(tabTimer);tabTimer=null;}}
- function tabIsOpen(){try{return !!managedTab&&!managedTab.closed;}catch{return false;}}
+ function tabIsOpen(session=managedSession){try{return !!session&&!session.tab.closed;}catch{return false;}}
+ function disposeSession(session){
+  session.disposed=true;windowApi.clearInterval(session.timer);
+  session.port?.close();for(const port of session.pendingPorts)port.close();session.pendingPorts.clear();
+ }
+ function finishSession(session){
+  disposeSession(session);if(managedSession===session){managedSession=null;error('management','');syncManagement();}
+ }
  function syncManagement(){
-  if(!tabIsOpen()){managedTab=null;stopTabTimer();}
-  if(panel?.isConnected)paint('management',managedTab?'ACTIVE':'CLOSED');
+  if(managedSession&&!tabIsOpen())finishSession(managedSession);
+  if(panel?.isConnected){
+   paint('management',managedSession?'ACTIVE':'CLOSED');
+   const button=panel.querySelector('[data-ip-admin-management]');button.disabled=!!managedSession?.closing;button.setAttribute('aria-busy',String(!!managedSession?.closing));
+  }
+ }
+ function sendClose(session){
+  if(session.port)try{session.port.postMessage({type:'avis-ip-management-close',token:session.token});}catch{}
+ }
+ function connectSession(session,{reconnect=false}={}){
+  if(session.disposed||(session.port&&!reconnect)||session.attempts>=session.attemptLimit)return;
+  const Channel=windowApi.MessageChannel||root.defaultView.MessageChannel;if(typeof Channel!=='function')return;
+  const {port1,port2}=new Channel();session.attempts++;session.pendingPorts.add(port1);
+  port1.onmessage=({data})=>{
+   if(session.disposed||data?.token!==session.token)return;
+   if(data.type==='avis-ip-management-disconnect'&&session.port===port1){
+    session.port=null;port1.close();session.attempts=0;session.attemptLimit=20;return;
+   }
+   if(!session.pendingPorts.has(port1)||data.type!=='avis-ip-management-ready')return;
+   session.port?.close();
+   session.port=port1;session.pendingPorts.delete(port1);
+   for(const pending of session.pendingPorts)pending.close();session.pendingPorts.clear();
+   if(session.closing)sendClose(session);
+  };
+  port1.start();
+  try{session.tab.postMessage({type:'avis-ip-management-init',token:session.token},managementOrigin,[port2]);}
+  catch{session.pendingPorts.delete(port1);port1.close();port2.close();}
+ }
+ function pollSession(session){
+  if(session.disposed)return;
+  if(!tabIsOpen(session)){finishSession(session);return;}
+  if(session.closing&&Date.now()>=session.closeDeadline){
+   session.closing=false;
+   if(managedSession===session)error('management','Could not close the IP-IP management tab. Try again or close its browser tab.');
+   else{disposeSession(session);return;}
+  }else if(session.closing&&session.port){
+   sendClose(session);
+   // Navigation can discard pagehide messages. Renew a silent channel while
+   // keeping the real tab open state until the browser confirms its closure.
+   if(Date.now()>=session.reconnectAt)connectSession(session,{reconnect:true});
+  }
+  else connectSession(session);
+  syncManagement();
+ }
+ function requestClose(session){
+  if(!session||session.disposed)return;
+  session.closing=true;session.closeDeadline=Date.now()+5000;session.reconnectAt=Date.now()+1000;session.attemptLimit=Math.max(session.attemptLimit,session.attempts+10);
+  // Native close remains safe before navigation. The cross-origin handler closes
+  // itself over its authenticated channel because its opener has been removed.
+  try{if(session.tab.location.origin===root.defaultView.location.origin||session.tab.location.href==='about:blank')session.tab.close();}catch{}
+  if(!tabIsOpen(session)){finishSession(session);return;}
+  if(session.port)sendClose(session);else connectSession(session);
+  if(!tabIsOpen(session))finishSession(session);
+  syncManagement();
  }
  function toggleManagement(){
   error('management','');
   if(tabIsOpen()){
-   try{managedTab.close();syncManagement();}catch{error('management','Could not close the IP-IP management tab. Try again.');}
+   if(!managedSession.closing)requestClose(managedSession);
    return;
   }
   let child;
   try{
-   managedTab=null;stopTabTimer();
-   const name='avis-ip-management-'+(root.defaultView.crypto?.randomUUID?.()||Date.now().toString(36)+'-'+(++windowSequence));
+   if(managedSession)finishSession(managedSession);
+   const token=root.defaultView.crypto.randomUUID(),name='avis-ip-management-'+token;
    child=windowApi.open('about:blank',name);
    if(!child)throw Error('Allow this page to open the IP-IP management tab.');
    child.opener=null;if(child.opener!==null)throw Error('Could not open the IP-IP management tab securely.');
-   child.location.replace(checkoutIpHandlerUrl(null));
+   const url=new URL(checkoutIpHandlerUrl(null));url.hash=new URLSearchParams({managementToken:token}).toString();child.location.replace(url.href);
    if(child.closed)throw Error('The IP-IP management tab closed before opening.');
-   managedTab=child;syncManagement();tabTimer=windowApi.setInterval(syncManagement,500);
-  }catch(reason){try{child?.close();}catch{}managedTab=null;stopTabTimer();syncManagement();error('management',reason.message||'Could not open the IP-IP management tab. Try again.');}
+   const session={tab:child,token,port:null,pendingPorts:new Set(),attempts:0,attemptLimit:20,closing:false,disposed:false,timer:null};
+   managedSession=session;session.timer=windowApi.setInterval(()=>pollSession(session),500);syncManagement();
+  }catch(reason){try{child?.close();}catch{}if(managedSession)disposeSession(managedSession);managedSession=null;syncManagement();error('management',reason.message||'Could not open the IP-IP management tab. Try again.');}
  }
  function update(rows=[],{loading:pending=false}={}){
   requests=Array.isArray(rows)?rows:[];loading=pending;
@@ -94,7 +154,7 @@ export function createCheckoutIpAdminControls({root=document,activateRequest,win
  }
  function close(){
   generation++;requests=[];selectedId='';loading=true;busy=false;focusSelector=null;
-  try{managedTab?.close();}catch{}managedTab=null;stopTabTimer();
+  const previous=managedSession;managedSession=null;requestClose(previous);
   update([],{loading:true});error('access','');error('management','');
  }
  return {bind,update,expire:paintAccess,close};

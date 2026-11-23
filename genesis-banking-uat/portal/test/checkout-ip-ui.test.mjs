@@ -60,10 +60,26 @@ test('an empty register does not fabricate request controls and handler links re
  }finally{dom.window.close();}
 });
 
-function adminHarness({rows=[],activateRequest=async()=>{},open}={}){
+class ManagementTestChannel{
+ constructor(){
+  const port=()=>({closed:false,onmessage:null,start(){},close(){this.closed=true;},postMessage(data){if(!this.closed&&!this.peer.closed)this.peer.onmessage?.({data});}});
+  this.port1=port();this.port2=port();this.port1.peer=this.port2;this.port2.peer=this.port1;
+ }
+}
+function adminHarness({rows=[],activateRequest=async()=>{},open,cooperate=true}={}){
  const dom=new JSDOM('<!doctype html><body><div id="mount">'+checkoutIpAdminControls()+'</div><div id="requests">'+checkoutIpRegister(rows,accounts,nostros)+'</div></body>',{url:'https://bank.example/'}),doc=dom.window.document;
  const tabs=[],calls=[],timers=new Map();let sequence=0;
- const windowApi={open:(...args)=>{calls.push(args);if(open)return open(...args);const events=[],tab={closed:false,opener:{},location:{replace:url=>{assert.equal(tab.opener,null);events.push(url);}},close(){this.closed=true;},events};tabs.push(tab);return tab;},setInterval:fn=>{timers.set(++sequence,fn);return sequence;},clearInterval:id=>timers.delete(id)};
+ const windowApi={MessageChannel:ManagementTestChannel,open:(...args)=>{
+  calls.push(args);if(open)return open(...args);
+  const events=[],messages=[],tab={closed:false,opener:{},location:{href:'about:blank',origin:'null',replace:url=>{assert.equal(tab.opener,null);events.push(url);tab.location.href=url;tab.location.origin=new URL(url).origin;}},close(){this.closed=true;},events,messages,
+   postMessage(data,targetOrigin,ports){
+    messages.push({data,targetOrigin,ports});if(!cooperate)return;
+    assert.equal(targetOrigin,'https://avis.land');assert.equal(data.type,'avis-ip-management-init');assert.equal(data.token,new URL(tab.location.href).hash.slice('#managementToken='.length));assert.equal(ports.length,1);
+    ports[0].onmessage=({data:message})=>{if(message.type==='avis-ip-management-close'&&message.token===data.token)tab.closed=true;};
+    ports[0].postMessage({type:'avis-ip-management-ready',token:data.token});
+   }};
+  tabs.push(tab);return tab;
+ },setInterval:fn=>{timers.set(++sequence,fn);return sequence;},clearInterval:id=>timers.delete(id)};
  const controller=createCheckoutIpAdminControls({root:doc,windowApi,activateRequest});controller.bind(doc);controller.update(rows);
  return {dom,doc,tabs,calls,timers,controller,select:id=>{const field=doc.querySelector('[data-ip-admin-request]');field.value=id;field.dispatchEvent(new dom.window.Event('change'));},close(){controller.close();dom.window.close();}};
 }
@@ -120,11 +136,54 @@ test('pending approval prevents duplicate activation and cannot redirect its res
 test('management owns a real tab independently, removes its opener before navigation and detects manual close',()=>{
  const h=adminHarness({rows:[request()]});try{
   h.select(id);const management=h.doc.querySelector('[data-ip-admin-management]');management.click();
-  assert.equal(h.calls[0][0],'about:blank');assert.equal(h.calls[0].length,2);assert.match(h.calls[0][1],/^avis-ip-management-/);assert.equal(h.tabs[0].opener,null);assert.deepEqual(h.tabs[0].events,[checkoutIpHandlerUrl(null)]);
+  assert.equal(h.calls[0][0],'about:blank');assert.equal(h.calls[0].length,2);assert.match(h.calls[0][1],/^avis-ip-management-/);assert.equal(h.tabs[0].opener,null);
+  const opened=new URL(h.tabs[0].events[0]);assert.equal(opened.origin+opened.pathname,checkoutIpHandlerUrl(null));assert.match(new URLSearchParams(opened.hash.slice(1)).get('managementToken'),/^[a-f0-9-]{36}$/i);
   assert.equal(management.dataset.state,'ACTIVE');assert.equal(h.doc.querySelector('[data-ip-admin-access]').dataset.state,'REQUESTED');
   h.tabs[0].closed=true;for(const poll of [...h.timers.values()])poll();assert.equal(management.dataset.state,'CLOSED');assert.equal(h.timers.size,0);
   management.click();assert.notEqual(h.calls[1][1],h.calls[0][1]);assert.equal(management.dataset.state,'ACTIVE');management.click();assert.equal(h.tabs[1].closed,true);assert.equal(management.dataset.state,'CLOSED');
  }finally{h.close();}
+});
+
+test('management close waits for its bound channel and never paints a still-open tab red',t=>{
+ let now=Date.now();t.mock.method(Date,'now',()=>now);
+ const h=adminHarness({cooperate:false});try{
+  const management=h.doc.querySelector('[data-ip-admin-management]');management.click();management.click();
+  assert.equal(h.tabs[0].closed,false);assert.equal(management.dataset.state,'ACTIVE');assert.equal(management.disabled,true);
+  const first=h.tabs[0].messages[0];first.ports[0].postMessage({type:'avis-ip-management-ready',token:'wrong-token'});
+  assert.equal(h.tabs[0].closed,false);assert.equal(management.dataset.state,'ACTIVE');
+  now+=5001;for(const poll of [...h.timers.values()])poll();
+  assert.equal(management.disabled,false);assert.equal(management.dataset.state,'ACTIVE');assert.match(h.doc.querySelector('[data-ip-admin-management-error]').textContent,/Could not close/);assert.equal(h.doc.querySelector('[data-ip-admin-access-error]').textContent,'');
+  h.tabs[0].closed=true;for(const poll of [...h.timers.values()])poll();assert.equal(management.dataset.state,'CLOSED');assert.equal(h.doc.querySelector('[data-ip-admin-management-error]').textContent,'');assert.equal(h.timers.size,0);
+ }finally{h.close();}
+});
+
+test('a delayed first ready acknowledgement remains valid and closes only its own tab after cleanup',()=>{
+ const h=adminHarness({cooperate:false});try{
+  const management=h.doc.querySelector('[data-ip-admin-management]');management.click();
+  for(let attempt=0;attempt<3;attempt++)for(const poll of [...h.timers.values()])poll();
+  const previous=h.tabs[0],first=previous.messages[0],token=first.data.token;h.controller.close();management.click();
+  const current=h.tabs[1];first.ports[0].onmessage=({data})=>{if(data.type==='avis-ip-management-close'&&data.token===token)previous.closed=true;};
+  first.ports[0].postMessage({type:'avis-ip-management-ready',token});for(const poll of [...h.timers.values()])poll();
+  assert.equal(previous.closed,true);assert.equal(current.closed,false);assert.equal(management.dataset.state,'ACTIVE');assert.equal(first.ports[0].peer.closed,true);
+  current.closed=true;for(const poll of [...h.timers.values()])poll();assert.equal(h.timers.size,0);
+ }finally{h.close();}
+});
+
+test('a refreshed handler rebinds its channel even when the previous disconnect was lost',t=>{
+ let now=Date.now();t.mock.method(Date,'now',()=>now);
+ for(const disconnectDelivered of [true,false]){
+  const h=adminHarness({cooperate:false});try{
+   const management=h.doc.querySelector('[data-ip-admin-management]');management.click();for(const poll of [...h.timers.values()])poll();
+   const tab=h.tabs[0],first=tab.messages[0],token=first.data.token;first.ports[0].postMessage({type:'avis-ip-management-ready',token});
+   if(disconnectDelivered)first.ports[0].postMessage({type:'avis-ip-management-disconnect',token});
+   else first.ports[0].close();
+   management.click();now+=1001;for(const poll of [...h.timers.values()])poll();
+   const replacement=tab.messages.at(-1);assert.notEqual(replacement,first);
+   replacement.ports[0].onmessage=({data})=>{if(data.type==='avis-ip-management-close'&&data.token===token)tab.closed=true;};
+   replacement.ports[0].postMessage({type:'avis-ip-management-ready',token});for(const poll of [...h.timers.values()])poll();
+   assert.equal(tab.closed,true);assert.equal(management.dataset.state,'CLOSED');assert.equal(h.timers.size,0);assert.equal(first.ports[0].peer.closed,true);
+  }finally{h.close();}
+ }
 });
 
 test('blocked and unsafe management tabs remain red with errors confined to the clicked control',()=>{

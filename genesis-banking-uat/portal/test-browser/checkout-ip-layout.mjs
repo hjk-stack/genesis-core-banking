@@ -41,6 +41,59 @@ const fixtureScript=()=>{
  "document.querySelector('#mount').innerHTML=checkoutIpAdminControls()+checkoutIpRegister(rows,accounts,nostros);admin.bind(document);bind();"
  ].join('\n');
 };
+// Match the standalone website's managementWindowClient contract. The fixture
+// has no banking operations; Chromium still performs the real native tab close.
+function managementWindowClient(trustedOrigin){
+ if(!trustedOrigin||window.top!==window||window.opener!==null||typeof MessagePort!=='function')return;
+ let token;
+ try{
+  const url=new URL(window.location.href),fragment=new URLSearchParams(url.hash.slice(1));
+  const state=window.history.state,path=url.pathname+url.search,fromFragment=fragment.has('managementToken');
+  const retained=state&&typeof state==='object'&&!Array.isArray(state)?state.avisIpManagement:null;
+  token=fromFragment?fragment.get('managementToken'):(retained?.origin===trustedOrigin&&retained.path===path?retained.token:null);
+  if(!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(token||'')||(fromFragment&&fragment.getAll('managementToken').length!==1))return;
+  // Retain the launch capability only in this history entry so reloads can
+  // establish a fresh channel. Preserve opaque application state verbatim.
+  if(fromFragment&&(state===null||(typeof state==='object'&&!Array.isArray(state)))){
+   fragment.delete('managementToken');url.hash=fragment.toString();
+   window.history.replaceState({...state,avisIpManagement:{token,origin:trustedOrigin,path}},'',path+url.hash);
+  }
+ }catch{return}
+ let channel=null;
+ function receive(event){
+  if(channel||event.origin!==trustedOrigin||event.data?.type!=='avis-ip-management-init'||event.data.token!==token||event.ports?.length!==1||!(event.ports[0] instanceof MessagePort))return;
+  // A fragment capability binds this launch to the configured core origin.
+  // Accept only a top-level source, then retain its port rather than its window.
+  try{if(!event.source||event.source===window||event.source.top!==event.source)return}catch{return}
+  channel=event.ports[0];
+  window.removeEventListener('message',receive);
+  channel.onmessage=({data})=>{
+   if(data?.type==='avis-ip-management-close'&&data.token===token)window.close();
+  };
+  channel.start();
+  channel.postMessage({type:'avis-ip-management-ready',token});
+ }
+ window.addEventListener('message',receive);
+ window.addEventListener('pagehide',()=>{
+  window.removeEventListener('message',receive);
+  if(channel){
+   try{channel.postMessage({type:'avis-ip-management-disconnect',token})}catch{}
+   channel.onmessage=null;channel.close();channel=null;
+  }
+ });
+ window.addEventListener('pageshow',()=>{if(!channel)window.addEventListener('message',receive)});
+}
+const managementFixture=()=>'<!doctype html><title>Management fixture</title><h1>IP-IP management</h1><script>('+managementWindowClient.toString()+')('+JSON.stringify(base)+');</script>';
+async function closeManagedTab(tab,page,action,consoleMessages,{visibleControl=true}={}){
+ const before=await tab.evaluate(()=>({historyLength:history.length,openerRemoved:window.opener===null,hasLaunchToken:new URLSearchParams(location.hash.slice(1)).has('managementToken')}));
+ try{
+  await Promise.all([tab.waitForEvent('close',{timeout:5000}),action()]);
+  if(visibleControl)await page.waitForFunction(()=>document.querySelector('[data-ip-admin-management]')?.dataset.state==='CLOSED',{},{timeout:2000});
+ }catch(reason){
+  const parent=await page.evaluate(()=>{const button=document.querySelector('[data-ip-admin-management]');return {state:button?.dataset.state,busy:button?.getAttribute('aria-busy'),error:document.querySelector('[data-ip-admin-management-error]')?.textContent};});
+  throw new Error('Managed tab close failed: '+JSON.stringify({before,parent,consoleMessages}),{cause:reason});
+ }
+}
 before(async()=>{
  const appHtml=await readFile(new URL('../index.html',import.meta.url),'utf8');
  server=http.createServer(async(req,res)=>{
@@ -113,9 +166,11 @@ test('IP handler opens an ordinary tab and activation remains an explicit routed
 });
 
 for(const [width,mode] of [[390,'empty'],[820,'empty'],[1440,'empty'],[820,'stalled'],[1440,'failed']])test('actual Payments app exposes independent switches with '+mode+' requests at '+width+'px',async()=>{
- const context=await browser.newContext({viewport:{width,height:1000}}),page=await context.newPage(),errors=[],held=[],writes=[];
+ const context=await browser.newContext({viewport:{width,height:1000}}),page=await context.newPage(),errors=[],held=[],writes=[],consoleMessages=[];
  page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.method()==='POST')writes.push(request.url());});
- await context.route('https://avis.land/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>Management fixture</title><h1>IP-IP management</h1>'}));
+ const captureConsole=(tab,label)=>tab.on('console',message=>{if(['warning','error'].includes(message.type()))consoleMessages.push(label+': '+message.text());});
+ captureConsole(page,'parent');context.on('page',tab=>captureConsole(tab,'child'));
+ await context.route('https://avis.land/**',route=>route.fulfill({contentType:'text/html',body:managementFixture()}));
  if(mode==='stalled')await page.route('**/api/views/checkoutip',route=>new Promise(resolve=>held.push({route,resolve})));
  if(mode==='failed')await page.route('**/api/views/checkoutip',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({message:'Could not read checkout requests.'})}));
  try{
@@ -131,11 +186,29 @@ for(const [width,mode] of [[390,'empty'],[820,'empty'],[1440,'empty'],[820,'stal
   const [tab]=await Promise.all([context.waitForEvent('page'),management.click()]);await tab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer');
   assert.equal(await tab.evaluate(()=>window.opener===null),true);assert.equal(await management.getAttribute('data-state'),'ACTIVE');assert.match(await management.evaluate(el=>getComputedStyle(el).backgroundImage),/48, 215, 152/);assert.equal(await access.getAttribute('data-state'),'CLOSED');assert.deepEqual(writes,[]);
   await page.screenshot({path:'test-results/checkout-ip-admin-'+mode+'-management-'+width+'.png',fullPage:false});
-  await Promise.all([tab.waitForEvent('close'),management.click()]);assert.equal(await management.getAttribute('data-state'),'CLOSED');
+  if(width===1440&&mode==='empty'){
+   await tab.reload();await tab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer');
+   assert.equal(await tab.evaluate(()=>window.opener===null),true);assert.equal(await management.getAttribute('data-state'),'ACTIVE');
+  }
+  await closeManagedTab(tab,page,()=>management.click(),consoleMessages);assert.equal(await management.getAttribute('data-state'),'CLOSED');
   const [manual]=await Promise.all([context.waitForEvent('page'),management.click()]);await manual.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer');await manual.close();
   await page.waitForFunction(()=>document.querySelector('[data-ip-admin-management]')?.dataset.state==='CLOSED');
   const [logoutTab]=await Promise.all([context.waitForEvent('page'),management.click()]);await logoutTab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer');
-  await Promise.all([logoutTab.waitForEvent('close'),page.locator('#signout').click()]);await page.locator('#signin').waitFor({state:'visible'});assert.deepEqual(errors,[]);
+  await closeManagedTab(logoutTab,page,()=>page.locator('#signout').click(),consoleMessages,{visibleControl:false});await page.locator('#signin').waitFor({state:'visible'});assert.deepEqual(errors,[]);
  }finally{for(const item of held){await item.route.fulfill({contentType:'application/json',body:'{"rows":[]}'}).catch(()=>{});item.resolve();}await context.close();}
+});
+
+test('a handler authentication response keeps the actual tab open and scopes a failed close to its switch',async()=>{
+ const context=await browser.newContext({viewport:{width:1440,height:1000}}),page=await context.newPage();
+ await context.route('https://avis.land/**',route=>route.fulfill({status:401,contentType:'application/json',body:'{"message":"Sign in"}'}));
+ try{
+  await page.goto(base+'/admin#payments');const management=page.locator('[data-ip-admin-management]');await management.waitFor();
+  const [tab]=await Promise.all([context.waitForEvent('page'),management.click()]);await tab.waitForURL(url=>url.origin==='https://avis.land'&&url.pathname==='/admin/bank/quantum/direct-transfer');await tab.waitForLoadState();
+  assert.equal(await tab.evaluate(()=>window.opener===null),true);await management.click();
+  assert.equal(await management.getAttribute('data-state'),'ACTIVE');assert.equal(await management.getAttribute('aria-busy'),'true');
+  await page.waitForFunction(()=>document.querySelector('[data-ip-admin-management]')?.getAttribute('aria-busy')==='false',{},{timeout:6500});
+  assert.equal(tab.isClosed(),false);assert.equal(await management.getAttribute('data-state'),'ACTIVE');assert.match(await page.locator('[data-ip-admin-management-error]').textContent(),/Could not close/);assert.equal(await page.locator('[data-ip-admin-access-error]').textContent(),'');
+  await tab.close();await page.waitForFunction(()=>document.querySelector('[data-ip-admin-management]')?.dataset.state==='CLOSED');assert.equal(await page.locator('[data-ip-admin-management-error]').textContent(),'');
+ }finally{await context.close();}
 });
 
