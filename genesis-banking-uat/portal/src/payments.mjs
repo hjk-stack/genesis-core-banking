@@ -88,7 +88,7 @@ export class PaymentServer extends SovereignCore {
   const aba=abaRouting(input.aba),reference=text(input.reference,'reference',140);
   const intermediary=incomingIntermediary(input.intermediary);
   const correctedCurrency=input.currency===undefined?null:text(input.currency,'currency',3).toUpperCase();
-  const chosenAbiq=input.abiqIban===undefined?null:text(input.abiqIban.replace(/\\s+/g,''),'abiqIban',40).toUpperCase();
+  const chosenAbiq=!input.abiqIban?null:text(input.abiqIban.replace(/\s+/g,''),'abiqIban',40).toUpperCase();
   if(correctedCurrency&&!/^[A-Z]{3}$/.test(correctedCurrency))fault('INVALID_FIELD','currency');
   if(chosenAbiq&&!/^TN[0-9]{2}AVIP[0-9]{18}$/.test(chosenAbiq))fault('INVALID_FIELD','abiqIban');
   return this.operation(actor,'UPDATE_EXTERNAL_BANK_DIRECTORY',input,key,async db=>{
@@ -109,7 +109,7 @@ export class PaymentServer extends SovereignCore {
       OR EXISTS(SELECT 1 FROM avis_core_v2.clearing_statements WHERE cash_account_id=$1)
       OR EXISTS(SELECT 1 FROM avis_core_v2.bank_connector_profiles WHERE cash_account_id=$1)
       OR EXISTS(SELECT 1 FROM avis_core_v2.payment_gateway_bridges WHERE clearing_account_id=$1)
-      OR avis_core_v2.legacy_ledger_referenced($2::uuid) AS in_use`,
+      OR EXISTS(SELECT 1 FROM avis_core_v2.interbank_ip_transfers WHERE cash_account_id=$1) AS in_use`,
       [cashAccountId,old.ledger_account_id])).rows[0].in_use;
     if(Number(old.available_balance)!==0||Number(old.locked_balance)!==0||inUse)
      fault('NOSTRO_CURRENCY_HAS_ACTIVITY','currency',409);
