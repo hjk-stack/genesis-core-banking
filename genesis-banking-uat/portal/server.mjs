@@ -11,9 +11,11 @@ import {FxBankingServer} from './src/fx.mjs';
 import {TradingRobotCore,ROBOT_MESSAGES} from './src/trading-robot.mjs';
 import {TradingRuntime,engineStatus} from './src/trading/runtime.mjs';
 import {IndexServiceAuthenticator} from './src/index-service-auth.mjs';
-import {CheckoutPosAuthenticator} from './src/checkout-pos-auth.mjs';
+import {CheckoutPosAuthenticator,CheckoutIpHandlerAuthenticator} from './src/checkout-pos-auth.mjs';
+import {IP_PROOF_MAX_BYTES} from './src/checkout-ip-processing.mjs';
 import {CheckoutPosControl} from './src/checkout-pos.mjs';
 import {CheckoutIpControl} from './src/checkout-ip.mjs';
+import {NostroStatements} from './src/nostro-statements.mjs';
 import {INDEX_ADVICE_MESSAGES} from './src/index-event-advice.mjs';
 import {TRADING_TEST_MESSAGES} from './src/trading-testing.mjs';
 import {TRADING_INSTRUCTION_MESSAGES} from './src/trading-instructions.mjs';
@@ -122,8 +124,20 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  STRIPE_PROVIDER_RESPONSE:'The card checkout request could not complete. Retry from this payment.',
  STRIPE_SIGNATURE:'The Stripe event could not be verified.',STRIPE_EVENT_MISMATCH:'The card payment details did not match the original checkout.',
  DUPLICATE_RECORD:'This reference is already registered.',INVALID_REFERENCE:'Select a valid record.',
+ IP_HANDLER_SERVICE_AUTH:'The IP-to-IP handler signature could not be verified.',
+ CHECKOUT_IP_COMPLETION:'Complete the settled operation details in the IP-to-IP handler.',
+ CHECKOUT_IP_COMPLETED:'This payment operation has already been completed.',
+ CHECKOUT_IP_CANCELLED:'This checkout request was cancelled. Create a new checkout request.',
+ CHECKOUT_IP_PROCESSING:'This payment has entered settlement processing.',
+ CHECKOUT_IP_CLAIM_REQUIRED:'Claim the matched bank settlement before publishing its result.',
+ CHECKOUT_IP_REVISION:'Refresh the operation before saving its processing report.',
+ CHECKOUT_IP_PROCESSING_LINK:'Select the handler operation linked to this checkout request.',
+ CHECKOUT_IP_PROOF:'Attach the original proof PDF for this completed operation.',
+ CHECKOUT_IP_PROOF_NOT_FOUND:'No proof PDF has been recorded for this payment.',
+ CHECKOUT_IP_PROOF_INTEGRITY:'This proof PDF could not be verified. Retrieve its original from the IP-to-IP handler.',
  INTERMEDIARY_NOT_FOUND:'Select an existing intermediary bank entry.',
  NOSTRO_ACCOUNT_NOT_FOUND:'Select a registered NOSTRO clearing account.',
+ NOSTRO_STATEMENT_NOT_FOUND:'Select an external statement for this NOSTRO account.',
  NOSTRO_ALREADY_SETTLED:'This external payment reference is already recorded as settled or reconciled.',
  NOSTRO_GATEWAY_NOT_FOUND:'Select a registered card settlement gateway.',
  NOSTRO_GATEWAY_ALREADY_LINKED:'This card gateway is linked to another NOSTRO account.',
@@ -136,12 +150,14 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
  const stripePos=transferOptions.stripePos||new StripeWebPos(pool,{env:transferOptions.secretEnv||process.env,fetcher:transferOptions.stripeFetch||fetch});
  const basket=new CryptoBasket(core,stripePos),storeWallet=new StoreWallet(basket);
  const posControl=new CheckoutPosControl(pool),ipControl=new CheckoutIpControl(pool),posAuth=new CheckoutPosAuthenticator(pool,{fetcher:transferOptions.posServiceFetcher||fetch});
+ const ipHandlerAuth=new CheckoutIpHandlerAuthenticator(pool,{fetcher:transferOptions.ipHandlerServiceFetcher||transferOptions.posServiceFetcher||fetch});
+ const nostroStatements=new NostroStatements(pool);
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  const server=http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
   res.setHeader('X-Request-Id',requestId);res.setHeader('X-Content-Type-Options','nosniff');
   res.setHeader('Cache-Control','no-store');res.setHeader('Referrer-Policy','same-origin');
-  res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://assets.coingecko.com https://coin-images.coingecko.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://assets.coingecko.com https://coin-images.coingecko.com; connect-src 'self'; frame-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   try {
    const url=new URL(req.url,'http://localhost'),path=url.pathname;
    if(req.method==='GET'&&path==='/healthz')return send(res,200,{status:'ok',release});
@@ -167,14 +183,26 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     if(!input||typeof input!=='object'||Array.isArray(input))fault('INVALID_FIELD',null,400);
     return send(res,200,await posControl[posService[1]](service,input));
    }
-   const ipService=/^\/api\/services\/checkout-ip\/(register|status)$/.exec(path);
+   const ipService=/^\/api\/services\/checkout-ip\/(register|status|cancel)$/.exec(path);
    if(ipService){
     if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
     if(!req.headers['content-type']?.startsWith('application/json'))fault('INVALID_FIELD',null,415);
     const chunks=[];let length=0;for await(const chunk of req){length+=chunk.length;if(length>8192)fault('INVALID_FIELD',null,413);chunks.push(chunk);}
     const raw=Buffer.concat(chunks),service=await posAuth.authenticate(req,raw);
     let value;try{value=JSON.parse(raw.toString('utf8'));}catch{fault('INVALID_FIELD',null,400);}
+    if(!value||typeof value!=='object'||Array.isArray(value))fault('INVALID_FIELD',null,400);
     return send(res,200,await ipControl[ipService[1]](service,value));
+   }
+   const ipHandler=/^\/api\/services\/checkout-ip\/(context|processing|claim)$/.exec(path);
+   if(ipHandler){
+    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
+    if(!req.headers['content-type']?.startsWith('application/json'))fault('INVALID_FIELD',null,415);
+    const limit=ipHandler[1]==='processing'?Math.ceil(IP_PROOF_MAX_BYTES/3)*4+16384:8192;
+    const parts=[];let length=0;for await(const chunk of req){length+=chunk.length;if(length>limit)fault('INVALID_FIELD',null,413);parts.push(chunk);}
+    const raw=Buffer.concat(parts),service=await ipHandlerAuth.authenticate(req,raw);
+    let input;try{input=JSON.parse(raw.toString('utf8'));}catch{fault('INVALID_FIELD',null,400);}
+    if(!input||typeof input!=='object'||Array.isArray(input))fault('INVALID_FIELD',null,400);
+    return send(res,200,await ipControl[ipHandler[1]](service,input));
    }
    if(req.method==='GET'&&path==='/readyz'){await pool.query('SELECT 1');return send(res,200,{status:'ready',release});}
    const bridge=/^\/api\/basket-bridge\/(state|quote|card|transfer|price|store-open|store-quote|store-receipt)$/.exec(path);
@@ -269,6 +297,23 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    const actor={id:session.actor_id+(session.is_admin&&holder?':customer:'+holder:''),username:session.username,admin:session.is_admin&&!holder,customerUserId:holder?String(holder):null,identityUserId:holder?String(session.identity_user_id):null};
    const sessionData=()=>({username:actor.username,csrf:sessionCsrf(token),admin:actor.admin,customerUserId:actor.identityUserId,canSwitchWorkspace:session.is_admin});
    const invoke=(method,input,key,...extra)=>actor.admin?core[method](actor,input,key,...extra):customerAccess.invoke(actor,method,input,key,...extra);
+   const nostroStatement=/^\/api\/nostro\/([^/]+)\/statements(?:\/([^/]+))?$/.exec(path);
+   if(nostroStatement){
+    if(req.method!=='GET')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
+    const input={cashAccountId:nostroStatement[1],before:url.searchParams.get('before')};
+    return send(res,200,await (nostroStatement[2]
+     ?nostroStatements.read(actor,{...input,statementId:nostroStatement[2]})
+     :nostroStatements.list(actor,input)));
+   }
+   const ipProof=/^\/api\/checkout-ip\/([0-9a-f-]{36})\/proof\.pdf$/i.exec(path);
+   if(ipProof&&req.method==='GET'){
+    const proof=await ipControl.proof(actor,ipProof[1]);
+    res.setHeader('Content-Security-Policy',"default-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'");
+    res.writeHead(200,{'content-type':'application/pdf','content-length':proof.bytes.length,
+     'content-disposition':(url.searchParams.get('download')==='1'?'attachment':'inline')+'; filename="'+proof.fileName+'"',
+     'cache-control':'private, no-store','x-content-sha256':proof.sha256});
+    return res.end(proof.bytes);
+   }
    if(path==='/api/session'&&req.method==='GET'){
     // Restore the same token in every tab. Adopt sessions issued before this
     // release once; new sessions need no write when restoring the workspace.

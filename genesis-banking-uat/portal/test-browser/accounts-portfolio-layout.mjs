@@ -260,7 +260,8 @@ test('NOSTRO creation uses one floating desk with intermediary details below the
   const primary=dialog.locator('fieldset.nostro-primary-fields'),incoming=dialog.locator('fieldset.incoming-intermediary-fields');
   assert.equal(await primary.count(),1);assert.equal(await incoming.count(),1);
   assert.equal(await dialog.locator('fieldset').evaluateAll(fs=>fs[0].getBoundingClientRect().top<fs[1].getBoundingClientRect().top),true);
-  assert.equal(await dialog.getByRole('button',{name:'Register NOSTRO & intermediary',exact:true}).count(),1);
+  assert.equal(await dialog.getByRole('button',{name:'Register NOSTRO',exact:true}).count(),1);
+  assert.equal(await incoming.locator('input[required]').count(),0);
   await primary.getByLabel('Bank name',{exact:true}).fill('New NOSTRO Bank');
   await primary.getByLabel('Account class',{exact:true}).selectOption('CORRESPONDENT_BANK');
   await primary.getByLabel('Bank BIC',{exact:true}).fill('CHASUS33XXX');
@@ -274,7 +275,7 @@ test('NOSTRO creation uses one floating desk with intermediary details below the
   await incoming.getByLabel('Intermediary account name',{exact:true}).fill('AVISPay PLC Incoming');
   await incoming.getByLabel('Intermediary reference',{exact:true}).fill('INT-REF-01');
   const start=calls.length;
-  await dialog.getByRole('button',{name:'Register NOSTRO & intermediary',exact:true}).click();
+  await dialog.getByRole('button',{name:'Register NOSTRO',exact:true}).click();
   await page.getByText('Saved successfully.',{exact:true}).waitFor();
   const writes=calls.slice(start);
   assert.equal(writes.length,1);
@@ -299,7 +300,10 @@ test('editing a registered NOSTRO manages its existing intermediary in the same 
   await dialog.getByLabel('Bank name',{exact:true}).waitFor();
   assert.equal(await dialog.locator('fieldset').count(),2);
   assert.equal(await dialog.getByLabel('Bank name',{exact:true}).inputValue(),'Existing NOSTRO Bank');
-  assert.equal(await dialog.getByLabel('Incoming intermediary selection',{exact:true}).inputValue(),intermediary.intermediary_id);
+  assert.equal(await dialog.getByLabel('Incoming intermediary selection',{exact:true}).inputValue(),'');
+  assert.equal(await dialog.getByLabel('Intermediary bank name',{exact:true}).inputValue(),'');
+  assert.equal(await dialog.getByLabel('Intermediary bank name',{exact:true}).isDisabled(),true);
+  await dialog.getByLabel('Incoming intermediary selection',{exact:true}).selectOption(intermediary.intermediary_id);
   assert.equal(await dialog.getByLabel('Intermediary bank name',{exact:true}).inputValue(),'Global Transit Bank');
   assert.equal(await dialog.getByLabel('Intermediary reference',{exact:true}).inputValue(),'INTERMEDIARY-REF');
   await dialog.getByLabel('Bank address',{exact:true}).fill('New Main Bank Street');

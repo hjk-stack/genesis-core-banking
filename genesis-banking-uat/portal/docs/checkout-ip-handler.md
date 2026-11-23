@@ -1,0 +1,87 @@
+# Checkout IP-to-IP processing and original payment proof
+
+The website registers checkout activation requests. A bank administrator approves the receiving Common/Suspense account and optional NOSTRO/intermediary. The IP-to-IP handler reads that approved context, claims a matched bank settlement before booking it, and publishes processing reports and its original proof PDF. The core register stores those reports without posting another ledger journal.
+
+## Endpoints and authentication
+
+All service endpoints are `POST` with `Content-Type: application/json`. Sign the exact method, path and SHA-256 of the transmitted JSON bytes. Tokens also contain `iat`, `exp` (at most 60 seconds after `iat`) and a fresh 64-character hexadecimal `jti`; replayed tokens are rejected. Both profiles verify Ed25519 signatures against `https://avis.land/press/api/index-service/jwks`, while enforcing separate scopes:
+
+| Profile | Authorization | Header `typ` | `iss` | `aud` |
+| --- | --- | --- | --- | --- |
+| Checkout | `Index-JWS <token>`; `Pos-JWS` also accepted | `AVIS-POS-REQUEST+JWT` | `https://avis.land/checkout` | `AVIS_BANK_POS_V1` |
+| Handler | `Ip-JWS <token>` | `AVIS-IP-HANDLER-REQUEST+JWT` | `https://avis.land/ip-handler` | `AVIS_BANK_IP_HANDLER_V1` |
+
+| Core endpoint | Profile | Input and result |
+| --- | --- | --- |
+| `/api/services/checkout-ip/register` | Checkout | Registration payload below; returns the request and its state. |
+| `/api/services/checkout-ip/status` | Checkout | `{requestId}`; returns state and timestamps, without administrator routing data. |
+| `/api/services/checkout-ip/cancel` | Checkout | `{requestId}`; records terminal cancellation and closes an existing request once. A previously unknown ID returns `{requestId,cancelled:true,registered:false,cancelledAt}` without creating a registration. |
+| `/api/services/checkout-ip/context` | Handler | `{requestId}`; returns `{request,routing,claim}`. `request.processing` is the latest report or `null`; `claim` is the retained settlement claim or `null`. |
+| `/api/services/checkout-ip/claim` | Handler | `{requestId,handlerTransferId,transactionReference,...routing}`; returns `{requestId,claimed:true,handlerTransferId,transactionReference,routing,claimedAt}`. |
+| `/api/services/checkout-ip/processing` | Handler | Flat processing payload below; returns `{requestId,processing}`. |
+
+The registration payload is `{requestId,checkoutKind,source,checkoutReference,title,amount,currency,bankName,ip,authorized,account,accountName,contactName?,contactEmail?,documents?}`. `checkoutKind` is `MILESTONE` or `SHOP`; `source` is **required** and is `industrial` or `shop-basket`. `requestId` is a UUID, `amount` is a positive decimal string, `ip` is a valid IP address, and `documents` contains at most three filenames. The handler context may represent an ordinary amount as `10.000000000000000000`: remove trailing fractional zeros exactly before currency precision validation; do not convert through a JavaScript `Number`.
+
+`routing` has exactly these business fields: `receivingAccountId`, `receivingAbiqIban`, `nostroCashAccountId`, `nostroIban`, and `intermediaryId`. Optional NOSTRO/intermediary fields are `null`. The claim submits all five fields from the approved context. Its transfer, stable UETR transaction reference and routing become immutable.
+
+## Settlement and cancellation ordering
+
+The handler obtains a matching authenticated booked statement, validates the proposed accounting change, and then acquires the core claim **before** its existing settlement journal is written. Claim and cancellation contend on the same request row lock. If cancellation wins, settlement cannot claim or book. If the claim wins, cancellation returns `CHECKOUT_IP_PROCESSING` (409), and website rejection/expiry must retain the order and stock reservation. A settled/completed report returns `CHECKOUT_IP_COMPLETED` (409) instead. Cancellation records also prevent a late first registration or retry from reopening the request (`CHECKOUT_IP_CANCELLED`, 409).
+
+A repeated claim must have the same request, transfer, transaction reference and routing. Its owner may recover a lost response, finish settlement, and publish the completion report after an administrator closes the activation switch. A retained claim prevents changing the linked draft or reopening its request. This protocol does not perform an external bank transfer; the handler's existing authenticated connector and statement reconciliation retain that responsibility.
+
+## Processing payload
+
+The input is flat, with `proof` as its only nested document object:
+
+| Field | Contract |
+| --- | --- |
+| `requestId`, `handlerTransferId` | UUIDs; one handler transfer belongs to one request. |
+| `revision` | Positive integer, increasing before completion. An identical revision/content retry is idempotent; conflicting content or an older revision is rejected. |
+| `transactionReference` | Stable handler UETR throughout the report lifecycle, up to 140 characters. The original PDF separately includes the bank transaction ID. |
+| `handlerStatus` | Handler state, up to 40 characters; `SETTLED` requires an owned settlement claim. |
+| `bankName` | Sender bank, up to 180 characters. |
+| `bankServerSentAmount`, `amountCleared` | Nonnegative decimal strings, at most 18 integer and 18 fractional digits; `null` before known. |
+| `nostroIban`, `receivingAbiqIban` | Must match the approved route, or the immutable claimed route during recovery. Limits: 128 and 64 characters. |
+| `beneficiaryName`, `beneficiaryAccount` | At most 160 and 128 characters. |
+| `franchiseAllocatedPercent` | Decimal string from `0` to `100`, at most two fractional digits. |
+| `operationCompleted` | Boolean. `true` requires `SETTLED`, a matching claim, populated sender/payment/ABIQ/cleared/beneficiary/allocation fields, the report and proof. |
+| `manualReport100Digits` | Exactly 100 decimal digits when supplied; required for completion. |
+| `proof` | `{fileName,pdfBase64}` containing the original handler-generated PDF; accepted only with completion. |
+
+The original PDF is bounded to **2 MiB**, uses canonical base64, has a valid PDF header/end marker, and has an ASCII filename ending in `.pdf` (up to 128 characters). The handler retains the original bytes before publication. The core stores those bytes, their SHA-256 and their request/transfer/revision/transaction/report linkage. Completed reports, proof bytes, claims and processing audit records are immutable. This hash verifies stored byte integrity; it is not a PDF certificate signature.
+
+Administrator register reads at `GET /api/views/checkoutip` expose `processing` and `processing.proof = {available,fileName,sha256,sizeBytes}` without document bytes. `GET /api/checkout-ip/:requestId/proof.pdf` returns the original PDF only to an administrator session; `?download=1` changes the response to an attachment. Customer workspaces cannot retrieve it. The UI fetches the PDF into one printable popup and revokes the preview URL on close, navigation or sign-out. The handler itself continues to open in a normal browser tab.
+
+## Persistent administrator controls
+
+The administrator Payments page mounts two Liquid Glass controls before loading the request register. Both remain visible with zero requests or while register reads are pending.
+
+- **Checkout access** applies to an explicitly selected existing request. With no selection the switch remains red and sends no activation. Selection preserves the request UUID across sorting and refreshes; removal clears it. A selected request shows the existing red/blue/green state and uses the same routing validation and activation operation as its row control. No placeholder request or new global approval setting is created.
+- **IP-IP management** opens `https://avis.land/admin/bank/quantum/direct-transfer` without a checkout request parameter. Red means the managed tab is closed; green means that tab is open. The switch can close its own tab, and manual closure returns it to red. It does not approve a request, open a receiving window, or indicate bank connectivity. The destination retains its administrator authentication.
+
+The management tab opens synchronously from the switch interaction. Its opener is cleared before navigating to the handler. The controller retains the tab handle to observe closure, rather than persisting an assumed open state. The authenticated handler accepts a private closing channel only from its configured core origin with the matching per-tab capability; it closes itself when instructed over that channel. The capability is passed in the URL fragment and retained in the tab's history state for reloads. Request refreshes and selection changes do not navigate the management tab. Signing out or changing workspace clears the controls and requests closure of the tab owned by that page. If the destination cannot honor a close request, the active control stays green until the actual tab closes and shows feedback beside that action.
+
+## Reproduce the integration evidence
+
+Use Node.js 22.19 or later and both PR branches:
+
+```bash
+mkdir avispay-ip-review
+cd avispay-ip-review
+git clone --branch feat/ip-payment-processing-register-20261123 https://github.com/hjk-stack/genesis-core-banking.git core
+git clone --branch feat/ip-checkout-handler-proof-20261123 https://github.com/hjk-stack/genesis-outlook-automation.git website
+npm ci --no-audit --no-fund --prefix core/genesis-banking-uat/portal
+npm ci --no-audit --no-fund --prefix website
+node core/genesis-banking-uat/portal/scripts/verify-ip-handler-integration.mjs --website-repo ./website --output-dir ./evidence
+```
+
+`AVIS_WEBSITE_REPO` may supply the website path instead of `--website-repo`. The output directory is optional; when supplied it receives `result.json` and `fixture-handler-proof.pdf`. The script requires a local website checkout and imports its actual payload builder, clients, signer and handler. It creates an in-memory PGlite database, a temporary website store and signing key, a loopback HTTP server and a fixture statement connector. It makes no production service calls, ignores production database URLs, and removes its temporary state on exit.
+
+Assertions cover the signed HTTP registration/approval/context flow, exact amount handling, stable identities, original PDF parsing and byte equality, immutable completion, terminal cancellation, cancellation between statement validation and claiming, and recovery after a claim response is lost. Recovery is tested after administrator closure and may post the existing handler settlement journal only once. Reports, claims and proof must leave core ledger entries and balances unchanged.
+
+The browser regression remains separate: `node --test test-browser/checkout-ip-layout.mjs` from the portal directory verifies the register and printable popup in Chromium; the normal sovereign UAT workflow runs the complete browser suite.
+
+## Rollout
+
+Deploy [core PR #103](https://github.com/hjk-stack/genesis-core-banking/pull/103) first. Its additive migration `043_ip_payment_processing.sql` creates the report, proof, cancellation and settlement claim storage, and its server exposes the signed endpoints. Verify the release SHA and the sovereign UAT checks for the merged commit. Then deploy [website PR #1443](https://github.com/hjk-stack/genesis-outlook-automation/pull/1443), which mounts checkout controls and publishes through those endpoints using the existing service signing identity. Re-run this integration script against the exact two source revisions used for the release. PR validation alone does not establish that either production deployment has completed.

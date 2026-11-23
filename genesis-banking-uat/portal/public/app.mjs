@@ -2,8 +2,8 @@ import {createAbiqGenerator} from './abiq-generator.mjs';
 import {createCryptoWorkspace} from './crypto-workspace.mjs';
 import {readExchangeIntent} from './exchange-intent.mjs';
 import {createPortfolio,securitiesTable,stockRegisterTable,securityOrdersTable,securityBookTable} from './portfolio.mjs';
-import {nostroRegisterTable,nostroMovementsTable} from './nostro-clearing.mjs';
-import {checkoutIpRegister,bindCheckoutIp,ipState} from './checkout-ip.mjs';
+import {nostroRegisterTable,nostroMovementsTable,intermediaryFields,bindIntermediaryFields,combinedNostroInput,createNostroStatements} from './nostro-clearing.mjs';
+import {checkoutIpRegister,checkoutIpAdminControls,createCheckoutIpAdminControls,bindCheckoutIp,checkoutIpHandlerUrl,checkoutIpFingerprint,replaceCheckoutIpRegister,createCheckoutIpProof,expireCheckoutIpControls} from './checkout-ip.mjs';
 import {accountTypes,accountSummaryTable,backofficeAccountTable,createAccountStatements} from './accounts.mjs';
 import {holderRegisterField,connectAccountHolderRegister,buildAccountOpeningRequest} from './open-account-register.mjs';
 import {createCardManager,cardAccountTable,cardProducts} from './cards.mjs';
@@ -15,6 +15,14 @@ let identity={admin:true,canSwitchWorkspace:false},sessionEpoch=0,accountTypeFil
 let exchangeIntent=null;try{exchangeIntent=readExchangeIntent(location.hash);}catch(e){$('#login-form .form-error').textContent=e.message;}
 if(exchangeIntent)$('#login-form h2').textContent=exchangeIntent.side?'Sign in to '+exchangeIntent.side.toLowerCase()+' '+exchangeIntent.symbol:'Sign in to your portfolio';
 if(new URLSearchParams(location.search).get('own')==='1'){$('#close-workspace').hidden=false;$('#close-workspace').onclick=()=>{if(window.avisDesktop?.windowControl)window.avisDesktop.windowControl('close');else{window.close();setTimeout(()=>{if(!window.closed)location.assign('https://avis.land/exchange');},300);}};}
+const ipProof=createCheckoutIpProof({onUnauthorized:()=>signedOut()});
+const ipAdminControls=createCheckoutIpAdminControls({activateRequest:async requestId=>{
+ if(!csrf||!identity.admin||identity.customerUserId||location.hash!=='#payments')return;
+ const row=[...document.querySelectorAll('[data-checkout-ip]')].find(row=>row.dataset.checkoutIp===requestId);
+ const button=row?.querySelector('[data-ip-toggle]');
+ if(!button||button.disabled||typeof button.onclick!=='function')return;
+ await button.onclick({currentTarget:button});
+}});
 const currencies=['EUR','USD','GBP','CHF','SEK','NOK','DKK','PLN','CZK','HUF','RON','AED','SGD','JPY'];
 async function api(path,body,key){
  const epoch=sessionEpoch,write=body!==undefined;
@@ -44,8 +52,8 @@ async function api(path,body,key){
 let formGeneration=0,noticeTimer;
 function clearNotice(){clearTimeout(noticeTimer);$('#notice').textContent='';$('#notice').hidden=true;}
 function clearForm(){abiqGenerator.close();formGeneration++;activeForm=null;if($('#form-dialog').open)$('#form-dialog').close();$('#action-form').reset();$('#form-fields').replaceChildren();}
-function signedOut(){document.querySelector('[data-basket-authorize]')?.remove();document.querySelector('[data-checkout-management]')?.remove();sessionEpoch++;loading++;clearNotice();$('#workspace-selector').replaceChildren();$('#workspace-error').textContent='';clearForm();paymentWizard.close();cardManager.close();accountStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';$('#workspace-selector').hidden=true;$('#workspace').hidden=true;$('#signin').hidden=false;$('#signout').hidden=true;$('#operator-name').textContent='';csrf='';for(const k of Object.keys(cache))delete cache[k];if($('#form-dialog').open)$('#form-dialog').close();}
-function signedIn(session){document.querySelector('[data-basket-authorize]')?.remove();document.querySelector('[data-checkout-management]')?.remove();sessionEpoch++;clearNotice();$('#workspace-selector').replaceChildren();$('#workspace-error').textContent='';clearForm();paymentWizard.close();cardManager.close();accountStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';for(const k of Object.keys(cache))delete cache[k];identity={...session,admin:session.admin!==false};csrf=session.csrf;document.querySelectorAll('nav a').forEach(a=>a.hidden=!identity.admin&&!['#accounts','#portfolio','#payments','#cards','#wallets'].includes(a.hash));void refreshWorkspaces();void refreshPickupAlerts();$('#workspace').hidden=false;$('#signin').hidden=true;$('#signout').hidden=false;$('#operator-name').textContent=session.username;void resumeExchange();void showStripeReturn();if(new URLSearchParams(location.search).get('crypto_basket')==='1'){const purpose=new URLSearchParams(location.search).get('purpose');history.replaceState(null,'','#wallets');void openCryptoBasket(api,null,null,purpose).catch(pageError);}else if(identity.admin&&new URLSearchParams(location.search).get('checkout_management')==='1'){history.replaceState(null,'','#pos');void openCheckoutManagement(api);}else void resumeBasketAuthorization(api,document.body);}
+function signedOut(){ipProof.close();ipAdminControls.close();document.querySelector('[data-basket-authorize]')?.remove();document.querySelector('[data-checkout-management]')?.remove();sessionEpoch++;loading++;clearNotice();$('#workspace-selector').replaceChildren();$('#workspace-error').textContent='';clearForm();paymentWizard.close();cardManager.close();accountStatements.close();nostroStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';$('#workspace-selector').hidden=true;$('#workspace').hidden=true;$('#signin').hidden=false;$('#signout').hidden=true;$('#operator-name').textContent='';csrf='';for(const k of Object.keys(cache))delete cache[k];if($('#form-dialog').open)$('#form-dialog').close();}
+function signedIn(session){ipProof.close();ipAdminControls.close();document.querySelector('[data-basket-authorize]')?.remove();document.querySelector('[data-checkout-management]')?.remove();sessionEpoch++;clearNotice();$('#workspace-selector').replaceChildren();$('#workspace-error').textContent='';clearForm();paymentWizard.close();cardManager.close();accountStatements.close();nostroStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';for(const k of Object.keys(cache))delete cache[k];identity={...session,admin:session.admin!==false};csrf=session.csrf;document.querySelectorAll('nav a').forEach(a=>a.hidden=!identity.admin&&!['#accounts','#portfolio','#payments','#cards','#wallets'].includes(a.hash));void refreshWorkspaces();void refreshPickupAlerts();$('#workspace').hidden=false;$('#signin').hidden=true;$('#signout').hidden=false;$('#operator-name').textContent=session.username;void resumeExchange();void showStripeReturn();if(new URLSearchParams(location.search).get('crypto_basket')==='1'){const purpose=new URLSearchParams(location.search).get('purpose');history.replaceState(null,'','#wallets');void openCryptoBasket(api,null,null,purpose).catch(pageError);}else if(identity.admin&&new URLSearchParams(location.search).get('checkout_management')==='1'){history.replaceState(null,'','#pos');void openCheckoutManagement(api);}else void resumeBasketAuthorization(api,document.body);}
 async function showStripeReturn(){
  const params=new URLSearchParams(location.search),kind=params.get('stripe_pos');if(!['return','cancel'].includes(kind))return;
  const sessionId=params.get('session_id');
@@ -120,7 +128,9 @@ function bindTerminalControls(){
  });
 }
 setInterval(()=>{
- if(!csrf||!identity.admin||location.hash!=='#pos')return;
+ if(!csrf||!identity.admin)return;
+ if(location.hash==='#payments'){expireCheckoutIpControls();ipAdminControls.expire();}
+ if(location.hash!=='#pos')return;
  let expiredCount=0;
  for(const switchButton of document.querySelectorAll('[data-pos-deadline]')){
   if(Number(switchButton.dataset.posDeadline)>Date.now())continue;
@@ -160,38 +170,31 @@ setInterval(async()=>{
  }catch(error){console.error('POS_TERMINAL_REFRESH',error.code||error.name)}finally{posTerminalPolling=false}
 },7000);
 // Update checkout request switches while preserving an administrator's bank selections.
-let ipQueueRefreshing=false;
+let ipQueueRefreshing=false,ipActionsInFlight=0,ipActionEpoch=0;
 setInterval(async()=>{
- if(!csrf||!identity.admin||location.hash!=='#payments'||ipQueueRefreshing)return;
- const panel=document.querySelector('[data-checkout-ip-register]');if(!panel)return;
- ipQueueRefreshing=true;const epoch=sessionEpoch;
+ if(!csrf||!identity.admin||location.hash!=='#payments'||ipQueueRefreshing||ipActionsInFlight)return;
+ const panel=document.querySelector('[data-checkout-ip-register]');
+ if(!panel&&$('#panels')?.getAttribute('aria-busy')==='true')return;
+ ipQueueRefreshing=true;const epoch=sessionEpoch,actionEpoch=ipActionEpoch,renderSerial=loading;
  try{
   const rows=(await api('views/checkoutip')).rows;
-  if(epoch!==sessionEpoch||location.hash!=='#payments')return;
+  if(epoch!==sessionEpoch||renderSerial!==loading||location.hash!=='#payments'||ipActionsInFlight||actionEpoch!==ipActionEpoch||(panel&&!panel.isConnected))return;
   const old=cache.checkoutip||[];
-  const fingerprint=rs=>rs.map(x=>[x.requestId,x.status,x.expiresAt,x.approvedAt,x.closedAt]).join('|');
-  if(fingerprint(old)===fingerprint(rows))return;
-  const selections=new Map([...panel.querySelectorAll('[data-checkout-ip]')].map(row=>[
-   row.dataset.checkoutIp,['[data-ip-account]','[data-ip-nostro]','[data-ip-intermediary]'].map(selector=>row.querySelector(selector)?.value)]));
+  if(panel&&checkoutIpFingerprint(old)===checkoutIpFingerprint(rows))return;
   cache.checkoutip=rows;
-  panel.outerHTML=checkoutIpRegister(rows,cache.checkoutipaccounts||[],cache.nostroclearing||[]);
-  const current=document.querySelector('[data-checkout-ip-register]');
-  for(const row of current.querySelectorAll('[data-checkout-ip]')){
-   const values=selections.get(row.dataset.checkoutIp);if(!values)continue;
-   for(const [index,selector] of ['[data-ip-account]','[data-ip-nostro]','[data-ip-intermediary]'].entries()){
-    const field=row.querySelector(selector);
-    if(field&&[...field.options].some(option=>option.value===values[index]))field.value=values[index];
-   }
-  }
-  bindCheckoutIp({root:$('#panels'),requests:rows,nostros:cache.nostroclearing||[],
-   activate:input=>api('checkout-ip/activation',input),onChange:()=>void render(),
-   openHandler:record=>{
-    const url='https://avis.land/admin/bank/quantum/direct-transfer?checkoutRequest='+encodeURIComponent(record.requestId);
-    window.open(url,'_blank','noopener,noreferrer');
-   }});
+  if(!panel){void render();return;}
+  replaceCheckoutIpRegister(panel,rows,cache.checkoutipaccounts||[],cache.nostroclearing||[]);
+  bindIpControls();
  }catch(e){console.error('CHECKOUT_IP_REFRESH',e.code||e.name)}
  finally{ipQueueRefreshing=false}
 },7000);
+function bindIpControls(){
+ bindCheckoutIp({root:$('#panels'),requests:cache.checkoutip||[],nostros:cache.nostroclearing||[],
+  activate:async input=>{ipActionsInFlight++;ipActionEpoch++;try{return await api('checkout-ip/activation',input);}finally{ipActionsInFlight--;ipActionEpoch++;}},onChange:()=>void render(),
+  openHandler:record=>window.open(checkoutIpHandlerUrl(record),'_blank','noopener,noreferrer'),
+  openProof:record=>void ipProof.open(record)});
+ ipAdminControls.update(document.querySelector('[data-checkout-ip-register]')?(cache.checkoutip||[]):[]);
+}
 function table(name,title,rows){return `<section class="panel"><div class="panel-header"><h2>${esc(title)}</h2><span>${rows.length} records${rows.length===300?' · latest 300':''}</span></div><div class="table-wrap"><table><thead><tr>${columns[name].map(([,h])=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${columns[name].map(([k])=>`<td${k.includes('iban')||k==='account_reference'?' class="account-number"':''}>${name==='portfolio'&&['smart_contract','historical_wallet_address'].includes(k)?(r.historical_proof||[]).map(p=>`<a class="portfolio-chain-proof" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(k==='smart_contract'?p.contractAddress:p.walletAddress)}</a>`).join('<br>')||'—':k==='request_id'?`<button type="button" data-request="${esc(r[k])}">View transfer</button>`:k==='status'?`<span class="status">${esc(label(r[k]))}</span>`:esc(k.includes('balance')||['amount','total_amount_eur'].includes(k)?number(r[k]):k==='created_at'?new Date(r[k]).toLocaleString():['abiq_iban','account_reference'].includes(k)?displayAbiq(r[k]):['owner_class','wallet_scope','account_category'].includes(k)&&r[k]?label(r[k]):typeof r[k]==='boolean'?(r[k]?'Yes':'No'):r[k]??'—')}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;}
 Object.assign(columns,{
  treasurypositions:[['asset_name','Registered asset'],['portfolio_abiq_iban','Portfolio ABIQ IBAN'],['asset_code','Asset identifier'],['isin','ISIN'],['asset_class','Asset class'],['quantity','Units'],['destination','Treasury account'],['booking_reference','Booking reference'],['booked_at','Booked at']],
@@ -214,7 +217,7 @@ clearing:[['provider_reference','Statement'],['currency_code','Currency'],['open
 });
 const pages={
 fx:{title:'Fiat converter',subtitle:'AVISPay treasury quotes, commission and settlement between your currency accounts.',actions:[['fxquote','Get quote'],['fxexecute','Execute conversion'],['fxcancel','Cancel quote'],['fxrefresh','Refresh reference rates']],views:[['fxquotes','Conversion quotes & settlements'],['fxrates','Published reference rates']]},
-accounts:{title:'Accounts & ABIQ',subtitle:'Account summaries, currency accounts and backoffice account management.',actions:[['customer','Open account'],['currency','Add currencies'],['abiqgenerator','Generate ABIQ number'],['accountcleanup','Review legacy accounts'],['customerprofile','Account holder details'],['suspense','Move to suspense'],['cashaccount','Register NOSTRO']],views:[['accountsummaries','Account summary'],['backofficeaccounts','Backoffice accounts'],['nostroclearing','NOSTRO Clearing'],['nostromovements','Clearing network movements']]},
+accounts:{title:'Accounts & ABIQ',subtitle:'Account summaries, currency accounts and backoffice account management.',actions:[['customer','Open account'],['currency','Add currencies'],['abiqgenerator','Generate ABIQ number'],['accountcleanup','Review legacy accounts'],['customerprofile','Account holder details'],['suspense','Move to suspense'],['cashaccount','Register NOSTRO']],views:[['accountsummaries','Account summary'],['backofficeaccounts','Backoffice accounts'],['nostroclearing','NOSTRO Clearing'],['nostromovements','Internal clearing ledger']]},
 portfolio:{title:'Portfolio management',subtitle:'Securities, investment values and exchange orders.',actions:[['recordsecurity','Record holding'],['buysecurity','Buy'],['sellsecurity','Sell'],['syncsecurities','Refresh Green Bond catalogue']],views:[['treasurypositions','AVISPay PLC Treasury opening positions'],['securitypositions','Securities portfolio'],['securityorders','Exchange orders'],['exchangebook','AVISPay Exchange'],['portfolio','Portfolio holdings']]},
 payments:{title:'Payments',subtitle:'Register, review and transfer payments from your accounts.',actions:[['newpayment','New payment']],views:[['checkoutip','IP-to-IP checkout activations'],['checkoutipaccounts','IP-to-IP receiving accounts'],['nostroclearing','Registered correspondent banks'],['paymentregister','Payment register'],['bankpayments','Bank payments & settlement'],['bankroutes','IBAN to ABIQ routing'],['transactions','Account activity']]},
 marketplace:{title:'Marketplace City',subtitle:'Business shops, multi-shop checkout and escrow settlement.',actions:[['shop','Register shop'],['checkout','Create checkout'],['release','Release escrow'],['refund','Refund checkout']],views:[['shops','Merchant shops'],['checkouts','Checkout & settlement']]},
@@ -255,7 +258,8 @@ function visiblePage(key){
 async function refreshPickupAlerts(){if(!csrf||!identity.admin)return;try{const rows=await getRows('transferalerts'),link=document.querySelector('nav a[href="#administration"]');if(link){link.textContent=rows.length?'Administration · '+rows.length:'Administration';link.setAttribute('aria-label',rows.length?'Administration · '+rows.length+' transfers awaiting processing':'Administration');}}catch{}}
 setInterval(()=>void refreshPickupAlerts(),30000);
 async function getRows(view){const epoch=sessionEpoch,result=await api('views/'+view);if(epoch!==sessionEpoch)throw Error('Workspace changed. Repeat the action.');cache[view]=result.rows;return result.rows;}
-async function render(){if(!csrf)return;void refreshPickupAlerts();if(location.hash==='#ledger')history.replaceState(null,'','#portfolio');const serial=++loading,key=location.hash.slice(1)||'accounts',page=visiblePage(key);document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('active',a.hash==='#'+key));if(key==='wallets')return cryptoManager.mount($('#view'));cryptoManager.close();$('#view').innerHTML=`<div class="view-header"><div><h1>${esc(page.title)}</h1><p>${esc(page.subtitle)}</p></div><div class="actions">${key==='portfolio'?'<a class="button" href="https://avis.land/exchange?banking=1">AVIS Exchange</a>':''}${page.actions.map(([id,name],i)=>`<button data-form="${id}" class="${i===0?'primary':''}">${esc(name)}</button>`).join('')}</div></div>${key==='accounts'&&identity.admin?`<div class="account-filter"><label>Account type<select id="account-type-filter" aria-label="Account type"><option value="">All accounts</option>${accountTypes.map(([v,t])=>`<option value="${v}" ${accountTypeFilter===v?'selected':''}>${t}</option>`).join('')}</select></label></div>`:''}<p class="form-error" role="alert" id="account-page-error"></p><div id="panels" aria-busy="true"></div>`;if($('#account-type-filter'))$('#account-type-filter').onchange=e=>{accountTypeFilter=e.target.value;void render();};document.querySelectorAll('[data-form]').forEach(b=>b.onclick=()=>openForm(b.dataset.form));
+async function render(){if(!csrf)return;void refreshPickupAlerts();if(location.hash==='#ledger')history.replaceState(null,'','#portfolio');const serial=++loading,key=location.hash.slice(1)||'accounts',page=visiblePage(key);document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('active',a.hash==='#'+key));if(key==='wallets')return cryptoManager.mount($('#view'));cryptoManager.close();$('#view').innerHTML=`<div class="view-header"><div><h1>${esc(page.title)}</h1><p>${esc(page.subtitle)}</p></div><div class="actions">${key==='portfolio'?'<a class="button" href="https://avis.land/exchange?banking=1">AVIS Exchange</a>':''}${page.actions.map(([id,name],i)=>`<button data-form="${id}" class="${i===0?'primary':''}">${esc(name)}</button>`).join('')}</div></div>${key==='accounts'&&identity.admin?`<div class="account-filter"><label>Account type<select id="account-type-filter" aria-label="Account type"><option value="">All accounts</option>${accountTypes.map(([v,t])=>`<option value="${v}" ${accountTypeFilter===v?'selected':''}>${t}</option>`).join('')}</select></label></div>`:''}<p class="form-error" role="alert" id="account-page-error"></p>${key==='payments'&&identity.admin?checkoutIpAdminControls():''}<div id="panels" aria-busy="true"></div>`;if($('#account-type-filter'))$('#account-type-filter').onchange=e=>{accountTypeFilter=e.target.value;void render();};document.querySelectorAll('[data-form]').forEach(b=>b.onclick=()=>openForm(b.dataset.form));
+if(key==='payments'&&identity.admin)ipAdminControls.bind($('#view'));
 const results=await Promise.allSettled(page.views.map(([v])=>getRows(v)));if(serial!==loading)return;let html='';
 if(key==='accounts'&&identity.admin&&!accountTypeFilter&&results.slice(0,2).every(r=>r.status==='fulfilled'))html=`<div class="metrics"><div class="metric"><p>Account holders</p><strong>${new Set(results[0].value.map(a=>String(a.user_id))).size}</strong></div><div class="metric"><p>ABIQ currency accounts</p><strong>${results[0].value.length}</strong></div><div class="metric"><p>Backoffice accounts</p><strong>${results[1].value.length}</strong></div></div>`;
 if(key==='pos')html+=`<div class="rail-grid"><div class="rail"><p class="eyebrow">AVIS PROPRIETARY</p><h2>Own-network processing</h2><p>Authorization · capture · reversal · merchant settlement</p></div><div class="rail"><p class="eyebrow">GLOBAL CARD SCHEMES</p><h2>Scheme gateway bridge</h2><p>Separate issuing, acquiring and clearing routes</p></div><div class="rail"><p class="eyebrow">POS & INDUSTRIAL</p><h2>Terminal network</h2><p>Merchant ownership and terminal registration</p></div></div>`;
@@ -277,15 +281,8 @@ html+=results.map((r,i)=>{
  if(view==='securityorders')return securityOrdersTable(rows);
  if(view==='exchangebook')return securityBookTable(rows);
  return table(view,page.views[i][1],rows)+(view==='portfolio'&&!rows.length?'<p class="panel-empty">No investment holdings recorded yet.</p>':'');
-}).join('');$('#panels').innerHTML=html;$('#panels').setAttribute('aria-busy','false');accountStatements.bind($('#panels'));portfolioManager.bind($('#panels'));
- if(key==='payments'&&identity.admin)bindCheckoutIp({
-  root:$('#panels'),requests:cache.checkoutip||[],nostros:cache.nostroclearing||[],
-  activate:input=>api('checkout-ip/activation',input),onChange:()=>void render(),
-  openHandler:record=>{
-    const url='https://avis.land/admin/bank/quantum/direct-transfer?checkoutRequest='+encodeURIComponent(record.requestId);
-    window.open(url,'_blank','noopener,noreferrer');
-   }
- });if(key==='pos')bindTerminalControls();
+}).join('');$('#panels').innerHTML=html;$('#panels').setAttribute('aria-busy','false');accountStatements.bind($('#panels'));nostroStatements.bind($('#panels'));portfolioManager.bind($('#panels'));
+ if(key==='payments'&&identity.admin)bindIpControls();if(key==='pos')bindTerminalControls();
  document.querySelectorAll('[data-nostro-edit]').forEach(button=>button.onclick=async()=>{
    const cashId=button.dataset.nostroEdit;
    if(!await openForm('editcashaccount'))return;
@@ -295,19 +292,7 @@ html+=results.map((r,i)=>{
    const values={cashAccountId:cashId,bankName:record.institution_name,bankAddress:record.bank_address||'',
     accountName:record.account_name||'',aba:record.aba||'',reference:record.bank_reference||''};
    for(const [name,value]of Object.entries(values))if(fields.namedItem(name))fields.namedItem(name).value=value;
-   const intermediaryRows=Array.isArray(record.intermediaries)?record.intermediaries:[];
-   const selector=fields.namedItem('intermediarySelector');
-   selector.innerHTML='<option value="NEW">Add new incoming intermediary</option>'+
-    intermediaryRows.map(row=>'<option value="'+esc(row.intermediaryId)+'">'+esc(row.bankName)+' · '+esc(row.reference)+'</option>').join('');
-   const populate=()=>{
-    const row=intermediaryRows.find(x=>x.intermediaryId===selector.value);
-    const details={intermediaryBankName:row?.bankName||'',intermediaryBankAddress:row?.bankAddress||'',
-     intermediaryAccountName:row?.accountName||'',intermediaryAba:row?.aba||'',
-     intermediaryReference:row?.reference||'',intermediaryBic:row?.bic||'',intermediaryAccountNumber:row?.accountNumber||''};
-    for(const [name,value]of Object.entries(details))fields.namedItem(name).value=value;
-   };
-   selector.value=intermediaryRows[0]?.intermediaryId||'NEW';
-   selector.onchange=populate;populate();
+   bindIntermediaryFields(form,Array.isArray(record.intermediaries)?record.intermediaries:[]);
   });
   document.querySelectorAll('[data-nostro-mirror],[data-nostro-gateway],[data-nostro-bank]').forEach(button=>button.onclick=async()=>{
   const action=button.hasAttribute('data-nostro-mirror')?'nostromirror':button.hasAttribute('data-nostro-gateway')?'nostrogateway':'bankprofile';
@@ -318,7 +303,7 @@ html+=results.map((r,i)=>{
   }
  });document.querySelectorAll('[data-request]').forEach(b=>b.onclick=()=>paymentWizard.view(b.dataset.request).catch(e=>pageError(e,b)));document.querySelectorAll('[data-card-row]').forEach(row=>{const show=()=>cardManager.open(row.querySelector('select').value).catch(e=>pageError(e,row));row.onclick=e=>{if(e.target.closest('select'))return;void show();};row.onkeydown=e=>{if(e.target===row&&e.key==='Enter'){e.preventDefault();void show();}};});}
 window.addEventListener('hashchange',()=>{
- clearNotice();clearForm();paymentWizard.close();accountStatements.close();cardManager.close();portfolioManager.close();
+ ipProof.close();clearNotice();clearForm();paymentWizard.close();accountStatements.close();nostroStatements.close();cardManager.close();portfolioManager.close();
 
  try{const intent=readExchangeIntent(location.hash);if(intent){exchangeIntent=intent;if(csrf)void resumeExchange();else $('#login-form h2').textContent=intent.side?'Sign in to '+intent.side.toLowerCase()+' '+intent.symbol:'Sign in to your portfolio';return;}}catch(e){pageError(e);return;}
  void render();
@@ -337,27 +322,6 @@ const bankDirectoryFields=(includeName=true)=>(includeName?input('bankName','Ban
  input('accountName','Account name','text','maxlength="140"')+
  '<label>ABA routing number (US banks)<input name="aba" aria-label="ABA routing number" inputmode="numeric" maxlength="9" pattern="[0-9]{9}" placeholder="9 digits, where applicable"></label>'+
  input('reference','Reference','text','maxlength="140"');
-const intermediaryFields=(editing=false)=>'<fieldset class="incoming-intermediary-fields"><legend>Incoming intermediary bank · linked to this NOSTRO</legend>'+
- (editing?'<label>Existing intermediary / new intermediary<select name="intermediarySelector" aria-label="Incoming intermediary selection"><option value="NEW">Add new incoming intermediary</option></select></label>':'')+
- input('intermediaryBankName','Intermediary bank name','text','maxlength="100"')+
- input('intermediaryBankAddress','Intermediary bank address','text','maxlength="300"')+
- input('intermediaryAccountName','Intermediary account name','text','maxlength="140"')+
- '<label>Intermediary ABA (US banks)<input name="intermediaryAba" aria-label="Intermediary ABA" pattern="[0-9]{9}" inputmode="numeric" maxlength="9"></label>'+
- input('intermediaryReference','Intermediary reference','text','maxlength="140"')+
- '<label>Intermediary BIC (optional)<input name="intermediaryBic" aria-label="Intermediary BIC" maxlength="11"></label>'+
- '<label>Intermediary account number (optional)<input name="intermediaryAccountNumber" aria-label="Intermediary account number" maxlength="128"></label></fieldset>';
-const combinedNostroInput=data=>{
- const input=Object.fromEntries(data);
- const intermediary={
-  bankName:input.intermediaryBankName,bankAddress:input.intermediaryBankAddress,
-  accountName:input.intermediaryAccountName,aba:input.intermediaryAba,
-  reference:input.intermediaryReference,bic:input.intermediaryBic,
-  accountNumber:input.intermediaryAccountNumber
- };
- if(input.intermediarySelector&&input.intermediarySelector!=='NEW')intermediary.intermediaryId=input.intermediarySelector;
- for(const field of ['intermediarySelector','intermediaryBankName','intermediaryBankAddress','intermediaryAccountName','intermediaryAba','intermediaryReference','intermediaryBic','intermediaryAccountNumber'])delete input[field];
- return {...input,intermediary};
-};
 const forms={
  issuecard:{title:'Activate card account',path:'cards/issue',button:'Issue card',fields:()=>select('product','Card / account type',cardProducts)+select('from','My currency account',accountOptions()),build:f=>({...Object.fromEntries(f),currency:cache.accounts.find(a=>a.abiq_iban===f.get('from'))?.currency_code})},
  loadcard:{title:'Load card account',path:'cards/load',button:'Load card',fields:()=>select('from','Pay from currency account',accountOptions())+select('cardId','Card',(cache.transfercards||[]).map(c=>[c.card_id,`${c.full_name} · ${c.card_number} · ${c.currency_code}`]))+input('amount','Amount','text','inputmode="decimal"')+input('reference','Reference'),build:f=>({...Object.fromEntries(f),currency:cache.accounts.find(a=>a.abiq_iban===f.get('from'))?.currency_code})},
@@ -383,15 +347,15 @@ allowance:{title:'Reserve offline card allowance',path:'offline/allowances',butt
 offlinesync:{title:'Settle signed offline batch',path:'offline/sync',button:'Verify and settle batch',fields:()=>`<label>Signed terminal batch (JSON)<textarea name="batch" rows="12" required></textarea></label>`,build:f=>JSON.parse(f.get('batch'))},
 offlineclose:{title:'Release remaining offline allowance',path:'offline/close',button:'Release remaining balance',fields:()=>select('grantId','Allowance',(cache.offlinegrants||[]).filter(g=>g.status==='ACTIVE'&&new Date(g.settle_by).getTime()<Date.now()).map(g=>[g.grant_id,`${g.last_four_digits} · ${g.grant_id}`]))},
 
-cashaccount:{title:'Register NOSTRO & incoming intermediary',path:'correspondents',button:'Register NOSTRO & intermediary',
+cashaccount:{title:'Register NOSTRO',path:'correspondents',button:'Register NOSTRO',
  fields:()=>'<fieldset class="nostro-primary-fields"><legend>NOSTRO bank</legend>'+
  input('institutionName','Bank name','text','maxlength="100"')+
  select('institutionType','Account class',['CENTRAL_BANK','CORRESPONDENT_BANK','CORE_BANK_OMNIBUS','CARD_SCHEME_SETTLEMENT'].map(x=>[x,label(x)]))+
  input('bic','Bank BIC','text','maxlength="11"')+input('accountNumber','External account number','text','maxlength="128"')+
- currencySelect()+bankDirectoryFields(false)+'</fieldset>'+intermediaryFields(),build:combinedNostroInput},
+ currencySelect()+bankDirectoryFields(false)+'</fieldset>'+intermediaryFields(),build:f=>combinedNostroInput(f,$('#action-form'))},
  editcashaccount:{title:'NOSTRO & incoming intermediary',path:'correspondents/details',button:'Save NOSTRO & intermediary',
  fields:()=>'<input type="hidden" name="cashAccountId"><fieldset class="nostro-primary-fields"><legend>NOSTRO bank</legend>'+
- bankDirectoryFields()+'</fieldset>'+intermediaryFields(true),build:combinedNostroInput},
+ bankDirectoryFields()+'</fieldset>'+intermediaryFields(true),build:f=>combinedNostroInput(f,$('#action-form'))},
 nostromirror:{title:'Record NOSTRO clearing movement',path:'nostro/mirror',button:'Post mirrored movement',fields:()=>select('cashAccountId','NOSTRO settlement account',(cache.nostroclearing||[]).map(c=>[c.cash_account_id,`${c.institution_name} · ${c.currency_code} · ${c.iban_or_account_no}`]))+select('direction','External movement',[['CREDIT','Incoming to NOSTRO'],['DEBIT','Outgoing from NOSTRO']])+select('rail','Settlement rail',[['BANK_TRANSFER','Bank transfer'],['CARD','Card settlement'],['IP_TO_IP','IP-to-IP'],['ISO20022','ISO 20022'],['BANK_API','Bank API'],['OTHER','Other']])+input('externalReference','External bank / payment reference','text','maxlength="128"')+input('amount','Settled amount','text','inputmode="decimal"')+`<label>Memo<textarea name="memo" rows="2" maxlength="250"></textarea></label>`,build:f=>({...Object.fromEntries(f),currency:(cache.nostroclearing||[]).find(c=>c.cash_account_id===f.get('cashAccountId'))?.currency_code})},
  nostrogateway:{title:'Assign NOSTRO card settlement',path:'nostro/gateway',button:'Link card gateway',fields:()=>select('gatewayCode','Card settlement gateway',(cache.nostrogateways||[]).map(g=>[g.gateway_code,`${g.display_name} · ${g.gateway_code}`]))+select('cashAccountId','NOSTRO settlement account',(cache.nostroclearing||[]).map(c=>[c.cash_account_id,`${c.institution_name} · ${c.currency_code} · ${c.iban_or_account_no}`]))},
  bankprofile:{title:'Configure bank connector',path:'bankprofiles',button:'Save connector',fields:()=>input('profileId','Connector code','text','pattern="[A-Z0-9_]{1,35}"')+input('name','Bank / network name')+select('cashAccountId','Clearing account',(cache.correspondents||[]).map(c=>[c.cash_account_id,`${c.institution_name} · ${c.currency_code} · ${c.iban_or_account_no}`]))+select('protocol','Protocol',['IP_TO_IP','SWIFT_ISO20022','BANK_API'].map(x=>[x,label(x)]))+input('localBic','Our BIC')+input('peerBic','Peer bank BIC')+input('endpoint','Bank endpoint','url')+input('credentialReference','Application credential reference','text','pattern="AVIS_CONNECTOR_[A-Z0-9_]+"')},
@@ -486,5 +450,6 @@ const paymentWizard=createPaymentWizard({api,accounts:()=>cache.accounts||[],ref
 const cardManager=createCardManager({api,refresh:render,notice});
 const abiqGenerator=createAbiqGenerator({api});
 const accountStatements=createAccountStatements({api,assignNumber:abiqGenerator.assign,canAssign:()=>identity.admin||identity.canSwitchWorkspace});
+const nostroStatements=createNostroStatements({api});
 const portfolioManager=createPortfolio({api,getRows,data:view=>cache[view]||[],refresh:render,notice,actionError:pageError,isAdmin:()=>identity.admin});
 api('session').then(signedIn).catch(()=>signedOut());

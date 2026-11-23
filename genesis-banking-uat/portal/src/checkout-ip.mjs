@@ -1,6 +1,7 @@
 import {randomUUID,createHash} from 'node:crypto';
 import {isIP} from 'node:net';
 import {fault,text,money} from './core.mjs';
+import {CheckoutIpProcessing} from './checkout-ip-processing.mjs';
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
 const amount=value=>{money(value);return value;};
 const key=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -13,7 +14,7 @@ const map=row=>({requestId:row.request_id,checkoutKind:row.checkout_kind,checkou
  approvedAt:row.approved_at,closedAt:row.closed_at,approvedBy:row.approved_by,
  receivingAccountId:row.receiving_account_id,nostroCashAccountId:row.nostro_cash_account_id,intermediaryId:row.intermediary_id});
 export class CheckoutIpControl{
- constructor(pool){this.pool=pool;}
+ constructor(pool){this.pool=pool;this.processingControl=new CheckoutIpProcessing(pool,{mapRequest:map});}
  async withTransaction(work){
   const db=await this.pool.connect();try{await db.query('BEGIN');const value=await work(db);await db.query('COMMIT');return value}
   catch(error){await db.query('ROLLBACK');throw error}finally{db.release()}
@@ -46,11 +47,18 @@ export class CheckoutIpControl{
     buyerEmail=typeof input.contactEmail==='string'?input.contactEmail.slice(0,254):null;
   const fingerprint=key([input.checkoutKind,reference,title,input.source,value,currency,bankName,ip,authorized,account,accountName,buyerName,buyerEmail,documents]);
   return this.withTransaction(async db=>{
+   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['checkout-ip-request:'+input.requestId.toLowerCase()]);
+   if((await db.query('SELECT request_id FROM avis_core_v2.checkout_ip_cancellations WHERE request_id=$1',[input.requestId])).rows.length)
+    fault('CHECKOUT_IP_CANCELLED','requestId',409);
    await this.expire(db);
    const existing=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_requests WHERE request_id=$1 FOR UPDATE',[input.requestId])).rows[0];
    if(existing){
     if(existing.request_fingerprint!==fingerprint)fault('IDEMPOTENCY_CONFLICT','requestId',409);
     if(existing.status==='CLOSED'){
+     const completed=(await db.query('SELECT operation_completed,handler_status FROM avis_core_v2.checkout_ip_processing WHERE request_id=$1',[input.requestId])).rows[0];
+     if(completed?.operation_completed||completed?.handler_status==='SETTLED')fault('CHECKOUT_IP_COMPLETED','requestId',409);
+     if((await db.query('SELECT request_id FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=$1',[input.requestId])).rows.length)
+      fault('CHECKOUT_IP_PROCESSING','requestId',409);
      const reopened=(await db.query(`UPDATE avis_core_v2.checkout_ip_requests
       SET status='REQUESTED',requested_at=now(),expires_at=now()+interval '60 minutes',
        approved_at=NULL,closed_at=NULL,approved_by=NULL,receiving_account_id=NULL,
@@ -82,12 +90,43 @@ export class CheckoutIpControl{
   return {requestId:row.request_id,status:row.status,requestedAt:row.requested_at,expiresAt:row.expires_at,
    approvedAt:row.approved_at,closedAt:row.closed_at}; // No admin account data to checkout
  }
+ async cancel(actor,input){
+  if(!actor?.posService||actor.customerUserId)fault('FORBIDDEN',null,403);
+  if(!uuid(input?.requestId))fault('INVALID_FIELD','requestId');
+  return this.withTransaction(async db=>{
+   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['checkout-ip-request:'+input.requestId.toLowerCase()]);
+   const row=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_requests WHERE request_id=$1 FOR UPDATE',[input.requestId])).rows[0];
+   const completed=(await db.query('SELECT operation_completed,handler_status FROM avis_core_v2.checkout_ip_processing WHERE request_id=$1',[input.requestId])).rows[0];
+   // Checkout rejection or stock expiry cannot discard a completed payment.
+   if(completed?.operation_completed||completed?.handler_status==='SETTLED')fault('CHECKOUT_IP_COMPLETED','requestId',409);
+   if((await db.query('SELECT request_id FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=$1',[input.requestId])).rows.length)
+    fault('CHECKOUT_IP_PROCESSING','requestId',409);
+   await db.query('INSERT INTO avis_core_v2.checkout_ip_cancellations(request_id,actor_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[input.requestId,actor.id]);
+   const cancellation=(await db.query('SELECT request_id,cancelled_at FROM avis_core_v2.checkout_ip_cancellations WHERE request_id=$1',[input.requestId])).rows[0];
+   if(!row)return {requestId:cancellation.request_id,cancelled:true,registered:false,cancelledAt:cancellation.cancelled_at};
+   if(row.status!=='CLOSED'){
+    row.closed_at=(await db.query("UPDATE avis_core_v2.checkout_ip_requests SET status='CLOSED',closed_at=now(),updated_at=now() WHERE request_id=$1 RETURNING closed_at",[row.request_id])).rows[0].closed_at;
+    await db.query("INSERT INTO avis_core_v2.checkout_ip_events(request_id,event_type,actor_id) VALUES($1,'CLOSE',$2)",[row.request_id,actor.id]);
+   }
+   return {requestId:row.request_id,cancelled:true,registered:true,status:'CLOSED',requestedAt:row.requested_at,expiresAt:row.expires_at,
+    approvedAt:row.approved_at,closedAt:row.closed_at};
+  });
+ }
  async list(actor){
   if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403);
   await this.expire();
-  return (await this.pool.query(`SELECT * FROM avis_core_v2.checkout_ip_requests
-   ORDER BY (status='REQUESTED') DESC,requested_at DESC LIMIT 300`)).rows.map(map);
+  const rows=(await this.pool.query(`SELECT * FROM avis_core_v2.checkout_ip_requests
+   ORDER BY (status='REQUESTED') DESC,requested_at DESC LIMIT 300`)).rows;
+  const reports=await this.processingControl.readReports(this.pool,rows.map(row=>row.request_id));
+  return rows.map(row=>({...map(row),processing:reports.get(row.request_id)||null}));
  }
+ async context(actor,input){
+  if(!actor?.ipHandlerService||actor.customerUserId)fault('FORBIDDEN',null,403);
+  await this.expire();return this.processingControl.context(actor,input);
+ }
+ async processing(actor,input){return this.processingControl.publish(actor,input);}
+ async claim(actor,input){return this.processingControl.claim(actor,input);}
+ async proof(actor,requestId){return this.processingControl.proof(actor,requestId);}
  async accounts(actor){
   if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403);
   return (await this.pool.query(`SELECT a.account_id,a.owner_type,a.currency_code,b.abiq_iban,
