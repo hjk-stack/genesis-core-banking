@@ -1,4 +1,5 @@
 import {test} from 'node:test';
+import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
 import {nostroRegisterTable,nostroMovementsTable,intermediaryBankTable,intermediaryFields,bindIntermediaryFields,combinedNostroInput,createNostroStatements} from '../public/nostro-clearing.mjs';
@@ -115,4 +116,14 @@ test('closing or switching external accounts discards late statement responses a
   assert.equal(h.dialog().querySelectorAll('[data-nostro-statement-row]').length,0);assert.doesNotMatch(h.dialog().textContent,/BANK-STATEMENT-01/);
   assert.match(h.dialog().textContent,/No external statements have been imported for this account/);
  }finally{h.close();}
+});
+
+test('NOSTRO edit authorization exposes ABIQ IBAN and Currency as manually correctible fields',()=>{
+ const app=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8');
+ assert.match(app,/editcashaccount:\{title:'NOSTRO & incoming intermediary'/);
+ assert.match(app,/name="abiqIban" aria-label="ABIQ - IBAN"/);
+ assert.match(app,/currencySelect\(\)\+'<\/fieldset>'\+intermediaryFields\(true\)/);
+ assert.match(app,/currency:record.currency_code\|\|''/);
+ assert.match(app,/abiqIban:record.preferred_abiq_iban\|\|''/);
+ assert.match(app,/\.placeholder=record.abiq_iban\|\|'Issued ABIQ IBAN'/);
 });
