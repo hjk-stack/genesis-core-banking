@@ -9,6 +9,19 @@ CREATE TABLE avis_core_v2.checkout_ip_cancellations (
 CREATE TRIGGER preserve_checkout_ip_cancellations BEFORE UPDATE OR DELETE
  ON avis_core_v2.checkout_ip_cancellations FOR EACH ROW EXECUTE FUNCTION avis_core_v2.immutable_record();
 
+-- Acquired immediately before the handler books a matched authenticated bank
+-- statement. Cancellation and this immutable binding share the request row lock.
+CREATE TABLE avis_core_v2.checkout_ip_settlement_claims (
+ request_id uuid PRIMARY KEY REFERENCES avis_core_v2.checkout_ip_requests(request_id),
+ handler_transfer_id uuid NOT NULL UNIQUE,
+ transaction_reference varchar(140) NOT NULL UNIQUE,
+ routing_snapshot jsonb NOT NULL,
+ actor_id varchar(180) NOT NULL,
+ claimed_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TRIGGER preserve_checkout_ip_settlement_claims BEFORE UPDATE OR DELETE
+ ON avis_core_v2.checkout_ip_settlement_claims FOR EACH ROW EXECUTE FUNCTION avis_core_v2.immutable_record();
+
 CREATE TABLE avis_core_v2.checkout_ip_processing (
  request_id uuid PRIMARY KEY REFERENCES avis_core_v2.checkout_ip_requests(request_id),
  handler_transfer_id uuid NOT NULL UNIQUE,

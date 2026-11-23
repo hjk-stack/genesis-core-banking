@@ -57,6 +57,8 @@ export class CheckoutIpControl{
     if(existing.status==='CLOSED'){
      const completed=(await db.query('SELECT operation_completed,handler_status FROM avis_core_v2.checkout_ip_processing WHERE request_id=$1',[input.requestId])).rows[0];
      if(completed?.operation_completed||completed?.handler_status==='SETTLED')fault('CHECKOUT_IP_COMPLETED','requestId',409);
+     if((await db.query('SELECT request_id FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=$1',[input.requestId])).rows.length)
+      fault('CHECKOUT_IP_PROCESSING','requestId',409);
      const reopened=(await db.query(`UPDATE avis_core_v2.checkout_ip_requests
       SET status='REQUESTED',requested_at=now(),expires_at=now()+interval '60 minutes',
        approved_at=NULL,closed_at=NULL,approved_by=NULL,receiving_account_id=NULL,
@@ -97,6 +99,8 @@ export class CheckoutIpControl{
    const completed=(await db.query('SELECT operation_completed,handler_status FROM avis_core_v2.checkout_ip_processing WHERE request_id=$1',[input.requestId])).rows[0];
    // Checkout rejection or stock expiry cannot discard a completed payment.
    if(completed?.operation_completed||completed?.handler_status==='SETTLED')fault('CHECKOUT_IP_COMPLETED','requestId',409);
+   if((await db.query('SELECT request_id FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=$1',[input.requestId])).rows.length)
+    fault('CHECKOUT_IP_PROCESSING','requestId',409);
    await db.query('INSERT INTO avis_core_v2.checkout_ip_cancellations(request_id,actor_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[input.requestId,actor.id]);
    const cancellation=(await db.query('SELECT request_id,cancelled_at FROM avis_core_v2.checkout_ip_cancellations WHERE request_id=$1',[input.requestId])).rows[0];
    if(!row)return {requestId:cancellation.request_id,cancelled:true,registered:false,cancelledAt:cancellation.cancelled_at};
@@ -121,6 +125,7 @@ export class CheckoutIpControl{
   await this.expire();return this.processingControl.context(actor,input);
  }
  async processing(actor,input){return this.processingControl.publish(actor,input);}
+ async claim(actor,input){return this.processingControl.claim(actor,input);}
  async proof(actor,requestId){return this.processingControl.proof(actor,requestId);}
  async accounts(actor){
   if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403);

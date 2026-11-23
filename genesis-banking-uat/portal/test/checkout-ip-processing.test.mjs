@@ -29,6 +29,9 @@ function processing(input,overrides={}){return {requestId:input.requestId,handle
  operationCompleted:false,manualReport100Digits:null,...overrides};}
 function completed(input,overrides={}){return processing(input,{handlerStatus:'SETTLED',amountCleared:'150.123456789012345678',
  operationCompleted:true,manualReport100Digits:'0123456789'.repeat(10),proof:{fileName:'original-handler-proof.pdf',pdfBase64:originalPdf.toString('base64')},...overrides});}
+async function claimPayload(value){return {requestId:value.requestId,handlerTransferId:value.handlerTransferId,
+ transactionReference:value.transactionReference,...(await ip.context(handler,{requestId:value.requestId})).routing};}
+async function claim(value){return ip.claim(handler,await claimPayload(value));}
 function token(path,body,{profile='handler',claims={},header={}}={}){
  const now=Math.floor(Date.now()/1000),isHandler=profile==='handler';
  const head=Buffer.from(JSON.stringify({alg:'Ed25519',typ:isHandler?'AVIS-IP-HANDLER-REQUEST+JWT':'AVIS-POS-REQUEST+JWT',kid,...header})).toString('base64url');
@@ -40,7 +43,10 @@ function token(path,body,{profile='handler',claims={},header={}}={}){
 before(async()=>{
  if(process.env.TEST_DATABASE_URL){const url=new URL(process.env.TEST_DATABASE_URL);assert.equal(url.pathname,'/avispay_ci');
   pool=new pg.Pool({connectionString:url.href});await pool.query('DROP SCHEMA IF EXISTS avis_core_v2 CASCADE');}
- else{db=new PGlite();pool={query:(...args)=>db.query(...args),connect:async()=>({query:(...args)=>db.query(...args),exec:(...args)=>db.exec(...args),release(){}})};}
+ else{db=new PGlite();let connections=Promise.resolve();pool={query:(...args)=>db.query(...args),connect:async()=>{
+  const previous=connections;let release;connections=new Promise(resolve=>{release=resolve});await previous;
+  return {query:(...args)=>db.query(...args),exec:(...args)=>db.exec(...args),release};
+ }};}
  const connection=await pool.connect();try{await migrate(connection)}finally{connection.release()}
  ip=new CheckoutIpControl(pool);const accounts=new AccountManagement(pool);
  common=(await accounts.openAccount(admin,{accountType:'COMMON',fullName:'Common collection',currencies:['EUR']},randomUUID())).id;
@@ -101,6 +107,8 @@ test('completion validates the 100-digit report, allocations, original PDF and s
  await assert.rejects(ip.processing(handler,{...value,proof:{...value.proof,fileName:'../different.pdf'}}),e=>e.field==='proof.fileName');
  await assert.rejects(ip.processing(handler,{...value,proof:{...value.proof,pdfBase64:Buffer.alloc(IP_PROOF_MAX_BYTES+1).toString('base64')}}),e=>e.code==='CHECKOUT_IP_PROOF');
  assert.equal((await ip.list(admin)).find(row=>row.requestId===input.requestId).processing,null);
+ await assert.rejects(ip.processing(handler,value),e=>e.code==='CHECKOUT_IP_CLAIM_REQUIRED');
+ await claim(value);
  const result=await ip.processing(handler,value);
  assert.equal(result.processing.operationCompleted,true);assert.equal(result.processing.proof.sha256,sha(originalPdf));
  assert.equal(result.processing.proof.sizeBytes,originalPdf.length);
@@ -110,7 +118,7 @@ test('completion validates the 100-digit report, allocations, original PDF and s
 });
 
 test('completed proof, transaction and report remain immutable and retrievable after closure',async()=>{
- const input=await activeRequest(),value=completed(input);await ip.processing(handler,value);
+ const input=await activeRequest(),value=completed(input);await claim(value);await ip.processing(handler,value);
  await assert.rejects(ip.cancel(checkout,{requestId:input.requestId}),e=>e.code==='CHECKOUT_IP_COMPLETED');
  await assert.rejects(ip.processing(handler,{...value,revision:2}),e=>e.code==='CHECKOUT_IP_COMPLETED');
  await assert.rejects(pool.query('UPDATE avis_core_v2.checkout_ip_processing SET beneficiary_name=$2 WHERE request_id=$1',[input.requestId,'Changed']),/APPEND_ONLY_RECORD/);
@@ -140,8 +148,46 @@ test('checkout cancellation closes once, preserves processing evidence and preve
  assert.equal((await pool.query('SELECT request_id FROM avis_core_v2.checkout_ip_requests WHERE request_id=$1',[notRegistered.requestId])).rows.length,0);
  await assert.rejects(pool.query('DELETE FROM avis_core_v2.checkout_ip_cancellations WHERE request_id=$1',[notRegistered.requestId]),/APPEND_ONLY_RECORD/);
  assert.deepEqual((await pool.query('SELECT account_id,available_balance::text,locked_balance::text FROM avis_core_v2.ledger_accounts ORDER BY account_id')).rows,before);
- const paid=await activeRequest();await ip.processing(handler,processing(paid,{handlerStatus:'SETTLED',amountCleared:'150.123456789012345678'}));
+ const paid=await activeRequest(),paidReport=processing(paid,{handlerStatus:'SETTLED',amountCleared:'150.123456789012345678'});
+ await claim(paidReport);await ip.processing(handler,paidReport);
  await assert.rejects(ip.cancel(checkout,{requestId:paid.requestId}),e=>e.code==='CHECKOUT_IP_COMPLETED','booked settlement is protected before manual completion');
+});
+
+test('settlement claim binds transfer, transaction and routing, survives closure and blocks cancellation',async()=>{
+ const input=await activeRequest(),value=completed(input),payload=await claimPayload(value);
+ for(const actor of [admin,checkout,guest])await assert.rejects(ip.claim(actor,payload),e=>e.code==='FORBIDDEN');
+ await assert.rejects(ip.claim(handler,{...payload,receivingAbiqIban:'WRONG'}),e=>e.code==='CHECKOUT_IP_ACCOUNT');
+ const first=await ip.claim(handler,payload);assert.equal(first.claimed,true);assert.equal(first.handlerTransferId,value.handlerTransferId);
+ assert.deepEqual(await ip.claim(handler,payload),first);
+ await assert.rejects(ip.cancel(checkout,{requestId:input.requestId}),e=>e.code==='CHECKOUT_IP_PROCESSING');
+ await assert.rejects(ip.claim(handler,{...payload,handlerTransferId:randomUUID()}),e=>e.code==='CHECKOUT_IP_PROCESSING_LINK');
+ await assert.rejects(ip.claim(handler,{...payload,transactionReference:'DIFFERENT'}),e=>e.code==='CHECKOUT_IP_PROCESSING_LINK');
+ await assert.rejects(ip.claim(handler,{...payload,nostroIban:null}),e=>e.code==='CHECKOUT_IP_PROCESSING_LINK');
+ await assert.rejects(ip.processing(handler,{...value,handlerTransferId:randomUUID()}),e=>e.code==='CHECKOUT_IP_PROCESSING_LINK');
+ await assert.rejects(pool.query('DELETE FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=$1',[input.requestId]),/APPEND_ONLY_RECORD/);
+ await ip.setActive(admin,{requestId:input.requestId,active:false});
+ await assert.rejects(ip.register(checkout,input),e=>e.code==='CHECKOUT_IP_PROCESSING');
+ assert.deepEqual(await ip.claim(handler,payload),first,'same claim retry survives admin closure');
+ const context=await ip.context(handler,{requestId:input.requestId});assert.deepEqual(context.claim,first);assert.deepEqual(context.routing,first.routing);
+ assert.equal((await ip.processing(handler,value)).processing.operationCompleted,true,'claimed operation finishes its report after closure');
+});
+
+test('concurrent cancellation and settlement claim have exactly one winner and no ledger effects',async()=>{
+ const before=(await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.ledger_entries')).rows[0].n;
+ for(const first of ['claim','cancel']){
+  const input=await activeRequest(),value=processing(input),payload=await claimPayload(value);
+  const actions={claim:()=>ip.claim(handler,payload),cancel:()=>ip.cancel(checkout,{requestId:input.requestId})};
+  const second=first==='claim'?'cancel':'claim';
+  const results=await Promise.allSettled([actions[first](),actions[second]()]);
+  assert.equal(results.filter(result=>result.status==='fulfilled').length,1);
+  const claims=(await pool.query('SELECT request_id FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=$1',[input.requestId])).rows;
+  const cancellations=(await pool.query('SELECT request_id FROM avis_core_v2.checkout_ip_cancellations WHERE request_id=$1',[input.requestId])).rows;
+  assert.equal(claims.length+cancellations.length,1);
+  if(claims.length)await assert.rejects(ip.cancel(checkout,{requestId:input.requestId}),e=>e.code==='CHECKOUT_IP_PROCESSING');
+  else{await assert.rejects(ip.claim(handler,payload),e=>e.code==='CHECKOUT_IP_STATE'||e.code==='CHECKOUT_IP_CANCELLED');
+   await assert.rejects(ip.processing(handler,completed(input,{handlerTransferId:value.handlerTransferId,transactionReference:value.transactionReference})),e=>e.code==='CHECKOUT_IP_CLAIM_REQUIRED');}
+ }
+ assert.equal((await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.ledger_entries')).rows[0].n,before);
 });
 
 test('handler signatures reject checkout scope, nonce replay, body changes, unknown paths and expired tokens',async()=>{
@@ -167,6 +213,8 @@ test('HTTP handler feed and admin PDF download enforce sessions, scope and origi
   const path='/api/services/checkout-ip/processing',raw=Buffer.from(JSON.stringify(value));
   assert.equal((await post(path,value)).status,401);
   assert.equal((await post(path,value,token(path,raw,{profile:'checkout'}))).status,401);
+  const claimPath='/api/services/checkout-ip/claim',claimBody=await claimPayload(value),claimRaw=Buffer.from(JSON.stringify(claimBody));
+  const acquired=await post(claimPath,claimBody,token(claimPath,claimRaw));assert.equal(acquired.status,200);assert.equal((await acquired.json()).claimed,true);
   const published=await post(path,value,token(path,raw));assert.equal(published.status,200);assert.equal((await published.json()).processing.operationCompleted,true);
   const contextPath='/api/services/checkout-ip/context',contextBody=Buffer.from(JSON.stringify({requestId:input.requestId}));
   const context=await post(contextPath,{requestId:input.requestId},token(contextPath,contextBody));assert.equal(context.status,200);

@@ -15,6 +15,10 @@ const decimal=(value,field,{percent=false}={})=>{
 };
 const authorizeHandler=actor=>{if(!actor?.ipHandlerService||!actor.id||actor.customerUserId)fault('FORBIDDEN',null,403)};
 const authorizeAdmin=actor=>{if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403)};
+const mapClaim=row=>row?({requestId:row.request_id,claimed:true,handlerTransferId:row.handler_transfer_id,
+ transactionReference:row.transaction_reference,routing:row.routing_snapshot,claimedAt:row.claimed_at}):null;
+const sameRoute=(left,right)=>['receivingAccountId','receivingAbiqIban','nostroCashAccountId','nostroIban','intermediaryId']
+ .every(field=>(left?.[field]||null)===(right?.[field]||null));
 const report=row=>({handlerTransferId:row.handler_transfer_id,revision:row.revision,
  transactionReference:row.transaction_reference,handlerStatus:row.handler_status,bankName:row.bank_name,
  bankServerSentAmount:row.bank_server_sent_amount,nostroIban:row.nostro_iban,receivingAbiqIban:row.receiving_abiq_iban,
@@ -66,7 +70,40 @@ export class CheckoutIpProcessing{
   const row=(await this.pool.query('SELECT * FROM avis_core_v2.checkout_ip_requests WHERE request_id=$1',[input.requestId])).rows[0];
   if(!row)fault('CHECKOUT_IP_NOT_FOUND','requestId',404);
   const reports=await this.readReports(this.pool,[row.request_id]);
-  return {request:{...this.mapRequest(row),processing:reports.get(row.request_id)||null},routing:await this.routing(this.pool,row)};
+  const claim=mapClaim((await this.pool.query('SELECT * FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=$1',[row.request_id])).rows[0]);
+  return {request:{...this.mapRequest(row),processing:reports.get(row.request_id)||null},
+   routing:claim?.routing||await this.routing(this.pool,row),claim};
+ }
+ async claim(actor,input){
+  authorizeHandler(actor);
+  if(!uuid(input?.requestId))fault('INVALID_FIELD','requestId');
+  if(!uuid(input.handlerTransferId))fault('INVALID_FIELD','handlerTransferId');
+  const handlerTransferId=input.handlerTransferId.toLowerCase(),transactionReference=text(input.transactionReference,'transactionReference',140);
+  const db=await this.pool.connect();
+  try{
+   await db.query('BEGIN');
+   const request=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_requests WHERE request_id=$1 FOR UPDATE',[input.requestId])).rows[0];
+   if(!request)fault('CHECKOUT_IP_NOT_FOUND','requestId',404);
+   const previous=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=$1',[request.request_id])).rows[0];
+   if(previous){
+    if(previous.handler_transfer_id!==handlerTransferId||previous.transaction_reference!==transactionReference||!sameRoute(input,previous.routing_snapshot))
+     fault('CHECKOUT_IP_PROCESSING_LINK','handlerTransferId',409);
+    await db.query('COMMIT');return mapClaim(previous);
+   }
+   if(request.status!=='ACTIVE')fault('CHECKOUT_IP_STATE','requestId',409);
+   if((await db.query('SELECT request_id FROM avis_core_v2.checkout_ip_cancellations WHERE request_id=$1',[request.request_id])).rows.length)
+    fault('CHECKOUT_IP_CANCELLED','requestId',409);
+   const routing=await this.routing(db,request);
+   if(!routing.receivingAbiqIban||!sameRoute(input,routing))fault('CHECKOUT_IP_ACCOUNT','receivingAbiqIban',409);
+   const report=(await db.query('SELECT handler_transfer_id,transaction_reference FROM avis_core_v2.checkout_ip_processing WHERE request_id=$1',[request.request_id])).rows[0];
+   if(report&&(report.handler_transfer_id!==handlerTransferId||report.transaction_reference!==transactionReference))
+    fault('CHECKOUT_IP_PROCESSING_LINK','handlerTransferId',409);
+   if((await db.query('SELECT request_id FROM avis_core_v2.checkout_ip_settlement_claims WHERE (handler_transfer_id=$1 OR transaction_reference=$2) AND request_id<>$3',[handlerTransferId,transactionReference,request.request_id])).rows.length)
+    fault('CHECKOUT_IP_PROCESSING_LINK','handlerTransferId',409);
+   const saved=(await db.query(`INSERT INTO avis_core_v2.checkout_ip_settlement_claims(request_id,handler_transfer_id,transaction_reference,routing_snapshot,actor_id)
+    VALUES($1,$2,$3,$4::jsonb,$5) RETURNING *`,[request.request_id,handlerTransferId,transactionReference,JSON.stringify(routing),actor.id])).rows[0];
+   await db.query('COMMIT');return mapClaim(saved);
+  }catch(error){await db.query('ROLLBACK');throw error}finally{db.release()}
  }
  async publish(actor,input){
   authorizeHandler(actor);
@@ -98,6 +135,10 @@ export class CheckoutIpProcessing{
    await db.query('BEGIN');
    const request=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_requests WHERE request_id=$1 FOR UPDATE',[input.requestId])).rows[0];
    if(!request)fault('CHECKOUT_IP_NOT_FOUND','requestId',404);
+   const claim=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=$1',[request.request_id])).rows[0];
+   if(claim&&(claim.handler_transfer_id!==value.handlerTransferId||claim.transaction_reference!==value.transactionReference))
+    fault('CHECKOUT_IP_PROCESSING_LINK','handlerTransferId',409);
+   if((value.handlerStatus==='SETTLED'||value.operationCompleted)&&!claim)fault('CHECKOUT_IP_CLAIM_REQUIRED','requestId',409);
    const previous=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_processing WHERE request_id=$1',[request.request_id])).rows[0];
    if(previous){
     if(previous.handler_transfer_id!==value.handlerTransferId||previous.transaction_reference!==value.transactionReference)
@@ -110,8 +151,8 @@ export class CheckoutIpProcessing{
     if(previous.operation_completed)fault('CHECKOUT_IP_COMPLETED','requestId',409);
     if(previous.revision>value.revision)fault('CHECKOUT_IP_REVISION','revision',409);
    }
-   if(request.status!=='ACTIVE')fault('CHECKOUT_IP_STATE','requestId',409);
-   const route=await this.routing(db,request);
+   if(request.status!=='ACTIVE'&&!claim)fault('CHECKOUT_IP_STATE','requestId',409);
+   const route=claim?.routing_snapshot||await this.routing(db,request);
    if(value.receivingAbiqIban!==route.receivingAbiqIban||value.nostroIban!==route.nostroIban)
     fault('CHECKOUT_IP_ACCOUNT',value.receivingAbiqIban!==route.receivingAbiqIban?'receivingAbiqIban':'nostroIban',409);
    const other=(await db.query('SELECT request_id FROM avis_core_v2.checkout_ip_processing WHERE handler_transfer_id=$1 AND request_id<>$2',[value.handlerTransferId,request.request_id])).rows[0];
