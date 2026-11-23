@@ -290,8 +290,9 @@ html+=results.map((r,i)=>{
    const record=(cache.nostroclearing||[]).find(x=>x.cash_account_id===cashId);
    if(!record)return;
    const values={cashAccountId:cashId,bankName:record.institution_name,bankAddress:record.bank_address||'',
-    accountName:record.account_name||'',aba:record.aba||'',reference:record.bank_reference||'',currency:record.currency_code||'',abiqIban:record.abiq_iban||''};
+    accountName:record.account_name||'',aba:record.aba||'',reference:record.bank_reference||'',currency:record.currency_code||'',abiqIban:record.preferred_abiq_iban||''};
    for(const [name,value]of Object.entries(values))if(fields.namedItem(name))fields.namedItem(name).value=value;
+   if(fields.namedItem('abiqIban'))fields.namedItem('abiqIban').placeholder=record.abiq_iban||'Issued ABIQ IBAN';
    bindIntermediaryFields(form,Array.isArray(record.intermediaries)?record.intermediaries:[]);
   });
   document.querySelectorAll('[data-nostro-mirror],[data-nostro-gateway],[data-nostro-bank]').forEach(button=>button.onclick=async()=>{
