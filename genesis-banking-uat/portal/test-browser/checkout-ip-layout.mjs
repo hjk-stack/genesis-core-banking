@@ -44,15 +44,27 @@ const fixtureScript=()=>{
 };
 async function assertIpSlider(control,state){
  const travel={CLOSED:0,REQUESTED:36,ACTIVE:72}[state];
- const geometry=await control.evaluate(async(button,travel)=>{
-  const knob=button.querySelector(':scope > .pos-liquid-knob'),start=performance.now();let track,cap;
-  do{await new Promise(requestAnimationFrame);track=button.getBoundingClientRect();cap=knob.getBoundingClientRect();}
-  while(Math.abs(cap.x+cap.width/2-track.x-(36+travel))>.1&&performance.now()-start<2000);
-  return {width:track.width,height:track.height,knobWidth:cap.width,knobHeight:cap.height,centre:cap.x+cap.width/2-track.x,
-   translation:new DOMMatrixReadOnly(getComputedStyle(knob).transform).m41,animation:getComputedStyle(button).animationName,
-   knobAnimation:getComputedStyle(knob).animationName,knobCount:button.querySelectorAll(':scope > .pos-liquid-knob').length,
-   text:button.textContent,gradient:getComputedStyle(knob).backgroundImage,trackGradient:getComputedStyle(button,'::before').backgroundImage,trackInset:parseFloat(getComputedStyle(button,'::before').left)};
- },travel);
+ const deadline=Date.now()+2000;let geometry;
+ // A managed tab can background its parent and pause that page's animation
+ // frames. Sample synchronously and enforce the deadline from the Node runner.
+ do{
+  let timeout;
+  try{
+   geometry=await Promise.race([
+    control.evaluate(button=>{
+     const knob=button.querySelector(':scope > .pos-liquid-knob'),track=button.getBoundingClientRect(),cap=knob.getBoundingClientRect();
+     return {width:track.width,height:track.height,knobWidth:cap.width,knobHeight:cap.height,centre:cap.x+cap.width/2-track.x,
+      translation:new DOMMatrixReadOnly(getComputedStyle(knob).transform).m41,animation:getComputedStyle(button).animationName,
+      knobAnimation:getComputedStyle(knob).animationName,knobCount:button.querySelectorAll(':scope > .pos-liquid-knob').length,
+      text:button.textContent,gradient:getComputedStyle(knob).backgroundImage,trackGradient:getComputedStyle(button,'::before').backgroundImage,trackInset:parseFloat(getComputedStyle(button,'::before').left)};
+    }),
+    new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('IP slider geometry sampling exceeded 2000ms for '+state)),Math.max(1,deadline-Date.now()));})
+   ]);
+  }finally{clearTimeout(timeout);}
+  if(Math.abs(geometry.centre-(36+travel))<=.1)break;
+  const remaining=deadline-Date.now();if(remaining<=0)break;
+  await new Promise(resolve=>setTimeout(resolve,Math.min(25,remaining)));
+ }while(Date.now()<deadline);
  for(const [field,expected] of Object.entries({width:144,height:60,knobWidth:60,knobHeight:48}))assert.ok(Math.abs(geometry[field]-expected)<.01,field+' remains '+expected+'px within browser sub-pixel precision');
  assert.ok(Math.abs(geometry.centre-(36+travel))<.2,'knob centre is '+(36+travel)+'px for '+state);
  assert.ok(Math.abs(geometry.translation-travel)<.2,'knob physically travels '+travel+'px for '+state);
