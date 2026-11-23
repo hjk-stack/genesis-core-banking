@@ -69,7 +69,9 @@ test('NOSTRO register exposes the external account directory and associations wi
 
 test('optional intermediary migration preserves existing supplied values, identities, bindings and ledger data',async()=>{
  assert.deepEqual(await intermediary(legacyIntermediary.id),upgradeSnapshot.intermediary);
- assert.deepEqual((await pool.query('SELECT * FROM avis_core_v2.external_cash_accounts WHERE cash_account_id=$1',[cash.id])).rows[0],upgradeSnapshot.cash);
+ const {preferred_abiq_iban:preferred,...unchanged}=(await pool.query('SELECT * FROM avis_core_v2.external_cash_accounts WHERE cash_account_id=$1',[cash.id])).rows[0];
+ assert.equal(preferred,null,'a new optional correction field starts empty');
+ assert.deepEqual(unchanged,upgradeSnapshot.cash);
  assert.deepEqual(await ledgerSnapshot(),upgradeSnapshot.ledger);
  const columns=(await pool.query(`SELECT column_name,is_nullable,column_default FROM information_schema.columns
   WHERE table_schema='avis_core_v2' AND table_name='nostro_intermediary_banks'
@@ -206,8 +208,8 @@ test('NOSTRO currency edit preserves booked funds and refuses silent redenominat
  const before=(await pool.query('SELECT c.* FROM avis_core_v2.external_cash_accounts c WHERE cash_account_id=$1',
   [cash.id])).rows[0],balanceBefore=await balance(cash.accountId);
  await assert.rejects(core.updateCashAccountDetails(admin,{
-  cashAccountId:cash.id,bankName:'Should not persist',bankAddress:'',accountName:'',
-  aba:'',reference:'',currency:'USD',abiqIban:''
+  cashAccountId:cash.id,bankName:'Should not persist',bankAddress:'Fixture street',accountName:'Settlement holder',
+  aba:'',reference:'Correction attempt',currency:'USD',abiqIban:''
  },key()),error=>error.code==='NOSTRO_CURRENCY_HAS_ACTIVITY'&&error.field==='currency');
  const after=(await pool.query('SELECT c.* FROM avis_core_v2.external_cash_accounts c WHERE cash_account_id=$1',
   [cash.id])).rows[0];
