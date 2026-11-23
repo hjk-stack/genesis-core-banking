@@ -69,7 +69,9 @@ test('NOSTRO register exposes the external account directory and associations wi
 
 test('optional intermediary migration preserves existing supplied values, identities, bindings and ledger data',async()=>{
  assert.deepEqual(await intermediary(legacyIntermediary.id),upgradeSnapshot.intermediary);
- assert.deepEqual((await pool.query('SELECT * FROM avis_core_v2.external_cash_accounts WHERE cash_account_id=$1',[cash.id])).rows[0],upgradeSnapshot.cash);
+ const {preferred_abiq_iban:preferred,...unchanged}=(await pool.query('SELECT * FROM avis_core_v2.external_cash_accounts WHERE cash_account_id=$1',[cash.id])).rows[0];
+ assert.equal(preferred,null,'a new optional correction field starts empty');
+ assert.deepEqual(unchanged,upgradeSnapshot.cash);
  assert.deepEqual(await ledgerSnapshot(),upgradeSnapshot.ledger);
  const columns=(await pool.query(`SELECT column_name,is_nullable,column_default FROM information_schema.columns
   WHERE table_schema='avis_core_v2' AND table_name='nostro_intermediary_banks'
@@ -168,6 +170,51 @@ test('external bank register retains bank address, account name, ABA, reference 
  await assert.rejects(core.updateCashAccountDetails({id:'public',admin:false},update,key()),e=>e.code==='FORBIDDEN');
 });
 
+test('admin can correct ABIQ and currency on an empty NOSTRO without touching posted ledger history',async()=>{
+ const opening=await core.registerCashAccount(admin,{
+  institutionType:'CORRESPONDENT_BANK',institutionName:'Currency correction fixture',
+  bic:'TESTGB2LXXX',accountNumber:'EXTERNAL-CORRECTION-001',currency:'USD'
+ },key());
+ const oldLedger=await pool.query('SELECT * FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[opening.accountId]);
+ const issued=(await pool.query(
+  "SELECT avis_core_v2.issue_abiq_number('TN','AVIP','EUR',NULL,$1) AS identifier",
+  [admin.id])).rows[0].identifier;
+ const edit={cashAccountId:opening.id,bankName:'Currency correction fixture',bankAddress:'Fixture address',
+  accountName:'Correction holder',aba:'',reference:'TEST-EDIT',currency:'EUR',abiqIban:issued};
+ const saved=await core.updateCashAccountDetails(admin,edit,key());
+ assert.equal(saved.currency,'EUR');assert.equal(saved.abiqIban,issued);
+ const after=(await core.list(admin,'nostroclearing')).find(x=>x.cash_account_id===opening.id);
+ assert.equal(after.currency_code,'EUR');assert.equal(after.abiq_iban,issued);
+ assert.equal(after.preferred_abiq_iban,issued);
+ assert.notEqual(after.ledger_account_id,opening.accountId,'currency correction keeps previous ledger intact');
+ assert.deepEqual((await pool.query('SELECT * FROM avis_core_v2.ledger_accounts WHERE account_id=$1',
+  [opening.accountId])).rows,oldLedger.rows);
+ assert.equal((await pool.query('SELECT currency_code FROM avis_core_v2.ledger_accounts WHERE account_id=$1',
+  [after.ledger_account_id])).rows[0].currency_code,'EUR');
+ assert.equal((await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.ledger_entries WHERE account_id=ANY($1::uuid[])',
+  [[opening.accountId,after.ledger_account_id]])).rows[0].n,0);
+ const audit=(await pool.query('SELECT * FROM avis_core_v2.nostro_account_corrections WHERE cash_account_id=$1',
+  [opening.id])).rows[0];
+ assert.equal(audit.previous_currency,'USD');assert.equal(audit.current_currency,'EUR');
+ assert.equal(audit.current_abiq_identifier,issued);assert.equal(audit.corrected_by,admin.id);
+ await assert.rejects(core.updateCashAccountDetails({id:'visitor',admin:false},edit,key()),
+  error=>error.code==='FORBIDDEN');
+ await assert.rejects(core.updateCashAccountDetails(admin,{...edit,abiqIban:'TN00AVIP123'},key()),
+  error=>error.code==='INVALID_FIELD'&&error.field==='abiqIban');
+ await assert.rejects(core.updateCashAccountDetails(admin,{...edit,abiqIban:'',currency:'XYZ'},key()),
+  error=>error.code==='INVALID_FIELD'&&error.field==='currency');
+});
+test('NOSTRO currency edit preserves booked funds and refuses silent redenomination',async()=>{
+ const before=(await pool.query('SELECT c.* FROM avis_core_v2.external_cash_accounts c WHERE cash_account_id=$1',
+  [cash.id])).rows[0],balanceBefore=await balance(cash.accountId);
+ await assert.rejects(core.updateCashAccountDetails(admin,{
+  cashAccountId:cash.id,bankName:'Should not persist',bankAddress:'Fixture street',accountName:'Settlement holder',
+  aba:'',reference:'Correction attempt',currency:'USD',abiqIban:''
+ },key()),error=>error.code==='NOSTRO_CURRENCY_HAS_ACTIVITY'&&error.field==='currency');
+ const after=(await pool.query('SELECT c.* FROM avis_core_v2.external_cash_accounts c WHERE cash_account_id=$1',
+  [cash.id])).rows[0];
+ assert.deepEqual(after,before);assert.equal(await balance(cash.accountId),balanceBefore);
+});
 test('intermediary banks register under the selected NOSTRO without creating or altering balances',async()=>{
  const cashBefore=await balance(cash.accountId);
  const input={cashAccountId:cash.id,bankName:'Global Intermediary',bankAddress:'45 Clearing Square, London, UK',
