@@ -339,7 +339,12 @@ export class PaymentServer extends SovereignCore {
   if(!actor?.admin)fault('FORBIDDEN',null,403);
   const queries={
    nostroclearing:`SELECT c.cash_account_id,c.ledger_account_id,c.institution_type,c.institution_name,c.bic_code,c.iban_or_account_no,
-    c.bank_address,c.account_name,c.aba,c.bank_reference,c.preferred_abiq_iban AS abiq_iban,
+    c.bank_address,c.account_name,c.aba,c.bank_reference,c.preferred_abiq_iban,
+    COALESCE(c.preferred_abiq_iban,
+      (SELECT b.identifier FROM avis_core_v2.abiq_number_bindings b
+       WHERE b.ledger_account_id=c.ledger_account_id AND b.primary_for_ledger LIMIT 1),
+      (SELECT i.abiq_iban FROM avis_core_v2.abiq_account_identifiers i
+       WHERE i.ledger_account_id=c.ledger_account_id LIMIT 1)) AS abiq_iban,
     c.currency_code,c.is_active,
     COALESCE((SELECT json_agg(json_build_object(
       'intermediaryId',i.intermediary_id,'bankName',i.bank_name,'bankAddress',i.bank_address,
