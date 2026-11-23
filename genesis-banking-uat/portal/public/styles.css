@@ -195,7 +195,6 @@ textarea{box-sizing:border-box;width:100%;font:inherit;border:1px solid #d6dbe3;
 .checkout-ip-table td small.form-error{color:var(--red,#b00029)}
 .checkout-ip-table td small.form-error:empty{display:none}
 .ip-request-controls{margin:16px 0 10px}
-.ip-request-controls .pos-activation-label{display:block;margin-top:8px;font-size:12px}
 .ip-register-heading{flex-wrap:wrap;gap:12px}
 .ip-register-actions{display:flex;align-items:center;flex-wrap:wrap;gap:16px}
 .ip-admin-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,390px),1fr));gap:24px;padding:20px 22px}
@@ -214,8 +213,37 @@ textarea{box-sizing:border-box;width:100%;font:inherit;border:1px solid #d6dbe3;
 [data-checkout-ip-register] button:not(.pos-liquid-switch){white-space:nowrap;border:1px solid #8a9cad;border-radius:10px;padding:9px 12px;cursor:pointer;background:#f5f8fc;color:var(--ink,#20242b)}
 .checkout-ip-table .ip-operation-cell{min-width:200px}
 .checkout-ip-table [data-ip-completion-report]{display:block;width:100%;min-width:190px;resize:vertical;font-family:monospace;font-size:12px;line-height:1.5;overflow-wrap:anywhere;margin-top:8px;padding:8px;border:1px solid var(--line,#e0e4e9);border-radius:8px;background:#f7f9fb}
-.checkout-ip-table .pos-liquid-switch[data-state="REQUESTED"]{animation:pos-request-pulse 1.15s ease-in-out infinite}
-@media(prefers-reduced-motion:reduce){.checkout-ip-table .pos-liquid-switch[data-state="REQUESTED"]{animation:none}}
+/* IP activation has three fixed positions; POS controls retain their own geometry. */
+.pos-liquid-switch.ip-liquid-slider{
+ --ip-rim:#cf1648b3;box-sizing:border-box;width:144px;min-width:144px;height:60px;
+ border:1px solid #ffffffd0;padding:5px;margin:0;animation:none;
+ background:linear-gradient(180deg,#ffffffed,#ffffff35 18%,#ffffff80 43%,#f5faff24 65%,#ffffffe8 95%),linear-gradient(90deg,#ff4b689e,#608dff8f 50%,#51e7738f);
+ box-shadow:inset 0 1px 2px #fff,inset 0 -2px 2px #ffffffd9,0 0 0 1px #9bbcc9a6,0 5px 8px #17324b26,-4px 6px 9px #ff234629,4px 6px 9px #02d36f2a;
+}
+.pos-liquid-switch.ip-liquid-slider::before{
+ inset:6px;background:linear-gradient(180deg,#ffffffb3,#ffffff1a 23%,#ffffff00 42%,#ffffff00 78%,#dcffede6),linear-gradient(90deg,#ed0028 0%,#ee173b 27%,#155fee 45%,#08a7ef 57%,#05be2e 75%,#03cf14 100%);
+ box-shadow:inset 0 1px 3px #ffffffc4,inset 0 -2px 3px #ffffff94,0 0 0 1px #ffffffb8;
+}
+.pos-liquid-switch.ip-liquid-slider::after{inset:3px 8px auto;height:12px;background:linear-gradient(180deg,#ffffffeb,#ffffff52 45%,transparent);opacity:1}
+.pos-liquid-switch.ip-liquid-slider>.pos-liquid-knob{
+ width:60px;height:48px;transform:translateX(0);border:1px solid #efffffe6;
+ background:radial-gradient(ellipse at 24% 8%,#fff5f8cf,transparent 50%),radial-gradient(ellipse at 50% 100%,#ffd9e7cc,transparent 58%),linear-gradient(155deg,#ff4869c4,#e71944d9 50%,#a60431e6 76%,#ff6b98cf);
+ box-shadow:0 0 0 1px var(--ip-rim),inset 0 2px 2px #fff,inset 0 -3px 4px var(--ip-rim),inset 2px 0 3px #ffffffa6,0 4px 7px #17324b59,0 0 7px #ffffff8f;
+ transition:transform .28s cubic-bezier(.2,.87,.28,1),background .2s,box-shadow .2s;
+}
+.pos-liquid-switch.ip-liquid-slider>.pos-liquid-knob::before{inset:3px 5px auto;height:17px;border-radius:70% 70% 45% 45%;background:linear-gradient(180deg,#fff,#ffffffbc 45%,#ffffff00);opacity:.95}
+.pos-liquid-switch.ip-liquid-slider>.pos-liquid-knob::after{content:"";pointer-events:none;position:absolute;left:7px;right:7px;bottom:3px;height:7px;border-radius:50%;background:linear-gradient(180deg,transparent,#d9ffffe0);box-shadow:0 1px 2px var(--ip-rim)}
+.pos-liquid-switch.ip-liquid-slider[data-state=REQUESTED]{--ip-rim:#137ce6bd;animation:none}
+.pos-liquid-switch.ip-liquid-slider[data-state=REQUESTED]>.pos-liquid-knob{
+ transform:translateX(36px);
+ background:radial-gradient(ellipse at 24% 8%,#e9fcffeb,transparent 50%),radial-gradient(ellipse at 50% 100%,#6df7ffeb,transparent 58%),linear-gradient(155deg,#55baffc4,#166ce8d9 50%,#083eaaeb 76%,#00d6ffcf);
+}
+.pos-liquid-switch.ip-liquid-slider[data-state=ACTIVE]{--ip-rim:#10a441bd}
+.pos-liquid-switch.ip-liquid-slider[data-state=ACTIVE]>.pos-liquid-knob{
+ transform:translateX(72px);
+ background:radial-gradient(ellipse at 24% 8%,#edfff4eb,transparent 50%),radial-gradient(ellipse at 50% 100%,#b7ff87e6,transparent 58%),linear-gradient(155deg,#71f3bec4,#15b63cdb 50%,#077427eb 76%,#4be974cf);
+}
+@media(prefers-reduced-motion:reduce){.pos-liquid-switch.ip-liquid-slider>.pos-liquid-knob{transition:none}}
 
 /* The handler stays in its own tab; only its original proof PDF uses this window. */
 .ip-proof-dialog{width:min(980px,calc(100vw - 24px));height:min(850px,calc(100dvh - 24px));max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);padding:0;border:1px solid var(--line,#d6dce5);border-radius:16px;box-shadow:0 24px 80px #10203955;resize:both;overflow:hidden}

@@ -1,6 +1,7 @@
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const date=value=>value&&Number.isFinite(Date.parse(value))?new Date(value).toLocaleString():'—';
 const value=text=>esc(text??'—');
+const ipStateDescription=state=>state==='REQUESTED'?'Waiting for bank approval':state==='ACTIVE'?'Approved':'Closed';
 export const ipState=row=>row.status==='REQUESTED'&&Date.parse(row.expiresAt)<=Date.now()?'CLOSED':row.status;
 export const checkoutIpFingerprint=rows=>JSON.stringify(rows);
 export const checkoutIpHandlerUrl=record=>'https://avis.land/admin/bank/quantum/direct-transfer'+(record?.requestId?'?checkoutRequest='+encodeURIComponent(record.requestId):'');
@@ -15,13 +16,11 @@ const intermediaryLabel=record=>{
 export function checkoutIpAdminControls(){
  return '<section class="panel ip-admin-controls" data-ip-admin-controls aria-label="IP-to-IP administrator controls">'+
   '<div class="ip-admin-access"><div class="ip-admin-control-title"><h2>Checkout access</h2><div class="ip-admin-switch-state">'+
-  '<button type="button" class="pos-liquid-switch" role="switch" aria-label="Checkout access" aria-checked="false" aria-disabled="true" data-ip-admin-access data-state="CLOSED"><span class="pos-liquid-knob" aria-hidden="true"></span></button>'+
-  '<span class="pos-activation-label" data-ip-admin-access-state data-state="CLOSED">Closed</span></div></div>'+
+  '<button type="button" class="pos-liquid-switch ip-liquid-slider" role="switch" aria-label="Checkout access" aria-description="Closed" aria-checked="false" aria-disabled="true" data-ip-admin-access data-state="CLOSED"><span class="pos-liquid-knob" aria-hidden="true"></span></button></div></div>'+
   '<label class="ip-admin-request-label">Checkout request<select data-ip-admin-request aria-label="Checkout request"><option value="">Select checkout request</option></select></label>'+
   '<p class="form-error" role="alert" data-ip-admin-access-error></p></div>'+
   '<div class="ip-admin-management"><div class="ip-admin-control-title"><h2>IP-IP management</h2><div class="ip-admin-switch-state">'+
-  '<button type="button" class="pos-liquid-switch" role="switch" aria-label="IP-IP management" aria-checked="false" data-ip-admin-management data-state="CLOSED"><span class="pos-liquid-knob" aria-hidden="true"></span></button>'+
-  '<span class="pos-activation-label" data-ip-admin-management-state data-state="CLOSED">Closed</span></div></div>'+
+  '<button type="button" class="pos-liquid-switch ip-liquid-slider" role="switch" aria-label="IP-IP management" aria-description="Management tab closed" aria-checked="false" data-ip-admin-management data-state="CLOSED"><span class="pos-liquid-knob" aria-hidden="true"></span></button></div></div>'+
   '<p class="form-error" role="alert" data-ip-admin-management-error></p></div></section>';
 }
 
@@ -32,9 +31,9 @@ export function createCheckoutIpAdminControls({root=document,activateRequest,win
  const currentState=(record,now=Date.now())=>!record?'CLOSED':record.status==='REQUESTED'&&Date.parse(record.expiresAt)<=now?'CLOSED':record.status;
  const error=(kind,message)=>{const slot=panel?.querySelector('[data-ip-admin-'+kind+'-error]');if(slot)slot.textContent=message;};
  const paint=(selector,state)=>{
-  const button=panel?.querySelector('[data-ip-admin-'+selector+']'),label=panel?.querySelector('[data-ip-admin-'+selector+'-state]');if(!button)return;
+  const button=panel?.querySelector('[data-ip-admin-'+selector+']');if(!button)return;
   button.dataset.state=state;button.setAttribute('aria-checked',String(state==='ACTIVE'));
-  label.dataset.state=state;label.textContent=state==='REQUESTED'?'Activation requested':state==='ACTIVE'?'Open':'Closed';
+  button.setAttribute('aria-description',selector==='management'?(state==='ACTIVE'?'Management tab open':'Management tab closed'):ipStateDescription(state));
  };
  function paintAccess(now=Date.now()){
   if(!panel?.isConnected)return;
@@ -167,7 +166,7 @@ export function expireCheckoutIpControls(root=document,now=Date.now()){
   const row=button.closest('[data-checkout-ip]');row.dataset.ipState='CLOSED';
   button.dataset.state='CLOSED';button.setAttribute('aria-checked','false');button.setAttribute('aria-disabled','true');
   button.setAttribute('aria-label','IP-to-IP CLOSED '+row.dataset.checkoutIp);button.removeAttribute('data-ip-deadline');
-  const label=row.querySelector('.pos-activation-label');label.dataset.state='CLOSED';label.textContent='Closed';
+  button.setAttribute('aria-description',ipStateDescription('CLOSED'));
   for(const selector of routeSelectors)row.querySelector(selector).disabled=true;
  }
  panel.querySelector('[data-ip-pending]').textContent=panel.querySelectorAll('[data-ip-state="REQUESTED"]').length+' awaiting activation';
@@ -194,9 +193,8 @@ export function checkoutIpRegister(rows=[],accounts=[],nostros=[]){
   return '<tr data-checkout-ip="'+id+'" data-ip-state="'+esc(state)+'">'+
    '<td class="ip-request-cell"><strong>'+esc(r.checkoutReference)+'</strong><small>'+esc(r.title)+'</small><small>Request '+id+
    '</small><div class="ip-request-controls"><button type="button" role="switch" aria-checked="'+(state==='ACTIVE')+'" aria-label="IP-to-IP '+esc(state)+' '+id+
-   '" class="pos-liquid-switch" data-ip-toggle data-state="'+esc(state)+'" '+(state==='CLOSED'?'aria-disabled="true" ':'')+(state==='REQUESTED'?'data-ip-deadline="'+deadline+'"':'')+'>'+
-   '<span class="pos-liquid-knob" aria-hidden="true"></span></button><span class="pos-activation-label" data-state="'+esc(state)+'">'+
-   esc(state==='REQUESTED'?'Activation requested':state==='ACTIVE'?'Open':'Closed')+'</span></div>'+
+   '" aria-description="'+ipStateDescription(state)+'" class="pos-liquid-switch ip-liquid-slider" data-ip-toggle data-state="'+esc(state)+'" '+(state==='CLOSED'?'aria-disabled="true" ':'')+(state==='REQUESTED'?'data-ip-deadline="'+deadline+'"':'')+'>'+
+   '<span class="pos-liquid-knob" aria-hidden="true"></span></button></div>'+
    '<button type="button" data-ip-handler>Open handler</button><small>Requested '+esc(date(r.requestedAt))+'</small><small>Expires '+esc(date(r.expiresAt))+'</small>'+
    '<small>Approved '+esc(date(r.approvedAt))+'</small><small class="form-error" data-ip-error role="alert"></small></td>'+
    '<td>'+value(processing.bankName||r.senderBankName)+'<small>IP '+esc(r.senderIp)+'</small><small>'+esc(r.authorizedPerson)+'</small></td>'+
