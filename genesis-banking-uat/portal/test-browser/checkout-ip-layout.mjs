@@ -53,7 +53,7 @@ async function assertIpSlider(control,state){
    knobAnimation:getComputedStyle(knob).animationName,knobCount:button.querySelectorAll(':scope > .pos-liquid-knob').length,
    text:button.textContent,gradient:getComputedStyle(knob).backgroundImage,trackGradient:getComputedStyle(button,'::before').backgroundImage,trackInset:parseFloat(getComputedStyle(button,'::before').left)};
  },travel);
- assert.equal(geometry.width,144);assert.equal(geometry.height,60);assert.equal(geometry.knobWidth,60);assert.equal(geometry.knobHeight,48);
+ for(const [field,expected] of Object.entries({width:144,height:60,knobWidth:60,knobHeight:48}))assert.ok(Math.abs(geometry[field]-expected)<.01,field+' remains '+expected+'px within browser sub-pixel precision');
  assert.ok(Math.abs(geometry.centre-(36+travel))<.2,'knob centre is '+(36+travel)+'px for '+state);
  assert.ok(Math.abs(geometry.translation-travel)<.2,'knob physically travels '+travel+'px for '+state);
  assert.equal(geometry.knobCount,1);assert.equal(geometry.text,'');assert.equal(geometry.animation,'none');assert.equal(geometry.knobAnimation,'none');
