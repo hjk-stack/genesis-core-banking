@@ -148,6 +148,31 @@ test('an omitted approved NOSTRO can be selected uniquely from the same-currency
   bankAddress:'London',accountName:'AVISPay PLC',reference:'Retained claim'},randomUUID()),e=>e.code==='NOSTRO_CURRENCY_HAS_ACTIVITY');
 });
 
+test('NOSTRO context exposes exact registered clearing metadata and leaves missing optional fields empty without changing records or balances',async()=>{
+ const accountNumber='CORE-REGISTER-'+randomUUID();
+ const registered=await payments.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Registered Clearing Bank',
+  bic:'CHASUS33XXX',accountNumber,currency:'EUR',bankAddress:'270 Park Avenue, New York',accountName:'AVISPay PLC',aba:'021000021'},randomUUID());
+ const empty=await cashAccount();
+ // Legacy registry rows can omit a BIC. Reading context must preserve that
+ // absence instead of deriving a bank country or inventing clearing metadata.
+ await pool.query('UPDATE avis_core_v2.external_cash_accounts SET bic_code=NULL WHERE cash_account_id=$1',[empty.id]);
+ const f=await fixture({cash:{...registered,accountNumber,currency:'EUR'}});
+ const before=await snapshot(),registry=await rows('SELECT * FROM avis_core_v2.external_cash_accounts ORDER BY cash_account_id');
+ const context=await ip.context(handler,{requestId:f.request.requestId});
+ assert.deepEqual(context.nostroAccounts.find(account=>account.cashAccountId===registered.id),{
+  cashAccountId:registered.id,accountNumber,currency:'EUR',bankName:'Registered Clearing Bank',receiverClearing:{
+   receiverBankName:'Registered Clearing Bank',receiverBankAddress:'270 Park Avenue, New York',receiverAccountHolder:'AVISPay PLC',
+   receiverIban:accountNumber,receiverBic:'CHASUS33XXX',receiverSortCode:'021000021',receiverCountry:'',receiverBankCode:''
+  }
+ });
+ assert.deepEqual(context.nostroAccounts.find(account=>account.cashAccountId===empty.id).receiverClearing,{
+  receiverBankName:'Settlement Bank',receiverBankAddress:'',receiverAccountHolder:'',receiverIban:empty.accountNumber,
+  receiverBic:'',receiverSortCode:'',receiverCountry:'',receiverBankCode:''
+ });
+ assert.deepEqual(await snapshot(),before);
+ assert.deepEqual(await rows('SELECT * FROM avis_core_v2.external_cash_accounts ORDER BY cash_account_id'),registry);
+});
+
 test('ambiguous registered accounts and changes to an explicit approved NOSTRO are rejected',async()=>{
  const f=await fixture({optional:true});await cashAccount('EUR','  '+f.cash.accountNumber.toLowerCase()+'  ');
  await assert.rejects(claim(f,{...f.context.routing,nostroCashAccountId:f.cash.id,nostroIban:f.cash.accountNumber}),e=>e.code==='CHECKOUT_IP_ACCOUNT');
