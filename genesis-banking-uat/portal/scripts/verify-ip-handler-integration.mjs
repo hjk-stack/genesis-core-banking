@@ -85,6 +85,9 @@ try{
  const handler=createDirectTransferService(connector,{checkout:handlerClient});
  const input={requestId:'integration-draft',checkoutRequestId:record.id,direction:'incoming',correspondentId:correspondent.id,ledgerAccountId:counter.id,amount:context.request.amount,date:'2026-11-23',charges:'SHA',creditorName:'Integration beneficiary',creditorIban:beneficiaryIban,reference:record.reference,senderBankName:record.bankName,senderName:record.accountName,senderIban};
  let transfer=await handler.save(input,websiteAdmin);assert.equal(transfer.amount,'10');
+ assert.equal(transfer.creditorIban,context.routing.receivingAbiqIban);
+ assert.equal(transfer.coreBeneficiaryAccountId,context.routing.receivingAccountId);
+ assert.notEqual(counter.id,context.routing.receivingAccountId);
  await handler.publishCheckout(transfer.id);
  let rows=await (await fetch(base+'/api/views/checkoutip',{headers:{cookie}})).json();let row=rows.rows.find(row=>row.requestId===record.id);
  assert.equal(row.processing.transactionReference,transfer.uetr);assert.equal(row.processing.operationCompleted,false);assert.equal(row.processing.proof.available,false);
@@ -94,10 +97,19 @@ try{
  assert.equal(transfer.uetr,stableUetr);
  await handler.publishCheckout(transfer.id);
  await handler.connect('integration-bank',websiteAdmin);const settled=await handler.settle(transfer.id,websiteAdmin);assert.equal(settled.status,'settled');
- await handler.publishCheckout(transfer.id);assert.equal((await handlerClient.context({requestId:record.id})).request.processing.handlerStatus,'SETTLED');
+ await handler.publishCheckout(transfer.id);const settledContext=await handlerClient.context({requestId:record.id});
+ assert.equal(settledContext.request.processing.handlerStatus,'SETTLED');
+ const firstCoreSettlement=settledContext.request.processing.settlement;
+ assert.equal(firstCoreSettlement.booked,true);assert.equal(firstCoreSettlement.receivingAccountId,common);assert.equal(firstCoreSettlement.cashAccountId,nostro.id);
+ assert.equal(firstCoreSettlement.handlerJournalId,settled.journalId);assert.notEqual(firstCoreSettlement.journalId,settled.journalId);
+ assert.equal(firstCoreSettlement.statementHash,sha(statement));
+ assert.deepEqual((await pool.query('SELECT account_id,direction,amount::text FROM avis_core_v2.ledger_entries WHERE journal_id=$1 ORDER BY direction',[firstCoreSettlement.journalId])).rows,[
+  {account_id:common,direction:'CREDIT',amount:'10.000000000000000000'},
+  {account_id:nostro.accountId,direction:'DEBIT',amount:'10.000000000000000000'}
+ ]);
  await assert.rejects(checkout.cancel({requestId:record.id}),error=>error.code==='CHECKOUT_IP_COMPLETED');
  const websiteAfterSettlement=await readTreasury();assert.equal(websiteAfterSettlement.journals.length,1);assert.equal(treasuryBalance(websiteAfterSettlement,cash.id),1000n);
- check('Authenticated fixture statement settles once; core cancellation preserves settled payment awaiting report');
+ check('Authenticated fixture statement posts distinct handler/core journals and credits the approved core Common account once');
  const report={franchiseAllocatedPercent:'12.50',manualReport100Digits:'0123456789'.repeat(10)};
  const completed=await handler.processingReport(transfer.id,report,websiteAdmin);assert.equal(completed.register.processing.operationCompleted,true);
  const original=await handler.export(transfer.id,'pdf'),proof=await fetch(base+'/api/checkout-ip/'+record.id+'/proof.pdf',{headers:{cookie}});assert.equal(proof.status,200);
@@ -160,11 +172,16 @@ try{
  const cancelledFirst={...record,id:randomUUID(),reference:'INTEGRATION-CANCEL-BEFORE-REGISTER'};
  const absent=await checkout.cancel({requestId:cancelledFirst.id});assert.equal(absent.cancelled,true);assert.equal(absent.registered,false);
  await assert.rejects(checkout.register(checkoutIpPayload(cancelledFirst)),error=>error.code==='CHECKOUT_IP_CANCELLED');
- assert.deepEqual((await pool.query('SELECT account_id,available_balance::text,locked_balance::text FROM avis_core_v2.ledger_accounts ORDER BY account_id')).rows,coreBefore);
- assert.equal((await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.ledger_entries')).rows[0].n,ledgerBefore);
- check('Actual signed cancellation is idempotent and complete cross-repository flow leaves core ledger unchanged');
+ const expectedCore=coreBefore.map(account=>[common,nostro.accountId].includes(account.account_id)?{...account,available_balance:'20.000000000000000000'}:account);
+ assert.deepEqual((await pool.query('SELECT account_id,available_balance::text,locked_balance::text FROM avis_core_v2.ledger_accounts ORDER BY account_id')).rows,expectedCore);
+ const ledgerAfter=(await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.ledger_entries')).rows[0].n;
+ assert.equal(ledgerAfter,ledgerBefore+4);
+ const coreSettlements=(await pool.query('SELECT request_id,journal_id,bank_transaction_id,amount::text FROM avis_core_v2.checkout_ip_settlements ORDER BY bank_transaction_id')).rows;
+ assert.equal(coreSettlements.length,2);assert.equal(new Set(coreSettlements.map(row=>row.journal_id)).size,2);
+ assert.deepEqual(coreSettlements.map(row=>row.bank_transaction_id),['integration-bank-txn','integration-recovery-txn']);
+ check('Signed cancellation and retries preserve two exact core settlements, four balanced entries and unchanged unrelated balances');
  const result={passed:checks.length,failed:0,checks,wireCalls:wire.map(({path,authPrefix})=>({path,authPrefix})),
-  proof:{bytes:original.length,sha256:sha(original)},coreLedgerEntriesBefore:ledgerBefore,coreLedgerEntriesAfter:ledgerBefore};
+  proof:{bytes:original.length,sha256:sha(original)},coreLedgerEntriesBefore:ledgerBefore,coreLedgerEntriesAfter:ledgerAfter,coreSettlements};
  if(outputDirectory){
   await mkdir(outputDirectory,{recursive:true});
   await writeFile(join(outputDirectory,'fixture-handler-proof.pdf'),original);
