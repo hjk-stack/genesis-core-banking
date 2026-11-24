@@ -1,6 +1,6 @@
 # Checkout IP-to-IP processing and original payment proof
 
-The website registers checkout activation requests. A bank administrator approves the receiving Common/Suspense account and optional NOSTRO/intermediary. The IP-to-IP handler reads that approved context, claims a matched bank settlement before booking it, and publishes processing reports and its original proof PDF. The core register stores those reports without posting another ledger journal.
+The website registers checkout activation requests. A bank administrator approves the receiving Common/Suspense account and optional NOSTRO/intermediary. The IP-to-IP handler reads that approved context, claims a matched bank settlement before booking it, and publishes processing reports and its original proof PDF. A new report with authenticated booked-bank evidence also credits the approved core account. The core creates its own journal; a website treasury UUID never identifies a core ledger account or journal.
 
 ## Endpoints and authentication
 
@@ -16,13 +16,17 @@ All service endpoints are `POST` with `Content-Type: application/json`. Sign the
 | `/api/services/checkout-ip/register` | Checkout | Registration payload below; returns the request and its state. |
 | `/api/services/checkout-ip/status` | Checkout | `{requestId}`; returns state and timestamps, without administrator routing data. |
 | `/api/services/checkout-ip/cancel` | Checkout | `{requestId}`; records terminal cancellation and closes an existing request once. A previously unknown ID returns `{requestId,cancelled:true,registered:false,cancelledAt}` without creating a registration. |
-| `/api/services/checkout-ip/context` | Handler | `{requestId}`; returns `{request,routing,claim}`. `request.processing` is the latest report or `null`; `claim` is the retained settlement claim or `null`. |
+| `/api/services/checkout-ip/context` | Handler | `{requestId}`; returns `{request,routing,claim,nostroAccounts,receivingAccount}`. `request.processing` is the latest report or `null`; `claim` is the retained settlement claim or `null`. |
 | `/api/services/checkout-ip/claim` | Handler | `{requestId,handlerTransferId,transactionReference,...routing}`; returns `{requestId,claimed:true,handlerTransferId,transactionReference,routing,claimedAt}`. |
 | `/api/services/checkout-ip/processing` | Handler | Flat processing payload below; returns `{requestId,processing}`. |
 
 The registration payload is `{requestId,checkoutKind,source,checkoutReference,title,amount,currency,bankName,ip,authorized,account,accountName,contactName?,contactEmail?,documents?}`. `checkoutKind` is `MILESTONE` or `SHOP`; `source` is **required** and is `industrial` or `shop-basket`. `requestId` is a UUID, `amount` is a positive decimal string, `ip` is a valid IP address, and `documents` contains at most three filenames. The handler context may represent an ordinary amount as `10.000000000000000000`: remove trailing fractional zeros exactly before currency precision validation; do not convert through a JavaScript `Number`.
 
 `routing` has exactly these business fields: `receivingAccountId`, `receivingAbiqIban`, `nostroCashAccountId`, `nostroIban`, and `intermediaryId`. Optional NOSTRO/intermediary fields are `null`. The claim submits all five fields from the approved context. Its transfer, stable UETR transaction reference and routing become immutable.
+
+`receivingAccount` is `{accountId,accountType,label,currency,abiqIban}` for the approved core account, or `null`. `nostroAccounts` contains active same-currency registered cash accounts as `{cashAccountId,accountNumber,currency,bankName}`. If approval omitted the NOSTRO, the handler can select one at transaction time by submitting its canonical `nostroCashAccountId` and `nostroIban` when claiming. The account number must match exactly after case/whitespace normalization and identify only one active same-currency registered account. The supplied core ID must match that record. An explicitly approved NOSTRO cannot be replaced, and receiving/intermediary routing remains unchanged. Before claiming, reports use the original approved route, including a null NOSTRO. After claiming, context and reports use the frozen selected route.
+
+Each `nostroAccounts` item also includes `receiverClearing` with `receiverBankName`, `receiverBankAddress`, `receiverAccountHolder`, `receiverIban`, `receiverBic`, `receiverSortCode`, `receiverCountry` and `receiverBankCode`. The first six values come directly from the registered core institution name, bank address, account holder, external account number, BIC and ABA. Missing optional values remain empty strings; country and bank code remain empty for transaction-time completion. Context reads do not infer a country from the BIC or modify registered metadata, accounts or balances.
 
 ## Settlement and cancellation ordering
 
@@ -32,7 +36,7 @@ A repeated claim must have the same request, transfer, transaction reference and
 
 ## Processing payload
 
-The input is flat, with `proof` as its only nested document object:
+The input is flat except for the optional `proof` and `settlementEvidence` objects:
 
 | Field | Contract |
 | --- | --- |
@@ -48,6 +52,29 @@ The input is flat, with `proof` as its only nested document object:
 | `operationCompleted` | Boolean. `true` requires `SETTLED`, a matching claim, populated sender/payment/ABIQ/cleared/beneficiary/allocation fields, the report and proof. |
 | `manualReport100Digits` | Exactly 100 decimal digits when supplied; required for completion. |
 | `proof` | `{fileName,pdfBase64}` containing the original handler-generated PDF; accepted only with completion. |
+| `settlementEvidence` | Optional new booked-bank evidence described below; accepted only with `handlerStatus: 'SETTLED'` and a matching immutable claim. |
+
+## Core ledger settlement
+
+The authenticated handler supplies `settlementEvidence` only after its bound bank connector returned a matching booked statement entry. A transport acknowledgement, operator field or browser assertion is not settlement evidence.
+
+| Evidence field | Contract |
+| --- | --- |
+| `journalId` | Handler-side journal UUID retained for audit. It is not a core journal UUID. |
+| `bankTransactionId`, `statementId` | Stable bank entry reference and statement reference, each up to 140 characters. |
+| `currency`, `amount` | Uppercase three-letter currency and exact positive decimal string. Both must match the registered request; amount also matches `amountCleared` and any supplied `bankServerSentAmount`. |
+| `nostroAccount` | Registered external account number, up to 128 characters, matching the frozen claim after case/whitespace normalization. |
+| `statementHash` | Required lowercase SHA-256 of the retained authenticated statement bytes. |
+| `bookedDate` | Optional valid `YYYY-MM-DD` bank booking date. |
+| `bookedAt` | Optional ISO timestamp only when supplied by the bank; `null` for a date-only statement. |
+
+Within the existing processing transaction, core validates the claim, request amount/currency, active receiving ABIQ, Common/Suspense liability classification and linked NOSTRO asset account. It calls the existing balanced `post_journal` function to debit that NOSTRO asset and credit the approved receiving account. The journal, immutable evidence, processing revision and audit event either all commit or all roll back. No core account ID is taken from the handler's local treasury data.
+
+The returned `processing.settlement` is `{journalId,handlerJournalId,cashAccountId,receivingAccountId,bankTransactionId,statementId,currency,amount,nostroAccount,statementHash,bookedAt,bookedDate,booked:true}`. Its `journalId` is the core journal, while `handlerJournalId` identifies the handler's evidence. Amount remains an exact decimal string, normally with 18 fractional digits. The handler verifies this receipt against its evidence and the claimed core route before acknowledging core credit. A missing receipt is not a successful core settlement.
+
+One request can own only one settlement. `(cashAccountId, bankTransactionId)` is unique independently of amount, statement, date or retry revision; the handler journal is unique too. Retries return the same journal. Later report revisions cannot remove or change booked evidence. Existing settled bank transfers and manual NOSTRO mirrors block a duplicate checkout credit, and those booking paths reject an entry already credited by checkout. Retained unmatched statement entries must agree in direction, currency and exact amount.
+
+Payloads without `settlementEvidence` preserve the original report-only behavior and historical retry fingerprints. Migration `046_checkout_ip_settlement.sql` creates immutable settlement storage without backfilling old reports, journals or balances. Previously retained statements without the required source hash are not automatically credited on rollout.
 
 The original PDF is bounded to **2 MiB**, uses canonical base64, has a valid PDF header/end marker, and has an ASCII filename ending in `.pdf` (up to 128 characters). The handler retains the original bytes before publication. The core stores those bytes, their SHA-256 and their request/transfer/revision/transaction/report linkage. Completed reports, proof bytes, claims and processing audit records are immutable. This hash verifies stored byte integrity; it is not a PDF certificate signature.
 
@@ -69,8 +96,8 @@ Use Node.js 22.19 or later and both PR branches:
 ```bash
 mkdir avispay-ip-review
 cd avispay-ip-review
-git clone --branch feat/ip-payment-processing-register-20261123 https://github.com/hjk-stack/genesis-core-banking.git core
-git clone --branch feat/ip-checkout-handler-proof-20261123 https://github.com/hjk-stack/genesis-outlook-automation.git website
+git clone https://github.com/hjk-stack/genesis-core-banking.git core
+git clone https://github.com/hjk-stack/genesis-outlook-automation.git website
 npm ci --no-audit --no-fund --prefix core/genesis-banking-uat/portal
 npm ci --no-audit --no-fund --prefix website
 node core/genesis-banking-uat/portal/scripts/verify-ip-handler-integration.mjs --website-repo ./website --output-dir ./evidence
@@ -78,10 +105,10 @@ node core/genesis-banking-uat/portal/scripts/verify-ip-handler-integration.mjs -
 
 `AVIS_WEBSITE_REPO` may supply the website path instead of `--website-repo`. The output directory is optional; when supplied it receives `result.json` and `fixture-handler-proof.pdf`. The script requires a local website checkout and imports its actual payload builder, clients, signer and handler. It creates an in-memory PGlite database, a temporary website store and signing key, a loopback HTTP server and a fixture statement connector. It makes no production service calls, ignores production database URLs, and removes its temporary state on exit.
 
-Assertions cover the signed HTTP registration/approval/context flow, exact amount handling, stable identities, original PDF parsing and byte equality, immutable completion, terminal cancellation, cancellation between statement validation and claiming, and recovery after a claim response is lost. Recovery is tested after administrator closure and may post the existing handler settlement journal only once. Reports, claims and proof must leave core ledger entries and balances unchanged.
+Assertions cover the signed HTTP registration/approval/context flow, exact amount handling, stable identities, original PDF parsing and byte equality, immutable completion, terminal cancellation, cancellation between statement validation and claiming, and recovery after a claim response is lost. Recovery is tested after administrator closure. New authenticated evidence posts one handler journal and one distinct core journal, with the core NOSTRO debit and approved Common/Suspense credit checked directly; report/proof retries create no further postings. `test/checkout-ip-settlement.test.mjs` also exercises cross-path bank-entry deduplication, immutable evidence, optional NOSTRO selection and atomic rollback after a report-write failure.
 
 The browser regression remains separate: `node --test test-browser/checkout-ip-layout.mjs` from the portal directory verifies the register and printable popup in Chromium; the normal sovereign UAT workflow runs the complete browser suite.
 
 ## Rollout
 
-Deploy [core PR #103](https://github.com/hjk-stack/genesis-core-banking/pull/103) first. Its additive migration `043_ip_payment_processing.sql` creates the report, proof, cancellation and settlement claim storage, and its server exposes the signed endpoints. Verify the release SHA and the sovereign UAT checks for the merged commit. Then deploy [website PR #1443](https://github.com/hjk-stack/genesis-outlook-automation/pull/1443), which mounts checkout controls and publishes through those endpoints using the existing service signing identity. Re-run this integration script against the exact two source revisions used for the release. PR validation alone does not establish that either production deployment has completed.
+Deploy the core settlement release first, including additive migration `046_checkout_ip_settlement.sql`. Verify the release SHA and sovereign UAT checks for the merged commit. Then deploy the website release that publishes the new evidence and validates the core settlement receipt using the existing service signing identity. Re-run this integration script against the exact two source revisions used for the release. Historical report-only records remain unchanged. PR validation alone does not establish that either production deployment has completed.

@@ -3,6 +3,7 @@ import {SovereignCore,fault,text,money,decimal} from './core.mjs';
 import {linkAbiqBankRoute} from './avispay-core-accounts.mjs';
 import {normalizeIban} from './avispay-correspondent-mapping.mjs';
 import {buildPacs008,readIso20022} from './iso20022.mjs';
+import {assertNoCheckoutBankEntry} from './bank-entry-identity.mjs';
 const line=(accountId,direction,amount)=>({accountId,direction,amount});
 const digest=value=>createHash('sha256').update(value).digest('hex');
 const terminal=s=>['ACCC','RJCT'].includes(s);
@@ -109,7 +110,9 @@ export class PaymentServer extends SovereignCore {
       OR EXISTS(SELECT 1 FROM avis_core_v2.clearing_statements WHERE cash_account_id=$1)
       OR EXISTS(SELECT 1 FROM avis_core_v2.bank_connector_profiles WHERE cash_account_id=$1)
       OR EXISTS(SELECT 1 FROM avis_core_v2.payment_gateway_bridges WHERE clearing_account_id=$1)
-      OR EXISTS(SELECT 1 FROM avis_core_v2.interbank_ip_transfers WHERE cash_account_id=$1) AS in_use`,
+      OR EXISTS(SELECT 1 FROM avis_core_v2.interbank_ip_transfers WHERE cash_account_id=$1)
+      OR EXISTS(SELECT 1 FROM avis_core_v2.checkout_ip_requests WHERE nostro_cash_account_id=$1 AND status='ACTIVE')
+      OR EXISTS(SELECT 1 FROM avis_core_v2.checkout_ip_settlement_claims WHERE routing_snapshot->>'nostroCashAccountId'=$1::text) AS in_use`,
       [cashAccountId,old.ledger_account_id])).rows[0].in_use;
     if(Number(old.available_balance)!==0||Number(old.locked_balance)!==0||inUse)
      fault('NOSTRO_CURRENCY_HAS_ACTIVITY','currency',409);
@@ -250,6 +253,7 @@ export class PaymentServer extends SovereignCore {
    const next=t.iso_status==='ACSP'?'ACSP':status;
    await db.query('UPDATE avis_core_v2.interbank_ip_transfers SET iso_status=$2 WHERE transfer_id=$1',[t.transfer_id,next]);return;
   }
+  if(status==='ACCC')await assertNoCheckoutBankEntry(db,p.cash_account_id,bankReference);
   let journalId=null;
   if(t.direction==='OUTBOUND'){
    if(!t.cash_reserved)fault('CASH_RESERVATION_REQUIRED','transferId');
@@ -294,6 +298,7 @@ export class PaymentServer extends SovereignCore {
   const amount=decimal(money(input.amount));
   const memo=input.memo?text(input.memo,'memo',250):null;
   return this.operation(actor,'MIRROR_NOSTRO_MOVEMENT',input,key,async(db,k)=>{
+   await assertNoCheckoutBankEntry(db,cashAccountId,reference,'externalReference');
    const cash=(await db.query(`SELECT c.*,a.available_balance::text,a.locked_balance::text
     FROM avis_core_v2.external_cash_accounts c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.ledger_account_id
     WHERE c.cash_account_id=$1 AND c.is_active FOR UPDATE OF c,a`,[cashAccountId])).rows[0];

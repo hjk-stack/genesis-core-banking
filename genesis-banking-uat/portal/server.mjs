@@ -130,6 +130,8 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  CHECKOUT_IP_CANCELLED:'This checkout request was cancelled. Create a new checkout request.',
  CHECKOUT_IP_PROCESSING:'This payment has entered settlement processing.',
  CHECKOUT_IP_CLAIM_REQUIRED:'Claim the matched bank settlement before publishing its result.',
+ CHECKOUT_IP_SETTLEMENT_AMOUNT:'The booked bank amount must match this checkout request.',
+ CHECKOUT_IP_SETTLEMENT_CONFLICT:'Use the retained bank entry and original settlement evidence for this request.',
  CHECKOUT_IP_REVISION:'Refresh the operation before saving its processing report.',
  CHECKOUT_IP_PROCESSING_LINK:'Select the handler operation linked to this checkout request.',
  CHECKOUT_IP_PROOF:'Attach the original proof PDF for this completed operation.',

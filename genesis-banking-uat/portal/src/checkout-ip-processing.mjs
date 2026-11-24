@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import {fault,text} from './core.mjs';
+import {bookCheckoutSettlement,mapSettlement,normalizedBankAccount,parseSettlementEvidence} from './checkout-ip-settlement.mjs';
 
 export const IP_PROOF_MAX_BYTES=2*1024*1024;
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
@@ -38,6 +39,7 @@ const report=row=>({handlerTransferId:row.handler_transfer_id,revision:row.revis
  amountCleared:row.amount_cleared,beneficiaryName:row.beneficiary_name,beneficiaryAccount:row.beneficiary_account,
  franchiseAllocatedPercent:row.franchise_allocated_percent,operationCompleted:row.operation_completed,
  manualReport100Digits:row.manual_report_100_digits,updatedAt:row.updated_at,
+ settlement:mapSettlement(row.settlement_record),
  proof:{available:!!row.proof_sha256,fileName:row.proof_file_name||null,sha256:row.proof_sha256||null,sizeBytes:row.proof_size_bytes||null}});
 const parseProof=value=>{
  if(!value||typeof value!=='object'||Array.isArray(value))fault('CHECKOUT_IP_PROOF','proof');
@@ -53,16 +55,18 @@ const parseProof=value=>{
  return {fileName,bytes,sha256:sha(bytes),sizeBytes:bytes.length};
 };
 
-// Only the authenticated handler writes this register. Completion is a report
-// of its settled operation, never a ledger instruction or a browser assertion.
+// Only the authenticated handler writes this register. New booked-bank evidence
+// posts the approved core route atomically; legacy report-only payloads stay reports.
 export class CheckoutIpProcessing{
  constructor(pool,{mapRequest}={}){this.pool=pool;this.mapRequest=mapRequest;}
  async readReports(db,ids){
   if(!ids.length)return new Map();
   const rows=(await db.query(`SELECT p.*,p.bank_server_sent_amount::text,p.amount_cleared::text,
    p.franchise_allocated_percent::text,d.file_name AS proof_file_name,d.sha256 AS proof_sha256,
-   octet_length(d.pdf_bytes) AS proof_size_bytes
+   octet_length(d.pdf_bytes) AS proof_size_bytes,
+   CASE WHEN s.request_id IS NOT NULL THEN to_jsonb(s)||jsonb_build_object('amount',s.amount::text) END AS settlement_record
    FROM avis_core_v2.checkout_ip_processing p LEFT JOIN avis_core_v2.checkout_ip_proofs d USING(request_id)
+   LEFT JOIN avis_core_v2.checkout_ip_settlements s ON s.request_id=p.request_id
    WHERE p.request_id=ANY($1::uuid[])`,[ids])).rows;
   return new Map(rows.map(row=>[row.request_id,report(row)]));
  }
@@ -84,8 +88,23 @@ export class CheckoutIpProcessing{
   if(!row)fault('CHECKOUT_IP_NOT_FOUND','requestId',404);
   const reports=await this.readReports(this.pool,[row.request_id]);
   const claim=mapClaim((await this.pool.query('SELECT * FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=$1',[row.request_id])).rows[0]);
+  const nostroAccounts=(await this.pool.query(`SELECT c.cash_account_id,c.iban_or_account_no,c.currency_code,c.institution_name,
+   c.bank_address,c.account_name,c.bic_code,c.aba
+   FROM avis_core_v2.external_cash_accounts c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.ledger_account_id
+   WHERE c.is_active AND c.currency_code=$1 AND a.currency_code=$1 AND a.account_category='ASSET'
+    AND a.owner_type=ANY($2::text[]) AND a.network IS NULL AND a.wallet_scope='FUNDING'
+   ORDER BY c.institution_name,c.iban_or_account_no,c.cash_account_id`,[row.currency_code,['CORRESPONDENT_NOSTRO','CENTRAL_BANK_RESERVE']])).rows
+   .map(c=>({cashAccountId:c.cash_account_id,accountNumber:c.iban_or_account_no,currency:c.currency_code,bankName:c.institution_name,
+    receiverClearing:{receiverBankName:c.institution_name,receiverBankAddress:c.bank_address||'',receiverAccountHolder:c.account_name||'',
+     receiverIban:c.iban_or_account_no,receiverBic:c.bic_code||'',receiverSortCode:c.aba||'',receiverCountry:'',receiverBankCode:''}}));
+  const receiving=(await this.pool.query(`SELECT a.account_id,a.owner_type,a.currency_code,b.abiq_iban,
+   COALESCE(a.display_name,CASE WHEN a.owner_type='COMMON_POOL' THEN 'Common Account' ELSE 'Suspense Account' END) AS label
+   FROM avis_core_v2.ledger_accounts a LEFT JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id
+   WHERE a.account_id=$1`,[row.receiving_account_id])).rows[0];
   return {request:{...this.mapRequest(row),processing:reports.get(row.request_id)||null},
-   routing:claim?.routing||await this.routing(this.pool,row),claim};
+   routing:claim?.routing||await this.routing(this.pool,row),claim,nostroAccounts,
+   receivingAccount:receiving?{accountId:receiving.account_id,accountType:receiving.owner_type,label:receiving.label,
+    currency:receiving.currency_code,abiqIban:receiving.abiq_iban}:null};
  }
  async claim(actor,input){
   authorizeHandler(actor);
@@ -107,6 +126,17 @@ export class CheckoutIpProcessing{
    if((await db.query('SELECT request_id FROM avis_core_v2.checkout_ip_cancellations WHERE request_id=$1',[request.request_id])).rows.length)
     fault('CHECKOUT_IP_CANCELLED','requestId',409);
    const routing=await this.routing(db,request);
+   if(!routing.nostroCashAccountId&&input.nostroCashAccountId){
+    if(!uuid(input.nostroCashAccountId)||typeof input.nostroIban!=='string')fault('CHECKOUT_IP_ACCOUNT','nostroCashAccountId',409);
+    const matches=(await db.query(`SELECT c.cash_account_id,c.iban_or_account_no FROM avis_core_v2.external_cash_accounts c
+     JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.ledger_account_id
+     WHERE c.is_active AND c.currency_code=$1 AND a.currency_code=$1 AND a.account_category='ASSET'
+      AND a.owner_type=ANY($2::text[]) AND a.network IS NULL AND a.wallet_scope='FUNDING'
+      AND upper(regexp_replace(c.iban_or_account_no,'\\s','','g'))=$3 FOR SHARE OF c`,
+     [request.currency_code,['CORRESPONDENT_NOSTRO','CENTRAL_BANK_RESERVE'],normalizedBankAccount(input.nostroIban)])).rows;
+    if(matches.length!==1||matches[0].cash_account_id!==input.nostroCashAccountId.toLowerCase())fault('CHECKOUT_IP_ACCOUNT','nostroCashAccountId',409);
+    routing.nostroCashAccountId=matches[0].cash_account_id;routing.nostroIban=matches[0].iban_or_account_no;
+   }
    if(!routing.receivingAbiqIban||!sameRoute(input,routing))fault('CHECKOUT_IP_ACCOUNT','receivingAbiqIban',409);
    const report=(await db.query('SELECT handler_transfer_id,transaction_reference FROM avis_core_v2.checkout_ip_processing WHERE request_id=$1',[request.request_id])).rows[0];
    if(report&&(report.handler_transfer_id!==handlerTransferId||report.transaction_reference!==transactionReference))
@@ -134,6 +164,8 @@ export class CheckoutIpProcessing{
    operationCompleted:input.operationCompleted,manualReport100Digits:optionalText(input.manualReport100Digits,'manualReport100Digits',100)};
   if(value.manualReport100Digits&&!/^[0-9]{100}$/.test(value.manualReport100Digits))fault('INVALID_FIELD','manualReport100Digits');
   const proof=input.proof==null?null:parseProof(input.proof);
+  const settlementEvidence=input.settlementEvidence==null?null:parseSettlementEvidence(input.settlementEvidence);
+  if(settlementEvidence&&value.handlerStatus!=='SETTLED')fault('CHECKOUT_IP_COMPLETION','settlementEvidence');
   if(proof&&!value.operationCompleted)fault('CHECKOUT_IP_PROOF','proof');
   if(value.operationCompleted){
    if(value.handlerStatus!=='SETTLED')fault('CHECKOUT_IP_COMPLETION','handlerStatus');
@@ -142,6 +174,8 @@ export class CheckoutIpProcessing{
    if(!proof)fault('CHECKOUT_IP_PROOF','proof');
   }
   const snapshot={...value,proof:proof?{fileName:proof.fileName,sha256:proof.sha256,sizeBytes:proof.sizeBytes}:null};
+  // Keep the exact historical fingerprint for payloads without new evidence.
+  if(settlementEvidence)snapshot.settlementEvidence=settlementEvidence;
   const fingerprint=sha(JSON.stringify(snapshot)),db=await this.pool.connect();
   try{
    await db.query('BEGIN');
@@ -168,6 +202,7 @@ export class CheckoutIpProcessing{
    if(value.receivingAbiqIban!==route.receivingAbiqIban||value.nostroIban!==route.nostroIban)
     fault('CHECKOUT_IP_ACCOUNT',value.receivingAbiqIban!==route.receivingAbiqIban?'receivingAbiqIban':'nostroIban',409);
    await assertIdentityAvailable(db,request.request_id,value.handlerTransferId,value.transactionReference);
+   await bookCheckoutSettlement(db,actor,request,claim,value,settlementEvidence);
    await db.query(`INSERT INTO avis_core_v2.checkout_ip_processing(request_id,handler_transfer_id,revision,
     transaction_reference,handler_status,bank_name,bank_server_sent_amount,nostro_iban,receiving_abiq_iban,
     amount_cleared,beneficiary_name,beneficiary_account,franchise_allocated_percent,operation_completed,
