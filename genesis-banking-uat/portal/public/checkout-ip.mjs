@@ -15,32 +15,20 @@ const intermediaryLabel=record=>{
 
 export function checkoutIpAdminControls(){
  return '<section class="panel ip-admin-controls" data-ip-admin-controls aria-label="IP-to-IP administrator controls">'+
-  '<div class="ip-admin-access"><div class="ip-admin-control-title"><h2>Checkout access</h2><div class="ip-admin-switch-state">'+
-  '<button type="button" class="pos-liquid-switch ip-liquid-slider" role="switch" aria-label="Checkout access" aria-description="Closed" aria-checked="false" aria-disabled="true" data-ip-admin-access data-state="CLOSED"><span class="pos-liquid-knob" aria-hidden="true"></span></button></div></div>'+
-  '<label class="ip-admin-request-label">Checkout request<select data-ip-admin-request aria-label="Checkout request"><option value="">Select checkout request</option></select></label>'+
-  '<p class="form-error" role="alert" data-ip-admin-access-error></p></div>'+
   '<div class="ip-admin-management"><div class="ip-admin-control-title"><h2>Sender IP &amp; Watchdog</h2><div class="ip-admin-switch-state">'+
   '<button type="button" class="pos-liquid-switch ip-liquid-slider" role="switch" aria-label="Sender IP and Watchdog desk" aria-checked="false" data-ip-admin-receiver data-state="CLOSED"><span class="pos-liquid-knob" aria-hidden="true"></span></button></div></div>'+
   '<p class="form-error" role="alert" data-ip-admin-receiver-error></p></div></section>';
 }
 
-export function createCheckoutIpAdminControls({root=document,activateRequest,windowApi=root.defaultView}={}){
- let panel=null,requests=[],selectedId='',loading=true,busy=false,generation=0,managedSession=null,focusSelector=null;
+export function createCheckoutIpAdminControls({root=document,windowApi=root.defaultView}={}){
+ let panel=null,managedSession=null,focusSelector=null;
  const managementOrigin=new URL(checkoutIpHandlerUrl(null)).origin;
- const selected=()=>requests.find(record=>record.requestId===selectedId);
- const currentState=(record,now=Date.now())=>!record?'CLOSED':record.status==='REQUESTED'&&Date.parse(record.expiresAt)<=now?'CLOSED':record.status;
  const error=(kind,message)=>{const slot=panel?.querySelector('[data-ip-admin-'+kind+'-error]');if(slot)slot.textContent=message;};
  const paint=(selector,state)=>{
   const button=panel?.querySelector('[data-ip-admin-'+selector+']');if(!button)return;
   button.dataset.state=state;button.setAttribute('aria-checked',String(state==='ACTIVE'));
-  button.setAttribute('aria-description',selector==='access'?ipStateDescription(state):'Sender desk'+(state==='ACTIVE'?' open':' closed'));
+  button.setAttribute('aria-description','Sender desk'+(state==='ACTIVE'?' open':' closed'));
  };
- function paintAccess(now=Date.now()){
-  if(!panel?.isConnected)return;
-  const record=loading?null:selected(),state=currentState(record,now),button=panel.querySelector('[data-ip-admin-access]');
-  paint('access',state);button.disabled=busy;button.setAttribute('aria-disabled',String(busy||!record||state==='CLOSED'||loading));button.setAttribute('aria-busy',String(busy));
-  panel.querySelector('[data-ip-admin-request]').disabled=busy||loading||!requests.length;
- }
  function tabIsOpen(session=managedSession){try{return !!session&&!session.tab.closed;}catch{return false;}}
  function disposeSession(session){
   session.disposed=true;windowApi.clearInterval(session.timer);
@@ -121,8 +109,7 @@ export function createCheckoutIpAdminControls({root=document,activateRequest,win
    child=windowApi.open('about:blank',name);
    if(!child)throw Error('Allow this page to open the IP-IP management tab.');
    child.opener=null;if(child.opener!==null)throw Error('Could not open the IP-IP management tab securely.');
-   const record=currentState(selected())==='ACTIVE'?selected():null;
-   const url=new URL(checkoutIpHandlerUrl(record));
+   const url=new URL(checkoutIpHandlerUrl(null));
    url.searchParams.set('view','sender-access');
    url.hash=new URLSearchParams({managementToken:token}).toString();child.location.replace(url.href);
    if(child.closed)throw Error('The IP-IP management tab closed before opening.');
@@ -130,39 +117,23 @@ export function createCheckoutIpAdminControls({root=document,activateRequest,win
    managedSession=session;session.timer=windowApi.setInterval(()=>pollSession(session),500);syncManagement();
   }catch(reason){try{child?.close();}catch{}if(managedSession)disposeSession(managedSession);managedSession=null;syncManagement();error(kind,reason.message||'Could not open the IP-IP management tab. Try again.');}
  }
- function update(rows=[],{loading:pending=false}={}){
-  requests=Array.isArray(rows)?rows:[];loading=pending;
-  if(!pending&&!requests.some(record=>record.requestId===selectedId))selectedId='';
-  if(!panel?.isConnected)return;
-  const selector=panel.querySelector('[data-ip-admin-request]'),Option=root.defaultView.Option;
-  selector.replaceChildren(new Option('Select checkout request',''),...requests.map(record=>new Option([record.checkoutReference||record.requestId,record.title].filter(Boolean).join(' · '),record.requestId)));
-  selector.value=selectedId;paintAccess();syncManagement();
- }
  function bind(container=root){
   const next=container.matches?.('[data-ip-admin-controls]')?container:container.querySelector('[data-ip-admin-controls]');if(!next)return;
-  const mounted=next!==panel;if(mounted){panel=next;requests=[];loading=true;}
-  const selector=panel.querySelector('[data-ip-admin-request]'),access=panel.querySelector('[data-ip-admin-access]');
-  selector.onchange=()=>{if(busy){selector.value=selectedId;return;}selectedId=selector.value;error('access','');paintAccess();};
-  access.onclick=async()=>{
-   const record=selected();if(busy||loading||!record||currentState(record)==='CLOSED'||access.getAttribute('aria-disabled')==='true')return;
-   const requestId=record.requestId,serial=generation;busy=true;error('access','');paintAccess();
-   try{await activateRequest(requestId);}catch(reason){if(serial===generation)error('access',reason.message||'Could not update the selected checkout.');}
-   finally{if(serial===generation){busy=false;paintAccess();}}
-  };
+  const mounted=next!==panel;panel=next;
   panel.querySelector('[data-ip-admin-receiver]').onclick=toggleManagement;
   if(mounted){
-   panel.addEventListener('focusin',event=>{focusSelector=['[data-ip-admin-request]','[data-ip-admin-access]','[data-ip-admin-receiver]'].find(selector=>event.target.matches(selector))||null;});
+   panel.addEventListener('focusin',event=>{focusSelector=event.target.matches('[data-ip-admin-receiver]')?'[data-ip-admin-receiver]':null;});
    panel.addEventListener('focusout',event=>{if(event.relatedTarget&&!event.currentTarget.contains(event.relatedTarget))focusSelector=null;});
   }
-  update(requests,{loading});
+  syncManagement();
   if(focusSelector&&(!root.activeElement||root.activeElement===root.body))panel.querySelector(focusSelector)?.focus({preventScroll:true});
  }
  function close(){
-  generation++;requests=[];selectedId='';loading=true;busy=false;focusSelector=null;
+  focusSelector=null;
   const previous=managedSession;managedSession=null;requestClose(previous);
-  update([],{loading:true});error('access','');error('receiver','');
+  syncManagement();error('receiver','');
  }
- return {bind,update,expire:paintAccess,close};
+ return {bind,close};
 }
 
 export function expireCheckoutIpControls(root=document,now=Date.now()){
@@ -170,10 +141,9 @@ export function expireCheckoutIpControls(root=document,now=Date.now()){
  for(const button of panel.querySelectorAll('[data-ip-deadline]')){
   if(Number(button.dataset.ipDeadline)>now)continue;
   const row=button.closest('[data-checkout-ip]');row.dataset.ipState='CLOSED';
-  button.dataset.state='CLOSED';button.setAttribute('aria-checked','false');button.setAttribute('aria-disabled','true');
+  button.dataset.state='CLOSED';button.setAttribute('aria-checked','false');button.removeAttribute('aria-disabled');
   button.setAttribute('aria-label','IP-to-IP CLOSED '+row.dataset.checkoutIp);button.removeAttribute('data-ip-deadline');
   button.setAttribute('aria-description',ipStateDescription('CLOSED'));
-  for(const selector of routeSelectors)row.querySelector(selector).disabled=true;
  }
  panel.querySelector('[data-ip-pending]').textContent=panel.querySelectorAll('[data-ip-state="REQUESTED"]').length+' awaiting activation';
 }
@@ -199,7 +169,7 @@ export function checkoutIpRegister(rows=[],accounts=[],nostros=[]){
   return '<tr data-checkout-ip="'+id+'" data-ip-state="'+esc(state)+'">'+
    '<td class="ip-request-cell"><strong>'+esc(r.checkoutReference)+'</strong><small>'+esc(r.title)+'</small><small>Request '+id+
    '</small><div class="ip-request-controls"><button type="button" role="switch" aria-checked="'+(state==='ACTIVE')+'" aria-label="IP-to-IP '+esc(state)+' '+id+
-   '" aria-description="'+ipStateDescription(state)+'" class="pos-liquid-switch ip-liquid-slider" data-ip-toggle data-state="'+esc(state)+'" '+(state==='CLOSED'?'aria-disabled="true" ':'')+(state==='REQUESTED'?'data-ip-deadline="'+deadline+'"':'')+'>'+
+   '" aria-description="'+ipStateDescription(state)+'" class="pos-liquid-switch ip-liquid-slider" data-ip-toggle data-state="'+esc(state)+'" '+(state==='REQUESTED'?'data-ip-deadline="'+deadline+'"':'')+'>'+
    '<span class="pos-liquid-knob" aria-hidden="true"></span></button></div>'+
    '<button type="button" data-ip-handler>Open handler</button><small>Requested '+esc(date(r.requestedAt))+'</small><small>Approval deadline '+esc(date(r.expiresAt))+'</small>'+
    '<small>Approved '+esc(date(r.approvedAt))+'</small><small class="form-error" data-ip-error role="alert"></small></td>'+
@@ -207,12 +177,12 @@ export function checkoutIpRegister(rows=[],accounts=[],nostros=[]){
    '<td class="account-number">'+value(r.senderAccount)+'<small>'+esc(r.senderAccountName)+'</small></td>'+
    '<td data-ip-payment>'+value(processing.bankServerSentAmount)+'<small>Amount Server Sent</small><small>Requested '+esc(r.amount)+'</small><small>'+esc(r.source)+'</small></td>'+
    '<td>'+esc(r.currency)+'</td>'+
-   '<td><label class="ip-row-label">Registered network<select data-ip-nostro '+(state!=='REQUESTED'?'disabled':'')+'>'+
+   '<td><label class="ip-row-label">Registered network<select data-ip-nostro '+(state==='ACTIVE'?'disabled':'')+'>'+
    '<option value="">No NOSTRO specified</option>'+bankOptions+'</select></label>'+
-   '<label class="ip-row-label">Incoming intermediary<select data-ip-intermediary '+(state!=='REQUESTED'?'disabled':'')+'>'+
+   '<label class="ip-row-label">Incoming intermediary<select data-ip-intermediary '+(state==='ACTIVE'?'disabled':'')+'>'+
    '<option value="">No intermediary</option>'+intermediateOptions+'</select></label><small>IBAN '+value(processing.nostroIban||selectedBank?.iban_or_account_no)+'</small></td>'+
    '<td>'+value(processing.amountCleared)+'<small>IBAN '+value(processing.receivingAbiqIban||eligible.find(a=>a.account_id===r.receivingAccountId)?.abiq_iban)+'</small>'+
-   '<label class="ip-row-label">ABIQ Common / Suspense<select data-ip-account '+(state!=='REQUESTED'?'disabled':'')+'>'+
+   '<label class="ip-row-label">ABIQ Common / Suspense<select data-ip-account '+(state==='ACTIVE'?'disabled':'')+'>'+
    '<option value="">Select receiving account</option>'+recipientOptions+'</select></label></td>'+
    '<td>'+value(processing.beneficiaryName)+'</td><td class="account-number">'+value(processing.beneficiaryAccount)+'</td>'+
    '<td>'+value(processing.franchiseAllocatedPercent)+(processing.franchiseAllocatedPercent!=null?' %':'')+'<small>Allocated amount %</small></td>'+
@@ -227,13 +197,13 @@ export function checkoutIpRegister(rows=[],accounts=[],nostros=[]){
 // Refresh handler reports without losing a pending routing selection or keyboard focus.
 export function replaceCheckoutIpRegister(panel,rows,accounts=[],nostros=[]){
  const selectors=routeSelectors,doc=panel.ownerDocument;
- const selections=new Map([...panel.querySelectorAll('[data-checkout-ip][data-ip-state="REQUESTED"]')].map(row=>[
+ const selections=new Map([...panel.querySelectorAll('[data-checkout-ip]:not([data-ip-state="ACTIVE"])')].map(row=>[
   row.dataset.checkoutIp,selectors.map(selector=>row.querySelector(selector)?.value)]));
  const focused=doc.activeElement,focusRequest=focused?.closest('[data-checkout-ip]')?.dataset.checkoutIp;
  const focusSelector=controlSelectors.find(selector=>focused?.matches(selector));
  const scroll=panel.querySelector('.table-wrap').scrollLeft;
  const displayRows=rows.map(row=>{
-  const selection=selections.get(row.requestId);if(!selection||ipState(row)!=='REQUESTED')return row;
+  const selection=selections.get(row.requestId);if(!selection||ipState(row)==='ACTIVE')return row;
   return {...row,receivingAccountId:selection[0],nostroCashAccountId:selection[1],intermediaryId:selection[2]};
  });
  const holder=doc.createElement('div');holder.innerHTML=checkoutIpRegister(displayRows,accounts,nostros);
@@ -254,14 +224,17 @@ export function bindCheckoutIp({root=document,requests=[],nostros=[],activate,on
    intermediary.replaceChildren(new Option('No intermediary',''),...(n?.intermediaries||[]).map(i=>new Option(intermediaryLabel(i),i.intermediaryId)));
   };
   row.querySelector('[data-ip-toggle]').onclick=async e=>{
-   const button=e.currentTarget,active=ipState(record)==='REQUESTED';
-   if(button.disabled||(!active&&ipState(record)==='CLOSED'))return;
+   const button=e.currentTarget,state=ipState(record),active=state!=='ACTIVE';
+   if(button.disabled)return;
+   if(state==='CLOSED'&&(record.processing?.operationCompleted||record.processing?.handlerStatus==='SETTLED')){
+    openHandler(record);return;
+   }
    const receiving=row.querySelector('[data-ip-account]'),error=row.querySelector('[data-ip-error]');
    error.textContent='';
-   if(active&&!receiving.value){receiving.focus();return;}
+   if(active&&!receiving.value){error.textContent='Select a receiving Common or Suspense account.';receiving.focus();return;}
    button.disabled=true;
    try{
-    const result=await activate({requestId:record.requestId,active,receivingAccountId:receiving.value,
+    const result=await activate({requestId:record.requestId,active,...(state==='CLOSED'?{retryClosedAt:record.closedAt||record.expiresAt}:{}),receivingAccountId:receiving.value,
      nostroCashAccountId:bank.value||null,intermediaryId:intermediary.value||null});
     onChange(result);
    }catch(e){error.textContent=e.message;}

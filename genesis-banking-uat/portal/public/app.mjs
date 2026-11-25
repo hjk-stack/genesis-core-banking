@@ -16,13 +16,7 @@ let exchangeIntent=null;try{exchangeIntent=readExchangeIntent(location.hash);}ca
 if(exchangeIntent)$('#login-form h2').textContent=exchangeIntent.side?'Sign in to '+exchangeIntent.side.toLowerCase()+' '+exchangeIntent.symbol:'Sign in to your portfolio';
 if(new URLSearchParams(location.search).get('own')==='1'){$('#close-workspace').hidden=false;$('#close-workspace').onclick=()=>{if(window.avisDesktop?.windowControl)window.avisDesktop.windowControl('close');else{window.close();setTimeout(()=>{if(!window.closed)location.assign('https://avis.land/exchange');},300);}};}
 const ipProof=createCheckoutIpProof({onUnauthorized:()=>signedOut()});
-const ipAdminControls=createCheckoutIpAdminControls({activateRequest:async requestId=>{
- if(!csrf||!identity.admin||identity.customerUserId||location.hash!=='#payments')return;
- const row=[...document.querySelectorAll('[data-checkout-ip]')].find(row=>row.dataset.checkoutIp===requestId);
- const button=row?.querySelector('[data-ip-toggle]');
- if(!button||button.disabled||typeof button.onclick!=='function')return;
- await button.onclick({currentTarget:button});
-}});
+const ipAdminControls=createCheckoutIpAdminControls();
 const currencies=['EUR','USD','GBP','CHF','SEK','NOK','DKK','PLN','CZK','HUF','RON','AED','SGD','JPY'];
 async function api(path,body,key){
  const epoch=sessionEpoch,write=body!==undefined;
@@ -129,7 +123,7 @@ function bindTerminalControls(){
 }
 setInterval(()=>{
  if(!csrf||!identity.admin)return;
- if(location.hash==='#payments'){expireCheckoutIpControls();ipAdminControls.expire();}
+ if(location.hash==='#payments')expireCheckoutIpControls();
  if(location.hash!=='#pos')return;
  let expiredCount=0;
  for(const switchButton of document.querySelectorAll('[data-pos-deadline]')){
@@ -193,7 +187,6 @@ function bindIpControls(){
   activate:async input=>{ipActionsInFlight++;ipActionEpoch++;try{return await api('checkout-ip/activation',input);}finally{ipActionsInFlight--;ipActionEpoch++;}},onChange:()=>void render(),
   openHandler:record=>window.open(checkoutIpHandlerUrl(record),'_blank','noopener,noreferrer'),
   openProof:record=>void ipProof.open(record)});
- ipAdminControls.update(document.querySelector('[data-checkout-ip-register]')?(cache.checkoutip||[]):[]);
 }
 function table(name,title,rows){return `<section class="panel"><div class="panel-header"><h2>${esc(title)}</h2><span>${rows.length} records${rows.length===300?' · latest 300':''}</span></div><div class="table-wrap"><table><thead><tr>${columns[name].map(([,h])=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${columns[name].map(([k])=>`<td${k.includes('iban')||k==='account_reference'?' class="account-number"':''}>${name==='portfolio'&&['smart_contract','historical_wallet_address'].includes(k)?(r.historical_proof||[]).map(p=>`<a class="portfolio-chain-proof" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(k==='smart_contract'?p.contractAddress:p.walletAddress)}</a>`).join('<br>')||'—':k==='request_id'?`<button type="button" data-request="${esc(r[k])}">View transfer</button>`:k==='status'?`<span class="status">${esc(label(r[k]))}</span>`:esc(k.includes('balance')||['amount','total_amount_eur'].includes(k)?number(r[k]):k==='created_at'?new Date(r[k]).toLocaleString():['abiq_iban','account_reference'].includes(k)?displayAbiq(r[k]):['owner_class','wallet_scope','account_category'].includes(k)&&r[k]?label(r[k]):typeof r[k]==='boolean'?(r[k]?'Yes':'No'):r[k]??'—')}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;}
 Object.assign(columns,{

@@ -14,6 +14,23 @@ const map=row=>({requestId:row.request_id,checkoutKind:row.checkout_kind,checkou
  documents:row.document_names||[],status:row.status,requestedAt:row.requested_at,expiresAt:row.expires_at,
  approvedAt:row.approved_at,closedAt:row.closed_at,approvedBy:row.approved_by,
  receivingAccountId:row.receiving_account_id,nostroCashAccountId:row.nostro_cash_account_id,intermediaryId:row.intermediary_id});
+async function checkMilestoneDuplicate(db,requestId,reference,account,currency,value,{retryExisting=false}={}){
+ // A new browser key or a changed signatory must not start the same open milestone twice.
+ const senderAccount=account.replace(/\s+/g,'').toUpperCase();
+ await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+  ['checkout-ip-milestone:'+key([reference,senderAccount,currency])]);
+ const duplicate=await db.query(`SELECT 1 FROM avis_core_v2.checkout_ip_requests r
+  WHERE checkout_kind='MILESTONE' AND source='industrial' AND checkout_reference=$1
+   AND upper(regexp_replace(sender_account,'[[:space:]]','','g'))=$2 AND currency_code=$3 AND amount=$4
+   AND request_id<>$5 AND ((NOT $6::boolean AND status IN ('REQUESTED','ACTIVE'))
+    OR EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_processing p
+     WHERE p.request_id=r.request_id AND (p.operation_completed OR p.handler_status='SETTLED'))
+    OR EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_settlement_claims c WHERE c.request_id=r.request_id)
+    OR EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_settlements s WHERE s.request_id=r.request_id))
+  LIMIT 1`,
+  [reference,senderAccount,currency,value,requestId,retryExisting]);
+ if(duplicate.rows.length)fault('CHECKOUT_IP_ALREADY_REGISTERED','checkoutReference',409);
+}
 export class CheckoutIpControl{
  constructor(pool){this.pool=pool;this.processingControl=new CheckoutIpProcessing(pool,{mapRequest:map});}
  async withTransaction(work){
@@ -54,20 +71,7 @@ export class CheckoutIpControl{
    await this.expire(db);
    const existing=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_requests WHERE request_id=$1 FOR UPDATE',[input.requestId])).rows[0];
    if(input.checkoutKind==='MILESTONE'&&input.source==='industrial'&&(!existing||existing.status==='CLOSED')){
-    // A new browser key or a changed signatory must not start the same open milestone twice.
-    const senderAccount=account.replace(/\s+/g,'').toUpperCase();
-    await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
-     ['checkout-ip-milestone:'+key([reference,senderAccount,currency])]);
-    const duplicate=await db.query(`SELECT 1 FROM avis_core_v2.checkout_ip_requests r
-     WHERE checkout_kind='MILESTONE' AND source='industrial' AND checkout_reference=$1
-      AND upper(regexp_replace(sender_account,'[[:space:]]','','g'))=$2 AND currency_code=$3 AND amount=$4
-      AND request_id<>$5 AND (status IN ('REQUESTED','ACTIVE')
-       OR EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_processing p
-        WHERE p.request_id=r.request_id AND (p.operation_completed OR p.handler_status='SETTLED'))
-       OR EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_settlement_claims c WHERE c.request_id=r.request_id))
-     LIMIT 1`,
-     [reference,senderAccount,currency,value,input.requestId]);
-    if(duplicate.rows.length)fault('CHECKOUT_IP_ALREADY_REGISTERED','checkoutReference',409);
+    await checkMilestoneDuplicate(db,input.requestId,reference,account,currency,value);
    }
    if(existing){
     if(existing.request_fingerprint!==fingerprint)fault('IDEMPOTENCY_CONFLICT','requestId',409);
@@ -193,7 +197,18 @@ export class CheckoutIpControl{
    const row=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_requests WHERE request_id=$1 FOR UPDATE',[input.requestId])).rows[0];
    if(!row)fault('CHECKOUT_IP_NOT_FOUND','requestId',404);
    if(input.active){
-    if(row.status!=='REQUESTED')fault('CHECKOUT_IP_STATE','requestId',409);
+    const retry=input.retryClosedAt!==undefined;
+    if(retry){
+     if(row.status!=='CLOSED'||row.superseded_by||typeof input.retryClosedAt!=='string'||
+      !row.closed_at||Date.parse(input.retryClosedAt)!==new Date(row.closed_at).getTime())fault('CHECKOUT_IP_STATE','requestId',409);
+     const protectedRequest=await db.query(`SELECT request_id FROM avis_core_v2.checkout_ip_cancellations WHERE request_id=$1
+      UNION ALL SELECT request_id FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=$1
+      UNION ALL SELECT request_id FROM avis_core_v2.checkout_ip_settlements WHERE request_id=$1
+      UNION ALL SELECT request_id FROM avis_core_v2.checkout_ip_processing WHERE request_id=$1 AND (operation_completed OR handler_status='SETTLED')`,[row.request_id]);
+     if(protectedRequest.rows.length)fault('CHECKOUT_IP_STATE','requestId',409);
+     if(row.checkout_kind==='MILESTONE'&&row.source==='industrial')
+      await checkMilestoneDuplicate(db,row.request_id,row.checkout_reference,row.sender_account,row.currency_code,row.amount,{retryExisting:true});
+    }else if(row.status!=='REQUESTED')fault('CHECKOUT_IP_STATE','requestId',409);
     if(!uuid(input.receivingAccountId))fault('INVALID_FIELD','receivingAccountId');
     const account=(await db.query(`SELECT a.account_id FROM avis_core_v2.ledger_accounts a
      JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id
@@ -210,6 +225,11 @@ export class CheckoutIpControl{
      if(!nostro)fault('CHECKOUT_IP_ACCOUNT','nostroCashAccountId',409);
      intermediary=(await db.query('SELECT intermediary_id FROM avis_core_v2.nostro_intermediary_banks WHERE intermediary_id=$1 AND cash_account_id=$2',[input.intermediaryId,nostro.cash_account_id])).rows[0];
      if(!intermediary)fault('CHECKOUT_IP_ACCOUNT','intermediaryId',409);
+    }
+    if(retry){
+     await db.query(`UPDATE avis_core_v2.checkout_ip_requests SET requested_at=now(),expires_at=now()+interval '60 minutes',
+      closed_at=NULL WHERE request_id=$1`,[row.request_id]);
+     await db.query("INSERT INTO avis_core_v2.checkout_ip_events(request_id,event_type,actor_id) VALUES($1,'REQUEST',$2)",[row.request_id,actor.id]);
     }
     await db.query(`UPDATE avis_core_v2.checkout_ip_requests SET status='ACTIVE',approved_at=now(),approved_by=$2,
      receiving_account_id=$3,nostro_cash_account_id=$4,intermediary_id=$5,updated_at=now() WHERE request_id=$1`,

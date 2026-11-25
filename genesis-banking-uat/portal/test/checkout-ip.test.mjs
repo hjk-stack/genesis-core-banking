@@ -105,3 +105,50 @@ test('a settled milestone cannot be registered under a fresh key after administr
  await ip.setActive(admin,{requestId:original.requestId,active:false});
  await assert.rejects(retry,e=>e.code==='CHECKOUT_IP_ALREADY_REGISTERED');
 });
+
+test('manual retry reauthorizes only the existing unfinished request and rejects stale or cancelled retries',async()=>{
+ const payload=request();
+ await ip.register(service,payload);
+ await ip.setActive(admin,{requestId:payload.requestId,active:true,receivingAccountId:accounts.common});
+ const closed=await ip.setActive(admin,{requestId:payload.requestId,active:false});
+ const retry={requestId:payload.requestId,active:true,receivingAccountId:accounts.common,retryClosedAt:new Date(closed.closedAt).toISOString()};
+ const ledger=await pool.query('SELECT count(*) AS n FROM avis_core_v2.ledger_entries');
+ await assert.rejects(ip.setActive(guest,retry),e=>e.code==='FORBIDDEN');
+ await assert.rejects(ip.setActive(admin,{...retry,retryClosedAt:'2000-01-01T00:00:00Z'}),e=>e.code==='CHECKOUT_IP_STATE');
+ const reopened=await ip.setActive(admin,retry);
+ assert.equal(reopened.requestId,payload.requestId);
+ assert.equal(reopened.status,'ACTIVE');assert.equal(reopened.closedAt,null);
+ assert.equal(reopened.receivingAccountId,accounts.common);
+ await assert.rejects(ip.setActive(admin,retry),e=>e.code==='CHECKOUT_IP_STATE');
+ assert.deepEqual((await pool.query('SELECT count(*) AS n FROM avis_core_v2.ledger_entries')).rows,ledger.rows);
+ assert.deepEqual((await pool.query('SELECT event_type FROM avis_core_v2.checkout_ip_events WHERE request_id=$1 ORDER BY event_id',[payload.requestId])).rows.map(row=>row.event_type),['REQUEST','APPROVE','CLOSE','REQUEST','APPROVE']);
+ const cancelled=await ip.cancel(service,{requestId:payload.requestId});
+ await assert.rejects(ip.setActive(admin,{...retry,retryClosedAt:new Date(cancelled.closedAt).toISOString()}),e=>e.code==='CHECKOUT_IP_STATE');
+});
+
+test('another pending registration does not prevent manually retrying the original unfinished row',async()=>{
+ const original=request();
+ await ip.register(service,original);
+ const closed=await ip.setActive(admin,{requestId:original.requestId,active:false});
+ const other=await ip.register(service,{...original,requestId:id()});
+ const reopened=await ip.setActive(admin,{requestId:original.requestId,active:true,receivingAccountId:accounts.common,
+  retryClosedAt:new Date(closed.closedAt).toISOString()});
+ assert.equal(reopened.requestId,original.requestId);
+ assert.equal(reopened.status,'ACTIVE');
+ assert.equal((await ip.status(service,{requestId:other.requestId})).status,'REQUESTED');
+});
+
+test('restoration removes only the synthetic hold and leaves the unfinished request closed',async()=>{
+ const retained=request(),archived=request();
+ await ip.register(service,retained);await ip.register(service,archived);
+ await pool.query("UPDATE avis_core_v2.checkout_ip_requests SET superseded_by=$2,status='CLOSED',closed_at=now() WHERE request_id=$1",[archived.requestId,retained.requestId]);
+ await pool.query("INSERT INTO avis_core_v2.checkout_ip_events(request_id,event_type,actor_id) VALUES($1,'CLOSE','system:checkout-duplicate-review')",[archived.requestId]);
+ await pool.query("INSERT INTO avis_core_v2.checkout_ip_cancellations(request_id,actor_id) VALUES($1,'system:checkout-duplicate-review')",[archived.requestId]);
+ const {readFile}=await import('node:fs/promises');
+ const migration=await readFile(new URL('../migrations/048_restore_unfinished_checkout_requests.sql',import.meta.url),'utf8');
+ await ip.withTransaction(async conn=>{if(conn.exec)await conn.exec(migration);else await conn.query(migration);});
+ const rows=await ip.list(admin);
+ assert.equal(rows.find(row=>row.requestId===archived.requestId)?.status,'CLOSED');
+ const markers=await pool.query('SELECT request_id FROM avis_core_v2.checkout_ip_cancellations WHERE request_id=$1',[archived.requestId]);
+ assert.equal(markers.rows.length,0);
+});
