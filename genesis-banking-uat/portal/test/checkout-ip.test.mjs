@@ -152,3 +152,21 @@ test('restoration removes only the synthetic hold and leaves the unfinished requ
  const markers=await pool.query('SELECT request_id FROM avis_core_v2.checkout_ip_cancellations WHERE request_id=$1',[archived.requestId]);
  assert.equal(markers.rows.length,0);
 });
+
+test('register displays the routed original when an unfinished registration was restored',async()=>{
+ const original=request(),later={...original,requestId:id()};
+ await ip.register(service,original);
+ await ip.setActive(admin,{requestId:original.requestId,active:true,receivingAccountId:accounts.common,nostroCashAccountId:nostro.id});
+ await ip.setActive(admin,{requestId:original.requestId,active:false});
+ await ip.register(service,later);
+ await ip.setActive(admin,{requestId:later.requestId,active:false});
+ const visible=async()=>new Set((await ip.list(admin)).map(row=>row.requestId));
+ assert.ok((await visible()).has(later.requestId));
+ await pool.query("INSERT INTO avis_core_v2.checkout_ip_events(request_id,event_type,actor_id) VALUES($1,'CLOSE','system:checkout-duplicate-review')",[later.requestId]);
+ const listed=await visible();
+ assert.ok(listed.has(original.requestId));assert.equal(listed.has(later.requestId),false);
+ const existing=await ip.status(service,{requestId:later.requestId});
+ assert.equal(existing.status,'CLOSED');
+ await ip.setActive(admin,{requestId:later.requestId,active:true,receivingAccountId:accounts.common,retryClosedAt:new Date(existing.closedAt).toISOString()});
+ assert.ok((await visible()).has(later.requestId));
+});
