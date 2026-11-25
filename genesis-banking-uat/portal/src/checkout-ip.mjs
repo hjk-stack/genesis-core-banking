@@ -60,9 +60,11 @@ export class CheckoutIpControl{
     const duplicate=await db.query(`SELECT 1 FROM avis_core_v2.checkout_ip_requests r
      WHERE checkout_kind='MILESTONE' AND source='industrial' AND checkout_reference=$1
       AND upper(regexp_replace(sender_account,'[[:space:]]','','g'))=$2 AND currency_code=$3 AND amount=$4
-      AND request_id<>$5 AND status IN ('REQUESTED','ACTIVE')
-      AND NOT EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_processing p
-       WHERE p.request_id=r.request_id AND (p.operation_completed OR p.handler_status='SETTLED')) LIMIT 1`,
+      AND request_id<>$5 AND (status IN ('REQUESTED','ACTIVE')
+       OR EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_processing p
+        WHERE p.request_id=r.request_id AND (p.operation_completed OR p.handler_status='SETTLED'))
+       OR EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_settlement_claims c WHERE c.request_id=r.request_id))
+     LIMIT 1`,
      [reference,senderAccount,currency,value,input.requestId]);
     if(duplicate.rows.length)fault('CHECKOUT_IP_ALREADY_REGISTERED','checkoutReference',409);
    }

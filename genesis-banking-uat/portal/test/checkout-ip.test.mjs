@@ -93,3 +93,15 @@ test('a second key cannot book the same open milestone under a different signato
  const separate={...original,checkoutReference:'other-'+id(),requestId:id()};
  assert.equal((await ip.register(service,separate)).requestId,separate.requestId);
 });
+
+test('a settled milestone cannot be registered under a fresh key after administrative closure',async()=>{
+ const original=request();await ip.register(service,original);
+ await ip.setActive(admin,{requestId:original.requestId,active:true,receivingAccountId:accounts.common});
+ await pool.query(`INSERT INTO avis_core_v2.checkout_ip_processing
+  (request_id,handler_transfer_id,revision,transaction_reference,handler_status,report_fingerprint,updated_by)
+  VALUES($1,$2,1,$3,'SETTLED',$4,'fixture')`,[original.requestId,id(),'fixture-'+id(),'0'.repeat(64)]);
+ const retry=()=>ip.register(service,{...original,requestId:id()});
+ await assert.rejects(retry,e=>e.code==='CHECKOUT_IP_ALREADY_REGISTERED');
+ await ip.setActive(admin,{requestId:original.requestId,active:false});
+ await assert.rejects(retry,e=>e.code==='CHECKOUT_IP_ALREADY_REGISTERED');
+});
