@@ -14,7 +14,7 @@ const map=row=>({requestId:row.request_id,checkoutKind:row.checkout_kind,checkou
  documents:row.document_names||[],status:row.status,requestedAt:row.requested_at,expiresAt:row.expires_at,
  approvedAt:row.approved_at,closedAt:row.closed_at,approvedBy:row.approved_by,
  receivingAccountId:row.receiving_account_id,nostroCashAccountId:row.nostro_cash_account_id,intermediaryId:row.intermediary_id});
-async function checkMilestoneDuplicate(db,requestId,reference,account,currency,value){
+async function checkMilestoneDuplicate(db,requestId,reference,account,currency,value,{retryExisting=false}={}){
  // A new browser key or a changed signatory must not start the same open milestone twice.
  const senderAccount=account.replace(/\s+/g,'').toUpperCase();
  await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
@@ -22,12 +22,13 @@ async function checkMilestoneDuplicate(db,requestId,reference,account,currency,v
  const duplicate=await db.query(`SELECT 1 FROM avis_core_v2.checkout_ip_requests r
   WHERE checkout_kind='MILESTONE' AND source='industrial' AND checkout_reference=$1
    AND upper(regexp_replace(sender_account,'[[:space:]]','','g'))=$2 AND currency_code=$3 AND amount=$4
-   AND request_id<>$5 AND (status IN ('REQUESTED','ACTIVE')
+   AND request_id<>$5 AND ((NOT $6::boolean AND status IN ('REQUESTED','ACTIVE'))
     OR EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_processing p
      WHERE p.request_id=r.request_id AND (p.operation_completed OR p.handler_status='SETTLED'))
-    OR EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_settlement_claims c WHERE c.request_id=r.request_id))
+    OR EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_settlement_claims c WHERE c.request_id=r.request_id)
+    OR EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_settlements s WHERE s.request_id=r.request_id))
   LIMIT 1`,
-  [reference,senderAccount,currency,value,requestId]);
+  [reference,senderAccount,currency,value,requestId,retryExisting]);
  if(duplicate.rows.length)fault('CHECKOUT_IP_ALREADY_REGISTERED','checkoutReference',409);
 }
 export class CheckoutIpControl{
@@ -206,7 +207,7 @@ export class CheckoutIpControl{
       UNION ALL SELECT request_id FROM avis_core_v2.checkout_ip_processing WHERE request_id=$1 AND (operation_completed OR handler_status='SETTLED')`,[row.request_id]);
      if(protectedRequest.rows.length)fault('CHECKOUT_IP_STATE','requestId',409);
      if(row.checkout_kind==='MILESTONE'&&row.source==='industrial')
-      await checkMilestoneDuplicate(db,row.request_id,row.checkout_reference,row.sender_account,row.currency_code,row.amount);
+      await checkMilestoneDuplicate(db,row.request_id,row.checkout_reference,row.sender_account,row.currency_code,row.amount,{retryExisting:true});
     }else if(row.status!=='REQUESTED')fault('CHECKOUT_IP_STATE','requestId',409);
     if(!uuid(input.receivingAccountId))fault('INVALID_FIELD','receivingAccountId');
     const account=(await db.query(`SELECT a.account_id FROM avis_core_v2.ledger_accounts a
