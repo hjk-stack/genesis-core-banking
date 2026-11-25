@@ -1,3 +1,4 @@
+import {CoinApiEms} from './trading/coinapi-ems.mjs';
 import {engineStatus} from './trading/runtime.mjs';
 import {robotWalletAllowance,assertRobotWalletAllowance,ROBOT_WALLET_MESSAGES} from './robot-wallet-allowance.mjs';
 import {randomUUID} from 'node:crypto';
@@ -10,6 +11,7 @@ const S=10n**18n,U=x=>/^0(?:\.0+)?$/.test(String(x))?0n:money(String(x)),admin=a
 export const ROBOT_MESSAGES={...ROBOT_WALLET_MESSAGES,ROBOT_SYMBOL:'Select the exact market symbol on this venue.',ROBOT_API_KEY:'Enter the configured trading API secret reference.',ROBOT_ACCOUNT:'Select an institution trading account.',ROBOT_INDEX:'The selected security needs a fresh Press INDEX with supporting sources.',ROBOT_LIMIT:'Enter valid order, daily trading and loss limits.',ROBOT_VENUE_RESPONSE:'The venue request could not complete. Check this order in Trading diagnostics.',ROBOT_BUSY:'The previous order is being reconciled.',ROBOT_POSITION:'Close the robot’s position before changing its market settings.'};
 export class TradingRobotCore extends TradingInstructionsCore {
  constructor(pool,options={}){super(pool,options);this.venue=options.tradingVenue||new BinanceSpot({env:this.secretEnv});}
+ async auditEms(){return new CoinApiEms({env:this.secretEnv,fetcher:this.cryptoFetch}).audit();}
  async robotWalletAllowance(robot){return robotWalletAllowance(this.pool,robot);}
  async validateRobotProviders(actor){admin(actor);const env=this.secretEnv;
   const market=async()=>{
@@ -25,7 +27,7 @@ export class TradingRobotCore extends TradingInstructionsCore {
     return {provider:'CoinAPI Market Data',configured:true,verified:true,capability:'Authenticated reference pricing',checkedAt:new Date().toISOString()};
    }catch(e){return {provider:'CoinAPI Market Data',configured:true,verified:false,code:e.message==='MARKET_SCHEMA'?'MARKET_SCHEMA':'MARKET_TRANSPORT'};}
   };
-  const ems=async()=>{const key=env.COINAPI_EMS_API_KEY;if(!key)return {provider:'CoinAPI EMS',configured:false,verified:false,setting:'COINAPI_EMS_API_KEY'};try{const response=await this.cryptoFetch('https://global.ems.coinapi.net/v1/balances',{headers:{'X-CoinAPI-Key':key,accept:'application/json'},signal:AbortSignal.timeout(10000),redirect:'error'});if(!response.ok)throw Error('EMS_HTTP_'+response.status);const rows=await response.json();if(!Array.isArray(rows))throw Error('EMS_SCHEMA');return {provider:'CoinAPI EMS',configured:true,verified:true,accounts:rows.map(r=>r.exchange_id).filter(Boolean),capability:'Execution API account connection',checkedAt:new Date().toISOString()};}catch(e){return {provider:'CoinAPI EMS',configured:true,verified:false,code:/^EMS_/.test(e.message)?e.message:'EMS_TRANSPORT'};}};
+  const ems=()=>this.auditEms();
   const node=async provider=>{
    // A configured RPC URL can already contain the provider credential. Probe
    // that same endpoint instead of reporting it missing or replacing it.
