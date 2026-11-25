@@ -231,9 +231,9 @@ for(const [width,mode] of [[390,'empty'],[820,'empty'],[1440,'empty'],[820,'stal
   if(mode==='empty')await page.locator('[data-checkout-ip-register]').waitFor();
   if(mode==='stalled')await page.waitForFunction(()=>document.querySelector('#panels')?.getAttribute('aria-busy')==='true');
   if(mode==='failed')await page.locator('#panels .panel-error').waitFor();
-  assert.equal(await controls.locator('[role=switch]').count(),2);assert.equal(await page.locator('[data-checkout-ip]').count(),0);assert.equal(await access.getAttribute('data-state'),'CLOSED');assert.equal(await access.getAttribute('aria-disabled'),'true');assert.equal(await management.getAttribute('data-state'),'CLOSED');assert.equal(await management.isEnabled(),true);
+  assert.equal(await controls.locator('[role=switch]').count(),3);assert.equal(await page.locator('[data-checkout-ip]').count(),0);assert.equal(await access.getAttribute('data-state'),'CLOSED');assert.equal(await access.getAttribute('aria-disabled'),'true');assert.equal(await management.getAttribute('data-state'),'CLOSED');assert.equal(await management.isEnabled(),true);
   assert.equal(await controls.evaluate(el=>!!el.closest('.table-wrap')),false);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-  for(const control of [access,management,controls.locator('[data-ip-admin-request]')]){const box=await control.boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width+1,'administrator control stays inside viewport');}
+  for(const control of [access,management,controls.locator('[data-ip-admin-receiver]'),controls.locator('[data-ip-admin-request]')]){const box=await control.boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width+1,'administrator control stays inside viewport');}
   await assertIpSlider(access,'CLOSED');await assertIpSlider(management,'CLOSED');assert.equal(await controls.locator('.pos-activation-label').count(),0);
   await page.screenshot({path:'test-results/checkout-ip-admin-'+mode+'-'+width+'.png',fullPage:false});
   const [tab]=await Promise.all([context.waitForEvent('page'),management.click()]);await tab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer');
@@ -264,4 +264,3 @@ test('a handler authentication response keeps the actual tab open and scopes a f
   await tab.close();await page.waitForFunction(()=>document.querySelector('[data-ip-admin-management]')?.dataset.state==='CLOSED');assert.equal(await page.locator('[data-ip-admin-management-error]').textContent(),'');
  }finally{await context.close();}
 });
-

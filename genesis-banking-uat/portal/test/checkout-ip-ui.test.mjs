@@ -86,7 +86,7 @@ function adminHarness({rows=[],activateRequest=async()=>{},open,cooperate=true}=
 
 test('permanent administrator switches render with no requests and no data fetch',()=>{
  const h=adminHarness();try{
-  assert.equal(h.doc.querySelectorAll('[data-ip-admin-controls] [role=switch]').length,2);assert.equal(h.doc.querySelectorAll('[data-checkout-ip]').length,0);
+  assert.equal(h.doc.querySelectorAll('[data-ip-admin-controls] [role=switch]').length,3);assert.equal(h.doc.querySelectorAll('[data-checkout-ip]').length,0);
   const access=h.doc.querySelector('[data-ip-admin-access]'),management=h.doc.querySelector('[data-ip-admin-management]');
   assert.equal(access.dataset.state,'CLOSED');assert.equal(access.getAttribute('aria-disabled'),'true');assert.equal(management.dataset.state,'CLOSED');assert.equal(management.disabled,false);assert.deepEqual(h.calls,[]);
   assert.equal(access.closest('.table-wrap'),null);assert.equal(management.closest('.table-wrap'),null);
@@ -337,3 +337,17 @@ test('proof errors remain in their popup and unauthorized access invokes session
  }finally{h.viewer.close();h.dom.window.close();}
 });
 
+test('sender desk opens independently of approval, binding only an approved checkout, and performs no activation',()=>{
+ for(const status of ['REQUESTED','ACTIVE']){
+  const h=adminHarness({rows:[request({status})],activateRequest:()=>assert.fail('unexpected approval')});
+  try{
+   h.select(id);const control=h.doc.querySelector('[data-ip-admin-receiver]');control.click();
+   const url=new URL(h.tabs[0].events[0]);
+   assert.equal(url.searchParams.get('view'),'sender-access');
+   assert.equal(url.searchParams.get('checkoutRequest'),status==='ACTIVE'?id:null);
+   assert.equal(control.dataset.state,'ACTIVE');assert.equal(h.doc.querySelector('[data-ip-admin-management]').dataset.state,'CLOSED');
+   for(const poll of h.timers.values())poll();
+   control.click();assert.equal(h.tabs[0].closed,true);assert.equal(control.dataset.state,'CLOSED');
+  }finally{h.close()}
+ }
+});
