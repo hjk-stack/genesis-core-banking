@@ -195,7 +195,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     if(!value||typeof value!=='object'||Array.isArray(value))fault('INVALID_FIELD',null,400);
     return send(res,200,await ipControl[ipService[1]](service,value));
    }
-   const ipHandler=/^\/api\/services\/checkout-ip\/(context|processing|claim)$/.exec(path);
+   const ipHandler=/^\/api\/services\/checkout-ip\/(context|processing|claim|receivingAccounts)$/.exec(path);
    if(ipHandler){
     if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
     if(!req.headers['content-type']?.startsWith('application/json'))fault('INVALID_FIELD',null,415);

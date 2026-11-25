@@ -1,6 +1,7 @@
 import {randomUUID,createHash} from 'node:crypto';
 import {isIP} from 'node:net';
 import {fault,text,money} from './core.mjs';
+import {RECEIVING_OWNERS} from './checkout-ip-settlement.mjs';
 import {CheckoutIpProcessing} from './checkout-ip-processing.mjs';
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
 const amount=value=>{money(value);return value;};
@@ -144,14 +145,23 @@ export class CheckoutIpControl{
  async processing(actor,input){return this.processingControl.publish(actor,input);}
  async claim(actor,input){return this.processingControl.claim(actor,input);}
  async proof(actor,requestId){return this.processingControl.proof(actor,requestId);}
- async accounts(actor){
-  if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403);
+ async receivingAccounts(actor){
+  if(!actor?.ipHandlerService||!actor.id||actor.customerUserId)fault('FORBIDDEN',null,403);
+  const rows=await this.backofficeReceivingAccounts();
+  return {accounts:rows.map(row=>({accountId:row.account_id,accountType:row.owner_type,currency:row.currency_code,abiqIban:row.abiq_iban,label:row.label}))};
+ }
+ async backofficeReceivingAccounts(){
   return (await this.pool.query(`SELECT a.account_id,a.owner_type,a.currency_code,b.abiq_iban,
+    COALESCE(a.display_name,CASE WHEN a.owner_type='COMMON_POOL' THEN 'Common Account' ELSE 'Suspense Account' END) AS label,
     a.available_balance::text
     FROM avis_core_v2.ledger_accounts a JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id
     WHERE a.owner_type=ANY($1::text[]) AND b.status='ACTIVE' AND a.wallet_scope='FUNDING'
-    ORDER BY a.currency_code,a.owner_type,b.abiq_iban`,
-   [['COMMON_POOL','SUSPENSE_INBOUND','SUSPENSE_OUTBOUND','SUSPENSE_CARD_FX']])).rows;
+     AND a.account_category='LIABILITY' AND a.network IS NULL
+    ORDER BY a.currency_code,a.owner_type,b.abiq_iban`,[RECEIVING_OWNERS])).rows;
+ }
+ async accounts(actor){
+  if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403);
+  return this.backofficeReceivingAccounts();
  }
  async setActive(actor,input){
   if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403);

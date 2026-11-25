@@ -7,7 +7,7 @@ const JWKS='https://avis.land/press/api/index-service/jwks';
 const POS={routes:new Set(['/api/services/checkout-pos/resolve','/api/services/checkout-pos/status','/api/services/checkout-pos/request','/api/services/checkout-ip/register','/api/services/checkout-ip/status','/api/services/checkout-ip/cancel']),
  authorization:/^(?:Pos|Index)-JWS ([A-Za-z0-9_.-]+)$/,type:'AVIS-POS-REQUEST+JWT',issuer:'https://avis.land/checkout',audience:'AVIS_BANK_POS_V1',
  code:'POS_SERVICE_AUTH',actor:{id:'service:avis-land-checkout',admin:false,posService:true}};
-const IP_HANDLER={routes:new Set(['/api/services/checkout-ip/context','/api/services/checkout-ip/processing','/api/services/checkout-ip/claim']),
+const IP_HANDLER={routes:new Set(['/api/services/checkout-ip/receivingAccounts','/api/services/checkout-ip/context','/api/services/checkout-ip/processing','/api/services/checkout-ip/claim']),
  authorization:/^Ip-JWS ([A-Za-z0-9_.-]+)$/,type:'AVIS-IP-HANDLER-REQUEST+JWT',issuer:'https://avis.land/ip-handler',audience:'AVIS_BANK_IP_HANDLER_V1',
  code:'IP_HANDLER_SERVICE_AUTH',actor:{id:'service:avis-land-ip-handler',admin:false,ipHandlerService:true}};
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');

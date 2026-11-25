@@ -304,6 +304,13 @@ test('HTTP handler feed and admin PDF download enforce sessions, scope and origi
   const contextPath='/api/services/checkout-ip/context',contextBody=Buffer.from(JSON.stringify({requestId:input.requestId}));
   const context=await post(contextPath,{requestId:input.requestId},token(contextPath,contextBody));assert.equal(context.status,200);
   assert.equal((await context.json()).request.processing.transactionReference,value.transactionReference);
+  const registryPath='/api/services/checkout-ip/receivingAccounts',registryBody=Buffer.from('{}');
+  assert.equal((await post(registryPath,{})).status,401);
+  const response=await post(registryPath,{},token(registryPath,registryBody));
+  assert.equal(response.status,200);
+  const {accounts}=await response.json();
+  assert.ok(accounts.some(account=>account.accountId===claimBody.receivingAccountId));
+  assert.ok(accounts.every(a=>a.abiqIban&&['COMMON_POOL','SUSPENSE_INBOUND','SUSPENSE_OUTBOUND','SUSPENSE_CARD_FX'].includes(a.accountType)&&!Object.hasOwn(a,'available_balance')));
   const pathPdf='/api/checkout-ip/'+input.requestId+'/proof.pdf';
   assert.equal((await fetch(base+pathPdf)).status,401);
   const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:'ip-admin',password:'fixture'})});
