@@ -330,3 +330,18 @@ test('HTTP handler feed and admin PDF download enforce sessions, scope and origi
   assert.equal((await fetch(base+pathPdf,{headers:{cookie}})).status,403,'customer workspace cannot read admin proof');
  }finally{await new Promise(resolve=>server.close(resolve))}
 });
+
+test('manual destination permits an active same-currency backoffice account and preserves the settlement claim',async()=>{
+ await new AccountManagement(pool).openAccount(admin,{accountType:'SUSPENSE',fullName:'Manual receiver',currencies:['EUR']},randomUUID());
+ const req=await activeRequest(),directory=await ip.receivingAccounts(handler);
+ const other=directory.accounts.find(a=>a.currency==='EUR'&&a.accountId!==common&&a.accountType.startsWith('SUSPENSE'));
+ assert.ok(other);
+ const selection={requestId:req.requestId,receivingAccountId:other.accountId,expectedReceivingAccountId:common};
+ await assert.rejects(ip.selectReceivingAccount(guest,selection));
+ await assert.rejects(ip.selectReceivingAccount(handler,{...selection,receivingAccountId:nostro.id}));
+ assert.equal((await ip.selectReceivingAccount(handler,selection)).receivingAccountId,other.accountId);
+ assert.equal((await ip.context(handler,{requestId:req.requestId})).routing.receivingAccountId,other.accountId);
+ await assert.rejects(ip.selectReceivingAccount(handler,{...selection,receivingAccountId:common}),/CHECKOUT_IP_ACCOUNT_CHANGED/);
+ await ip.claim(handler,await claimPayload(completed(req)));
+ await assert.rejects(ip.selectReceivingAccount(handler,{...selection,expectedReceivingAccountId:other.accountId,receivingAccountId:common}),/CHECKOUT_IP_PROCESSING/);
+});
