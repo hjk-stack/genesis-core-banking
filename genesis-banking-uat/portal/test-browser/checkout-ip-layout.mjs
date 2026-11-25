@@ -233,6 +233,9 @@ for(const [width,mode] of [[390,'empty'],[820,'empty'],[1440,'empty'],[820,'stal
   if(mode==='failed')await page.locator('#panels .panel-error').waitFor();
   assert.equal(await controls.locator('[role=switch]').count(),2);assert.equal(await page.locator('[data-checkout-ip]').count(),0);assert.equal(await access.getAttribute('data-state'),'CLOSED');assert.equal(await access.getAttribute('aria-disabled'),'true');assert.equal(await management.getAttribute('data-state'),'CLOSED');assert.equal(await management.isEnabled(),true);
   assert.equal(await controls.evaluate(el=>!!el.closest('.table-wrap')),false);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  const managementLabel=await controls.locator('.ip-admin-management h2').boundingBox(),managementSwitch=await management.boundingBox();
+  assert.ok(managementLabel&&managementSwitch,'management label and switch visible');
+  assert.ok(managementSwitch.x-managementLabel.x-managementLabel.width>=-1&&managementSwitch.x-managementLabel.x-managementLabel.width<=24,'management label stays beside its own switch');
   for(const control of [access,management,controls.locator('[data-ip-admin-request]')]){const box=await control.boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width+1,'administrator control stays inside viewport');}
   await assertIpSlider(access,'CLOSED');await assertIpSlider(management,'CLOSED');assert.equal(await controls.locator('.pos-activation-label').count(),0);
   await page.screenshot({path:'test-results/checkout-ip-admin-'+mode+'-'+width+'.png',fullPage:false});
