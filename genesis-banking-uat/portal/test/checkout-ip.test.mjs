@@ -105,3 +105,23 @@ test('a settled milestone cannot be registered under a fresh key after administr
  await ip.setActive(admin,{requestId:original.requestId,active:false});
  await assert.rejects(retry,e=>e.code==='CHECKOUT_IP_ALREADY_REGISTERED');
 });
+
+test('manual retry reauthorizes only the existing unfinished request and rejects stale or cancelled retries',async()=>{
+ const payload=request();
+ await ip.register(service,payload);
+ await ip.setActive(admin,{requestId:payload.requestId,active:true,receivingAccountId:accounts.common});
+ const closed=await ip.setActive(admin,{requestId:payload.requestId,active:false});
+ const retry={requestId:payload.requestId,active:true,receivingAccountId:accounts.common,retryClosedAt:new Date(closed.closedAt).toISOString()};
+ const ledger=await pool.query('SELECT count(*) AS n FROM avis_core_v2.ledger_entries');
+ await assert.rejects(ip.setActive(guest,retry),e=>e.code==='FORBIDDEN');
+ await assert.rejects(ip.setActive(admin,{...retry,retryClosedAt:'2000-01-01T00:00:00Z'}),e=>e.code==='CHECKOUT_IP_STATE');
+ const reopened=await ip.setActive(admin,retry);
+ assert.equal(reopened.requestId,payload.requestId);
+ assert.equal(reopened.status,'ACTIVE');assert.equal(reopened.closedAt,null);
+ assert.equal(reopened.receivingAccountId,accounts.common);
+ await assert.rejects(ip.setActive(admin,retry),e=>e.code==='CHECKOUT_IP_STATE');
+ assert.deepEqual((await pool.query('SELECT count(*) AS n FROM avis_core_v2.ledger_entries')).rows,ledger.rows);
+ assert.deepEqual((await pool.query('SELECT event_type FROM avis_core_v2.checkout_ip_events WHERE request_id=$1 ORDER BY event_id',[payload.requestId])).rows.map(row=>row.event_type),['REQUEST','APPROVE','CLOSE','REQUEST','APPROVE']);
+ const cancelled=await ip.cancel(service,{requestId:payload.requestId});
+ await assert.rejects(ip.setActive(admin,{...retry,retryClosedAt:new Date(cancelled.closedAt).toISOString()}),e=>e.code==='CHECKOUT_IP_STATE');
+});
