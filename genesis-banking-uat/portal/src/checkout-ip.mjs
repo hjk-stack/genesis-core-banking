@@ -159,7 +159,7 @@ export class CheckoutIpControl{
    const selected=(await db.query(`SELECT a.account_id FROM avis_core_v2.ledger_accounts a
     JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id AND b.status='ACTIVE'
     WHERE a.account_id=$1 AND a.currency_code=$2 AND a.owner_type=ANY($3::text[]) AND a.account_category='LIABILITY'
-     AND a.wallet_scope='FUNDING' AND a.network IS NULL FOR SHARE OF a,b`,[input.receivingAccountId,row.currency_code,RECEIVING_OWNERS])).rows[0];
+     AND a.wallet_scope='FUNDING' AND a.network IS NULL FOR SHARE OF a`,[input.receivingAccountId,row.currency_code,RECEIVING_OWNERS])).rows[0];
    if(!selected)fault('CHECKOUT_IP_ACCOUNT','receivingAccountId',409);
    if(row.receiving_account_id===selected.account_id)return {receivingAccountId:selected.account_id};
    if((row.receiving_account_id||null)!==input.expectedReceivingAccountId)fault('CHECKOUT_IP_ACCOUNT_CHANGED','receivingAccountId',409);
