@@ -21,7 +21,10 @@ export function checkoutIpAdminControls(){
   '<p class="form-error" role="alert" data-ip-admin-access-error></p></div>'+
   '<div class="ip-admin-management"><div class="ip-admin-control-title"><h2>IP-IP management</h2><div class="ip-admin-switch-state">'+
   '<button type="button" class="pos-liquid-switch ip-liquid-slider" role="switch" aria-label="IP-IP management" aria-description="Management tab closed" aria-checked="false" data-ip-admin-management data-state="CLOSED"><span class="pos-liquid-knob" aria-hidden="true"></span></button></div></div>'+
-  '<p class="form-error" role="alert" data-ip-admin-management-error></p></div></section>';
+  '<p class="form-error" role="alert" data-ip-admin-management-error></p></div>'+
+  '<div class="ip-admin-management"><div class="ip-admin-control-title"><h2>Sender IP &amp; Watchdog</h2><div class="ip-admin-switch-state">'+
+  '<button type="button" class="pos-liquid-switch ip-liquid-slider" role="switch" aria-label="Sender IP and Watchdog desk" aria-checked="false" data-ip-admin-receiver data-state="CLOSED"><span class="pos-liquid-knob" aria-hidden="true"></span></button></div></div>'+
+  '<p class="form-error" role="alert" data-ip-admin-receiver-error></p></div></section>';
 }
 
 export function createCheckoutIpAdminControls({root=document,activateRequest,windowApi=root.defaultView}={}){
@@ -33,7 +36,7 @@ export function createCheckoutIpAdminControls({root=document,activateRequest,win
  const paint=(selector,state)=>{
   const button=panel?.querySelector('[data-ip-admin-'+selector+']');if(!button)return;
   button.dataset.state=state;button.setAttribute('aria-checked',String(state==='ACTIVE'));
-  button.setAttribute('aria-description',selector==='management'?(state==='ACTIVE'?'Management tab open':'Management tab closed'):ipStateDescription(state));
+  button.setAttribute('aria-description',selector==='access'?ipStateDescription(state):(selector==='receiver'?'Sender desk':'Management tab')+(state==='ACTIVE'?' open':' closed'));
  };
  function paintAccess(now=Date.now()){
   if(!panel?.isConnected)return;
@@ -47,13 +50,17 @@ export function createCheckoutIpAdminControls({root=document,activateRequest,win
   session.port?.close();for(const port of session.pendingPorts)port.close();session.pendingPorts.clear();
  }
  function finishSession(session){
-  disposeSession(session);if(managedSession===session){managedSession=null;error('management','');syncManagement();}
+  disposeSession(session);if(managedSession===session){managedSession=null;error(session.kind,'');syncManagement();}
  }
  function syncManagement(){
   if(managedSession&&!tabIsOpen())finishSession(managedSession);
   if(panel?.isConnected){
-   paint('management',managedSession?'ACTIVE':'CLOSED');
-   const button=panel.querySelector('[data-ip-admin-management]');button.disabled=!!managedSession?.closing;button.setAttribute('aria-busy',String(!!managedSession?.closing));
+   for(const kind of ['management','receiver']){
+    const open=managedSession?.kind===kind,button=panel.querySelector('[data-ip-admin-'+kind+']');
+    paint(kind,open?'ACTIVE':'CLOSED');
+    button.disabled=Boolean(managedSession&&(!open||managedSession.closing));
+    button.setAttribute('aria-busy',String(Boolean(open&&managedSession.closing)));
+   }
   }
  }
  function sendClose(session){
@@ -83,7 +90,7 @@ export function createCheckoutIpAdminControls({root=document,activateRequest,win
   if(!tabIsOpen(session)){finishSession(session);return;}
   if(session.closing&&Date.now()>=session.closeDeadline){
    session.closing=false;
-   if(managedSession===session)error('management','Could not close the IP-IP management tab. Try again or close its browser tab.');
+   if(managedSession===session)error(session.kind,session.kind==='receiver'?'Could not close the sender desk. Close its browser tab.':'Could not close the IP-IP management tab. Try again or close its browser tab.');
    else{disposeSession(session);return;}
   }else if(session.closing&&session.port){
    sendClose(session);
@@ -105,10 +112,10 @@ export function createCheckoutIpAdminControls({root=document,activateRequest,win
   if(!tabIsOpen(session))finishSession(session);
   syncManagement();
  }
- function toggleManagement(){
-  error('management','');
+ function toggleManagement(kind){
+  error(kind,'');
   if(tabIsOpen()){
-   if(!managedSession.closing)requestClose(managedSession);
+   if(managedSession.kind===kind&&!managedSession.closing)requestClose(managedSession);
    return;
   }
   let child;
@@ -118,11 +125,14 @@ export function createCheckoutIpAdminControls({root=document,activateRequest,win
    child=windowApi.open('about:blank',name);
    if(!child)throw Error('Allow this page to open the IP-IP management tab.');
    child.opener=null;if(child.opener!==null)throw Error('Could not open the IP-IP management tab securely.');
-   const url=new URL(checkoutIpHandlerUrl(null));url.hash=new URLSearchParams({managementToken:token}).toString();child.location.replace(url.href);
+   const record=kind==='receiver'&&currentState(selected())==='ACTIVE'?selected():null;
+   const url=new URL(checkoutIpHandlerUrl(record));
+   if(kind==='receiver')url.searchParams.set('view','sender-access');
+   url.hash=new URLSearchParams({managementToken:token}).toString();child.location.replace(url.href);
    if(child.closed)throw Error('The IP-IP management tab closed before opening.');
-   const session={tab:child,token,port:null,pendingPorts:new Set(),attempts:0,attemptLimit:20,closing:false,disposed:false,timer:null};
+   const session={kind,tab:child,token,port:null,pendingPorts:new Set(),attempts:0,attemptLimit:20,closing:false,disposed:false,timer:null};
    managedSession=session;session.timer=windowApi.setInterval(()=>pollSession(session),500);syncManagement();
-  }catch(reason){try{child?.close();}catch{}if(managedSession)disposeSession(managedSession);managedSession=null;syncManagement();error('management',reason.message||'Could not open the IP-IP management tab. Try again.');}
+  }catch(reason){try{child?.close();}catch{}if(managedSession)disposeSession(managedSession);managedSession=null;syncManagement();error(kind,reason.message||'Could not open the IP-IP management tab. Try again.');}
  }
  function update(rows=[],{loading:pending=false}={}){
   requests=Array.isArray(rows)?rows:[];loading=pending;
@@ -143,9 +153,10 @@ export function createCheckoutIpAdminControls({root=document,activateRequest,win
    try{await activateRequest(requestId);}catch(reason){if(serial===generation)error('access',reason.message||'Could not update the selected checkout.');}
    finally{if(serial===generation){busy=false;paintAccess();}}
   };
-  panel.querySelector('[data-ip-admin-management]').onclick=toggleManagement;
+  panel.querySelector('[data-ip-admin-management]').onclick=()=>toggleManagement('management');
+  panel.querySelector('[data-ip-admin-receiver]').onclick=()=>toggleManagement('receiver');
   if(mounted){
-   panel.addEventListener('focusin',event=>{focusSelector=['[data-ip-admin-request]','[data-ip-admin-access]','[data-ip-admin-management]'].find(selector=>event.target.matches(selector))||null;});
+   panel.addEventListener('focusin',event=>{focusSelector=['[data-ip-admin-request]','[data-ip-admin-access]','[data-ip-admin-management]','[data-ip-admin-receiver]'].find(selector=>event.target.matches(selector))||null;});
    panel.addEventListener('focusout',event=>{if(event.relatedTarget&&!event.currentTarget.contains(event.relatedTarget))focusSelector=null;});
   }
   update(requests,{loading});
@@ -154,7 +165,7 @@ export function createCheckoutIpAdminControls({root=document,activateRequest,win
  function close(){
   generation++;requests=[];selectedId='';loading=true;busy=false;focusSelector=null;
   const previous=managedSession;managedSession=null;requestClose(previous);
-  update([],{loading:true});error('access','');error('management','');
+  update([],{loading:true});error('access','');error('management','');error('receiver','');
  }
  return {bind,update,expire:paintAccess,close};
 }
@@ -195,7 +206,7 @@ export function checkoutIpRegister(rows=[],accounts=[],nostros=[]){
    '</small><div class="ip-request-controls"><button type="button" role="switch" aria-checked="'+(state==='ACTIVE')+'" aria-label="IP-to-IP '+esc(state)+' '+id+
    '" aria-description="'+ipStateDescription(state)+'" class="pos-liquid-switch ip-liquid-slider" data-ip-toggle data-state="'+esc(state)+'" '+(state==='CLOSED'?'aria-disabled="true" ':'')+(state==='REQUESTED'?'data-ip-deadline="'+deadline+'"':'')+'>'+
    '<span class="pos-liquid-knob" aria-hidden="true"></span></button></div>'+
-   '<button type="button" data-ip-handler>Open handler</button><small>Requested '+esc(date(r.requestedAt))+'</small><small>Expires '+esc(date(r.expiresAt))+'</small>'+
+   '<button type="button" data-ip-handler>Open handler</button><small>Requested '+esc(date(r.requestedAt))+'</small><small>Approval deadline '+esc(date(r.expiresAt))+'</small>'+
    '<small>Approved '+esc(date(r.approvedAt))+'</small><small class="form-error" data-ip-error role="alert"></small></td>'+
    '<td>'+value(processing.bankName||r.senderBankName)+'<small>IP '+esc(r.senderIp)+'</small><small>'+esc(r.authorizedPerson)+'</small></td>'+
    '<td class="account-number">'+value(r.senderAccount)+'<small>'+esc(r.senderAccountName)+'</small></td>'+
