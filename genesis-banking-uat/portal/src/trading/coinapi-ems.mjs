@@ -22,7 +22,11 @@ export function emsExecutionEvidence(row,expected){
  if(filled===null||remaining===null||Number(filled)>expected.amount_order||Number(remaining)>expected.amount_order||row.status==='FILLED'&&Number(filled)!==expected.amount_order||row.status==='REJECTED'&&Number(filled)!==0)fail('EMS_SCHEMA');
  const fills=Array.isArray(row.fills)?row.fills.map(f=>({amount:marketDecimal(f.amount,true),price:marketDecimal(f.price,true),time:typeof f.time==='string'&&Number.isFinite(Date.parse(f.time))?f.time:null})):null;
  if(fills?.some(f=>!f.amount||!f.price||!f.time))fail('EMS_SCHEMA');
- if(Number(filled)>0&&(!orderId(row.exchange_order_id)||!fills?.length))fail('EMS_SCHEMA');
+ // Compare exact decimal quantities so execution evidence cannot overstate fills.
+ const units=value=>{const [whole,fraction='']=value.split('.');return BigInt(whole)*10n**18n+BigInt(fraction.padEnd(18,'0'));};
+ const reported=units(filled);
+ const actual=(fills||[]).reduce((sum,f)=>sum+units(f.amount),0n);
+ if(actual!==reported||reported>0n&&(!orderId(row.exchange_order_id)||!fills?.length))fail('EMS_SCHEMA');
  // Evidence is intentionally separate from Binance settlement objects. EMS
  // fill fee and exact consideration validation must precede any ledger posting.
  return {exchangeId:row.exchange_id,clientOrderId:row.client_order_id,symbol:row.symbol_id_coinapi,side:row.side,status:row.status,terminal:terminal.has(row.status),filled,remaining,fills,venueOrderId:orderId(row.exchange_order_id)?row.exchange_order_id:null,ledgerSettlementVerified:false};
