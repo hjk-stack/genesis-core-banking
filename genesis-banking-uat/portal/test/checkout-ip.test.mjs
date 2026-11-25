@@ -11,7 +11,7 @@ import {CheckoutIpControl} from '../src/checkout-ip.mjs';
 import {checkoutIpRegister,ipState} from '../public/checkout-ip.mjs';
 let pool,db,ip,accounts,nostro,intermediaryId;
 const admin={id:'ip-test-admin',admin:true},guest={id:'ip-guest',admin:false},service={id:'service:avis-land-checkout',posService:true};
-const id=()=>randomUUID(),request=()=>({requestId:id(),checkoutKind:'MILESTONE',checkoutReference:'AVIS-TN-2026-01',title:'Tunisia milestone',
+const id=()=>randomUUID(),request=()=>({requestId:id(),checkoutKind:'MILESTONE',checkoutReference:'AVIS-TN-'+id(),title:'Tunisia milestone',
  source:'industrial',amount:'150.00',currency:'EUR',bankName:'Sending Bank',ip:'192.0.2.14',authorized:'Operator Smith',
  account:'SENDER-ACCT-123',accountName:'Sender Holdings Limited',documents:['authority.pdf']});
 before(async()=>{
@@ -84,4 +84,12 @@ test('unapproved request expires at 60 minutes with immutable audit and cannot b
  assert.equal(new Date(retry.expiresAt).getTime()-new Date(retry.requestedAt).getTime(),3600000);
  assert.deepEqual((await pool.query('SELECT event_type FROM avis_core_v2.checkout_ip_events WHERE request_id=$1 ORDER BY event_id',[payload.requestId])).rows.map(x=>x.event_type),['REQUEST','EXPIRE','REQUEST']);
  await assert.rejects(pool.query('DELETE FROM avis_core_v2.checkout_ip_events WHERE request_id=$1',[payload.requestId]),/APPEND_ONLY_RECORD/);
+});
+
+test('a second key cannot book the same open milestone under a different signatory',async()=>{
+ const original=request();await ip.register(service,original);
+ await assert.rejects(ip.register(service,{...original,requestId:id(),authorized:'Alternate signatory',account:' sender-acct-123 ',amount:'150.0'}),e=>e.code==='CHECKOUT_IP_ALREADY_REGISTERED');
+ assert.equal((await ip.register(service,original)).requestId,original.requestId);
+ const separate={...original,checkoutReference:'other-'+id(),requestId:id()};
+ assert.equal((await ip.register(service,separate)).requestId,separate.requestId);
 });
