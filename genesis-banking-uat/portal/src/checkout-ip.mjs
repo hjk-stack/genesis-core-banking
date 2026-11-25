@@ -136,8 +136,19 @@ export class CheckoutIpControl{
  async list(actor){
   if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403);
   await this.expire();
-  const rows=(await this.pool.query(`SELECT * FROM avis_core_v2.checkout_ip_requests
-   WHERE superseded_by IS NULL
+  const rows=(await this.pool.query(`SELECT r.* FROM avis_core_v2.checkout_ip_requests r
+   WHERE r.superseded_by IS NULL
+    AND NOT (r.status='CLOSED' AND r.nostro_cash_account_id IS NULL
+     AND EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_requests routed
+      WHERE routed.request_id<>r.request_id AND routed.superseded_by IS NULL AND routed.nostro_cash_account_id IS NOT NULL
+       AND (routed.checkout_kind,routed.source,routed.checkout_reference,routed.sender_account,routed.amount,routed.currency_code,routed.sender_ip)
+         =(r.checkout_kind,r.source,r.checkout_reference,r.sender_account,r.amount,r.currency_code,r.sender_ip))
+     AND EXISTS (SELECT 1 FROM (SELECT event_type,actor_id FROM avis_core_v2.checkout_ip_events
+      WHERE request_id=r.request_id ORDER BY event_id DESC LIMIT 1) last_event
+      WHERE last_event.event_type='CLOSE' AND last_event.actor_id='system:checkout-duplicate-review')
+     AND NOT EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_processing WHERE request_id=r.request_id)
+     AND NOT EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=r.request_id)
+     AND NOT EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_settlements WHERE request_id=r.request_id))
    ORDER BY (status='REQUESTED') DESC,requested_at DESC LIMIT 300`)).rows;
   const reports=await this.processingControl.readReports(this.pool,rows.map(row=>row.request_id));
   return rows.map(row=>({...map(row),processing:reports.get(row.request_id)||null}));
