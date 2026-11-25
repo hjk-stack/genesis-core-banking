@@ -52,6 +52,22 @@ export class CheckoutIpControl{
     fault('CHECKOUT_IP_CANCELLED','requestId',409);
    await this.expire(db);
    const existing=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_requests WHERE request_id=$1 FOR UPDATE',[input.requestId])).rows[0];
+   if(input.checkoutKind==='MILESTONE'&&input.source==='industrial'&&(!existing||existing.status==='CLOSED')){
+    // A new browser key or a changed signatory must not start the same open milestone twice.
+    const senderAccount=account.replace(/\s+/g,'').toUpperCase();
+    await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+     ['checkout-ip-milestone:'+key([reference,senderAccount,currency])]);
+    const duplicate=await db.query(`SELECT 1 FROM avis_core_v2.checkout_ip_requests r
+     WHERE checkout_kind='MILESTONE' AND source='industrial' AND checkout_reference=$1
+      AND upper(regexp_replace(sender_account,'[[:space:]]','','g'))=$2 AND currency_code=$3 AND amount=$4
+      AND request_id<>$5 AND (status IN ('REQUESTED','ACTIVE')
+       OR EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_processing p
+        WHERE p.request_id=r.request_id AND (p.operation_completed OR p.handler_status='SETTLED'))
+       OR EXISTS (SELECT 1 FROM avis_core_v2.checkout_ip_settlement_claims c WHERE c.request_id=r.request_id))
+     LIMIT 1`,
+     [reference,senderAccount,currency,value,input.requestId]);
+    if(duplicate.rows.length)fault('CHECKOUT_IP_ALREADY_REGISTERED','checkoutReference',409);
+   }
    if(existing){
     if(existing.request_fingerprint!==fingerprint)fault('IDEMPOTENCY_CONFLICT','requestId',409);
     if(existing.status==='CLOSED'){
@@ -116,6 +132,7 @@ export class CheckoutIpControl{
   if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403);
   await this.expire();
   const rows=(await this.pool.query(`SELECT * FROM avis_core_v2.checkout_ip_requests
+   WHERE superseded_by IS NULL
    ORDER BY (status='REQUESTED') DESC,requested_at DESC LIMIT 300`)).rows;
   const reports=await this.processingControl.readReports(this.pool,rows.map(row=>row.request_id));
   return rows.map(row=>({...map(row),processing:reports.get(row.request_id)||null}));

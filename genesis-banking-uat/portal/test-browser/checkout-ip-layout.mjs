@@ -122,9 +122,9 @@ async function closeManagedTab(tab,page,action,consoleMessages,{visibleControl=t
  const before=await tab.evaluate(()=>({historyLength:history.length,openerRemoved:window.opener===null,hasLaunchToken:new URLSearchParams(location.hash.slice(1)).has('managementToken')}));
  try{
   await Promise.all([tab.waitForEvent('close',{timeout:5000}),action()]);
-  if(visibleControl)await page.waitForFunction(()=>document.querySelector('[data-ip-admin-management]')?.dataset.state==='CLOSED',{},{timeout:2000});
+  if(visibleControl)await page.waitForFunction(()=>document.querySelector('[data-ip-admin-receiver]')?.dataset.state==='CLOSED',{},{timeout:2000});
  }catch(reason){
-  const parent=await page.evaluate(()=>{const button=document.querySelector('[data-ip-admin-management]');return {state:button?.dataset.state,busy:button?.getAttribute('aria-busy'),error:document.querySelector('[data-ip-admin-management-error]')?.textContent};});
+  const parent=await page.evaluate(()=>{const button=document.querySelector('[data-ip-admin-receiver]');return {state:button?.dataset.state,busy:button?.getAttribute('aria-busy'),error:document.querySelector('[data-ip-admin-receiver-error]')?.textContent};});
   throw new Error('Managed tab close failed: '+JSON.stringify({before,parent,consoleMessages}),{cause:reason});
  }
 }
@@ -160,7 +160,7 @@ for(const width of [390,820,1440])test('IP register controls and proof popup sta
   assert.equal(await page.locator('thead th').count(),12);assert.equal(await page.locator('[data-checkout-ip="'+id+'"] td').count(),12);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await assertIpSlider(page.locator('[data-ip-admin-access]'),'CLOSED');await assertIpSlider(page.locator('[data-checkout-ip="'+id+'"] [data-ip-toggle]'),'REQUESTED');await assertIpSlider(page.locator('[data-checkout-ip="'+completedId+'"] [data-ip-toggle]'),'ACTIVE');
-  assert.equal(await page.locator('.pos-activation-label,[data-ip-admin-access-state],[data-ip-admin-management-state]').count(),0);
+  assert.equal(await page.locator('.pos-activation-label,[data-ip-admin-access-state],[data-ip-admin-receiver-state]').count(),0);
   await page.screenshot({path:'test-results/checkout-ip-slider-'+width+'.png',fullPage:false});
   const wrap=page.locator('.table-wrap');await wrap.evaluate(el=>el.scrollLeft=el.scrollWidth);
   const toggle=page.locator('[data-checkout-ip="'+id+'"] [data-ip-toggle]'),bounds=await toggle.boundingBox();
@@ -227,26 +227,26 @@ for(const [width,mode] of [[390,'empty'],[820,'empty'],[1440,'empty'],[820,'stal
  if(mode==='stalled')await page.route('**/api/views/checkoutip',route=>new Promise(resolve=>held.push({route,resolve})));
  if(mode==='failed')await page.route('**/api/views/checkoutip',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({message:'Could not read checkout requests.'})}));
  try{
-  await page.goto(base+'/admin#payments');const controls=page.locator('[data-ip-admin-controls]'),access=controls.locator('[data-ip-admin-access]'),management=controls.locator('[data-ip-admin-management]');await controls.waitFor();
+  await page.goto(base+'/admin#payments');const controls=page.locator('[data-ip-admin-controls]'),access=controls.locator('[data-ip-admin-access]'),management=controls.locator('[data-ip-admin-receiver]');await controls.waitFor();
   if(mode==='empty')await page.locator('[data-checkout-ip-register]').waitFor();
   if(mode==='stalled')await page.waitForFunction(()=>document.querySelector('#panels')?.getAttribute('aria-busy')==='true');
   if(mode==='failed')await page.locator('#panels .panel-error').waitFor();
-  assert.equal(await controls.locator('[role=switch]').count(),3);assert.equal(await page.locator('[data-checkout-ip]').count(),0);assert.equal(await access.getAttribute('data-state'),'CLOSED');assert.equal(await access.getAttribute('aria-disabled'),'true');assert.equal(await management.getAttribute('data-state'),'CLOSED');assert.equal(await management.isEnabled(),true);
+  assert.equal(await controls.locator('[role=switch]').count(),2);assert.equal(await page.locator('[data-checkout-ip]').count(),0);assert.equal(await access.getAttribute('data-state'),'CLOSED');assert.equal(await access.getAttribute('aria-disabled'),'true');assert.equal(await management.getAttribute('data-state'),'CLOSED');assert.equal(await management.isEnabled(),true);
   assert.equal(await controls.evaluate(el=>!!el.closest('.table-wrap')),false);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-  for(const control of [access,management,controls.locator('[data-ip-admin-receiver]'),controls.locator('[data-ip-admin-request]')]){const box=await control.boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width+1,'administrator control stays inside viewport');}
+  for(const control of [access,management,controls.locator('[data-ip-admin-request]')]){const box=await control.boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width+1,'administrator control stays inside viewport');}
   await assertIpSlider(access,'CLOSED');await assertIpSlider(management,'CLOSED');assert.equal(await controls.locator('.pos-activation-label').count(),0);
   await page.screenshot({path:'test-results/checkout-ip-admin-'+mode+'-'+width+'.png',fullPage:false});
-  const [tab]=await Promise.all([context.waitForEvent('page'),management.click()]);await tab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer');
+  const [tab]=await Promise.all([context.waitForEvent('page'),management.click()]);await tab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer/entry?view=sender-access');
   assert.equal(await tab.evaluate(()=>window.opener===null),true);assert.equal(await management.getAttribute('data-state'),'ACTIVE');await assertIpSlider(management,'ACTIVE');assert.equal(await access.getAttribute('data-state'),'CLOSED');assert.deepEqual(writes,[]);
   await page.screenshot({path:'test-results/checkout-ip-admin-'+mode+'-management-'+width+'.png',fullPage:false});
   if(width===1440&&mode==='empty'){
-   await tab.reload();await tab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer');
+   await tab.reload();await tab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer/entry?view=sender-access');
    assert.equal(await tab.evaluate(()=>window.opener===null),true);assert.equal(await management.getAttribute('data-state'),'ACTIVE');
   }
   await closeManagedTab(tab,page,()=>management.click(),consoleMessages);assert.equal(await management.getAttribute('data-state'),'CLOSED');
-  const [manual]=await Promise.all([context.waitForEvent('page'),management.click()]);await manual.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer');await manual.close();
-  await page.waitForFunction(()=>document.querySelector('[data-ip-admin-management]')?.dataset.state==='CLOSED');
-  const [logoutTab]=await Promise.all([context.waitForEvent('page'),management.click()]);await logoutTab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer');
+  const [manual]=await Promise.all([context.waitForEvent('page'),management.click()]);await manual.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer/entry?view=sender-access');await manual.close();
+  await page.waitForFunction(()=>document.querySelector('[data-ip-admin-receiver]')?.dataset.state==='CLOSED');
+  const [logoutTab]=await Promise.all([context.waitForEvent('page'),management.click()]);await logoutTab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer/entry?view=sender-access');
   await closeManagedTab(logoutTab,page,()=>page.locator('#signout').click(),consoleMessages,{visibleControl:false});await page.locator('#signin').waitFor({state:'visible'});assert.deepEqual(errors,[]);
  }finally{for(const item of held){await item.route.fulfill({contentType:'application/json',body:'{"rows":[]}'}).catch(()=>{});item.resolve();}await context.close();}
 });
@@ -255,12 +255,12 @@ test('a handler authentication response keeps the actual tab open and scopes a f
  const context=await browser.newContext({viewport:{width:1440,height:1000}}),page=await context.newPage();
  await context.route('https://avis.land/**',route=>route.fulfill({status:401,contentType:'application/json',body:'{"message":"Sign in"}'}));
  try{
-  await page.goto(base+'/admin#payments');const management=page.locator('[data-ip-admin-management]');await management.waitFor();
-  const [tab]=await Promise.all([context.waitForEvent('page'),management.click()]);await tab.waitForURL(url=>url.origin==='https://avis.land'&&url.pathname==='/admin/bank/quantum/direct-transfer');await tab.waitForLoadState();
+  await page.goto(base+'/admin#payments');const management=page.locator('[data-ip-admin-receiver]');await management.waitFor();
+  const [tab]=await Promise.all([context.waitForEvent('page'),management.click()]);await tab.waitForURL(url=>url.origin==='https://avis.land'&&url.pathname==='/admin/bank/quantum/direct-transfer/entry');await tab.waitForLoadState();
   assert.equal(await tab.evaluate(()=>window.opener===null),true);await management.click();
   assert.equal(await management.getAttribute('data-state'),'ACTIVE');assert.equal(await management.getAttribute('aria-busy'),'true');
-  await page.waitForFunction(()=>document.querySelector('[data-ip-admin-management]')?.getAttribute('aria-busy')==='false',{},{timeout:6500});
-  assert.equal(tab.isClosed(),false);assert.equal(await management.getAttribute('data-state'),'ACTIVE');assert.match(await page.locator('[data-ip-admin-management-error]').textContent(),/Could not close/);assert.equal(await page.locator('[data-ip-admin-access-error]').textContent(),'');
-  await tab.close();await page.waitForFunction(()=>document.querySelector('[data-ip-admin-management]')?.dataset.state==='CLOSED');assert.equal(await page.locator('[data-ip-admin-management-error]').textContent(),'');
+  await page.waitForFunction(()=>document.querySelector('[data-ip-admin-receiver]')?.getAttribute('aria-busy')==='false',{},{timeout:6500});
+  assert.equal(tab.isClosed(),false);assert.equal(await management.getAttribute('data-state'),'ACTIVE');assert.match(await page.locator('[data-ip-admin-receiver-error]').textContent(),/Could not close/);assert.equal(await page.locator('[data-ip-admin-access-error]').textContent(),'');
+  await tab.close();await page.waitForFunction(()=>document.querySelector('[data-ip-admin-receiver]')?.dataset.state==='CLOSED');assert.equal(await page.locator('[data-ip-admin-receiver-error]').textContent(),'');
  }finally{await context.close();}
 });

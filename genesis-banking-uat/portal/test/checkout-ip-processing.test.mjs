@@ -18,7 +18,7 @@ const originalPdf=Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R
 const {privateKey,publicKey}=generateKeyPairSync('ed25519'),kid='ip-handler-test-key';
 const fetcher=async()=>Response.json({keys:[{...publicKey.export({format:'jwk'}),kid,alg:'Ed25519',use:'sig'}]});
 let pool,db,ip,common,nostro,abiq;
-const request=()=>({requestId:randomUUID(),checkoutKind:'MILESTONE',checkoutReference:'AVIS-TN-2026-02',title:'Payment processing',
+const request=()=>({requestId:randomUUID(),checkoutKind:'MILESTONE',checkoutReference:'AVIS-TN-'+randomUUID(),title:'Payment processing',
  source:'industrial',amount:'150.123456789012345678',currency:'EUR',bankName:'Sending Bank',ip:'192.0.2.14',
  authorized:'Bank operator',account:'SENDER-123',accountName:'Sender Holdings'});
 async function activeRequest(){const input=request();await ip.register(checkout,input);await ip.setActive(admin,{requestId:input.requestId,active:true,receivingAccountId:common,nostroCashAccountId:nostro.id});return input;}

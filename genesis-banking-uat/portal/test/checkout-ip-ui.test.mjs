@@ -55,7 +55,7 @@ test('an empty register does not fabricate request controls and handler links re
  try{
   bindCheckoutIp({root:dom.window.document});
   assert.equal(dom.window.document.querySelector('[data-ip-handler-open]'),null);assert.equal(dom.window.document.querySelectorAll('[data-ip-toggle]').length,0);
-  assert.equal(checkoutIpHandlerUrl(null),'https://avis.land/admin/bank/quantum/direct-transfer');
+  assert.equal(checkoutIpHandlerUrl(null),'https://avis.land/admin/bank/quantum/direct-transfer/entry');
   assert.equal(new URL(checkoutIpHandlerUrl(request())).searchParams.get('checkoutRequest'),id);
  }finally{dom.window.close();}
 });
@@ -86,8 +86,8 @@ function adminHarness({rows=[],activateRequest=async()=>{},open,cooperate=true}=
 
 test('permanent administrator switches render with no requests and no data fetch',()=>{
  const h=adminHarness();try{
-  assert.equal(h.doc.querySelectorAll('[data-ip-admin-controls] [role=switch]').length,3);assert.equal(h.doc.querySelectorAll('[data-checkout-ip]').length,0);
-  const access=h.doc.querySelector('[data-ip-admin-access]'),management=h.doc.querySelector('[data-ip-admin-management]');
+  assert.equal(h.doc.querySelectorAll('[data-ip-admin-controls] [role=switch]').length,2);assert.equal(h.doc.querySelectorAll('[data-checkout-ip]').length,0);
+  const access=h.doc.querySelector('[data-ip-admin-access]'),management=h.doc.querySelector('[data-ip-admin-receiver]');
   assert.equal(access.dataset.state,'CLOSED');assert.equal(access.getAttribute('aria-disabled'),'true');assert.equal(management.dataset.state,'CLOSED');assert.equal(management.disabled,false);assert.deepEqual(h.calls,[]);
   assert.equal(access.closest('.table-wrap'),null);assert.equal(management.closest('.table-wrap'),null);
  }finally{h.close();}
@@ -95,7 +95,7 @@ test('permanent administrator switches render with no requests and no data fetch
 
 test('IP sliders keep an explicit knob and accessible three-state status without visible state labels',()=>{
  const record=request(),h=adminHarness({rows:[record]});try{
-  const access=h.doc.querySelector('[data-ip-admin-access]'),management=h.doc.querySelector('[data-ip-admin-management]');
+  const access=h.doc.querySelector('[data-ip-admin-access]'),management=h.doc.querySelector('[data-ip-admin-receiver]');
   assert.equal(access.getAttribute('aria-description'),'Closed');h.select(id);
   assert.equal(access.getAttribute('aria-description'),'Waiting for bank approval');assert.equal(access.getAttribute('aria-checked'),'false');
   h.controller.update([{...record,status:'ACTIVE'}]);assert.equal(h.doc.querySelector('[data-ip-admin-request]').value,id);
@@ -104,12 +104,12 @@ test('IP sliders keep an explicit knob and accessible three-state status without
   for(const button of [access,h.doc.querySelector('[data-ip-toggle]')]){
    assert.equal(button.dataset.state,'CLOSED');assert.equal(button.getAttribute('aria-description'),'Closed');assert.equal(button.getAttribute('aria-disabled'),'true');
   }
-  management.click();assert.equal(management.getAttribute('aria-description'),'Management tab open');
-  for(const button of h.doc.querySelectorAll('[data-ip-admin-access],[data-ip-admin-management],[data-ip-toggle]')){
+  management.click();assert.equal(management.getAttribute('aria-description'),'Sender desk open');
+  for(const button of h.doc.querySelectorAll('[data-ip-admin-access],[data-ip-admin-receiver],[data-ip-toggle]')){
    assert.equal(button.tagName,'BUTTON');assert.equal(button.type,'button');assert.equal(button.classList.contains('ip-liquid-slider'),true);
    assert.equal(button.querySelectorAll(':scope > .pos-liquid-knob[aria-hidden=true]').length,1);assert.equal(button.textContent,'');
   }
-  assert.equal(h.doc.querySelectorAll('.pos-activation-label,[data-ip-admin-access-state],[data-ip-admin-management-state]').length,0);
+  assert.equal(h.doc.querySelectorAll('.pos-activation-label,[data-ip-admin-access-state],[data-ip-admin-receiver-state]').length,0);
  }finally{h.close();}
 });
 
@@ -155,7 +155,7 @@ test('pending approval prevents duplicate activation and cannot redirect its res
 
 test('management owns a real tab independently, removes its opener before navigation and detects manual close',()=>{
  const h=adminHarness({rows:[request()]});try{
-  h.select(id);const management=h.doc.querySelector('[data-ip-admin-management]');management.click();
+  h.select(id);const management=h.doc.querySelector('[data-ip-admin-receiver]');management.click();
   assert.equal(h.calls[0][0],'about:blank');assert.equal(h.calls[0].length,2);assert.match(h.calls[0][1],/^avis-ip-management-/);assert.equal(h.tabs[0].opener,null);
   const opened=new URL(h.tabs[0].events[0]);assert.equal(opened.origin+opened.pathname,checkoutIpHandlerUrl(null));assert.match(new URLSearchParams(opened.hash.slice(1)).get('managementToken'),/^[a-f0-9-]{36}$/i);
   assert.equal(management.dataset.state,'ACTIVE');assert.equal(h.doc.querySelector('[data-ip-admin-access]').dataset.state,'REQUESTED');
@@ -167,19 +167,19 @@ test('management owns a real tab independently, removes its opener before naviga
 test('management close waits for its bound channel and never paints a still-open tab red',t=>{
  let now=Date.now();t.mock.method(Date,'now',()=>now);
  const h=adminHarness({cooperate:false});try{
-  const management=h.doc.querySelector('[data-ip-admin-management]');management.click();management.click();
+  const management=h.doc.querySelector('[data-ip-admin-receiver]');management.click();management.click();
   assert.equal(h.tabs[0].closed,false);assert.equal(management.dataset.state,'ACTIVE');assert.equal(management.disabled,true);
   const first=h.tabs[0].messages[0];first.ports[0].postMessage({type:'avis-ip-management-ready',token:'wrong-token'});
   assert.equal(h.tabs[0].closed,false);assert.equal(management.dataset.state,'ACTIVE');
   now+=5001;for(const poll of [...h.timers.values()])poll();
-  assert.equal(management.disabled,false);assert.equal(management.dataset.state,'ACTIVE');assert.match(h.doc.querySelector('[data-ip-admin-management-error]').textContent,/Could not close/);assert.equal(h.doc.querySelector('[data-ip-admin-access-error]').textContent,'');
-  h.tabs[0].closed=true;for(const poll of [...h.timers.values()])poll();assert.equal(management.dataset.state,'CLOSED');assert.equal(h.doc.querySelector('[data-ip-admin-management-error]').textContent,'');assert.equal(h.timers.size,0);
+  assert.equal(management.disabled,false);assert.equal(management.dataset.state,'ACTIVE');assert.match(h.doc.querySelector('[data-ip-admin-receiver-error]').textContent,/Could not close/);assert.equal(h.doc.querySelector('[data-ip-admin-access-error]').textContent,'');
+  h.tabs[0].closed=true;for(const poll of [...h.timers.values()])poll();assert.equal(management.dataset.state,'CLOSED');assert.equal(h.doc.querySelector('[data-ip-admin-receiver-error]').textContent,'');assert.equal(h.timers.size,0);
  }finally{h.close();}
 });
 
 test('a delayed first ready acknowledgement remains valid and closes only its own tab after cleanup',()=>{
  const h=adminHarness({cooperate:false});try{
-  const management=h.doc.querySelector('[data-ip-admin-management]');management.click();
+  const management=h.doc.querySelector('[data-ip-admin-receiver]');management.click();
   for(let attempt=0;attempt<3;attempt++)for(const poll of [...h.timers.values()])poll();
   const previous=h.tabs[0],first=previous.messages[0],token=first.data.token;h.controller.close();management.click();
   const current=h.tabs[1];first.ports[0].onmessage=({data})=>{if(data.type==='avis-ip-management-close'&&data.token===token)previous.closed=true;};
@@ -193,7 +193,7 @@ test('a refreshed handler rebinds its channel even when the previous disconnect 
  let now=Date.now();t.mock.method(Date,'now',()=>now);
  for(const disconnectDelivered of [true,false]){
   const h=adminHarness({cooperate:false});try{
-   const management=h.doc.querySelector('[data-ip-admin-management]');management.click();for(const poll of [...h.timers.values()])poll();
+   const management=h.doc.querySelector('[data-ip-admin-receiver]');management.click();for(const poll of [...h.timers.values()])poll();
    const tab=h.tabs[0],first=tab.messages[0],token=first.data.token;first.ports[0].postMessage({type:'avis-ip-management-ready',token});
    if(disconnectDelivered)first.ports[0].postMessage({type:'avis-ip-management-disconnect',token});
    else first.ports[0].close();
@@ -209,15 +209,15 @@ test('a refreshed handler rebinds its channel even when the previous disconnect 
 test('blocked and unsafe management tabs remain red with errors confined to the clicked control',()=>{
  for(const open of [()=>null,()=>({closed:false,get opener(){return {};},set opener(value){},location:{replace(){throw Error('must not navigate');}},close(){this.closed=true;}})]){
   const h=adminHarness({open});try{
-   h.doc.querySelector('[data-ip-admin-management]').click();assert.equal(h.doc.querySelector('[data-ip-admin-management]').dataset.state,'CLOSED');assert.notEqual(h.doc.querySelector('[data-ip-admin-management-error]').textContent,'');assert.equal(h.doc.querySelector('[data-ip-admin-access-error]').textContent,'');assert.equal(h.timers.size,0);
+   h.doc.querySelector('[data-ip-admin-receiver]').click();assert.equal(h.doc.querySelector('[data-ip-admin-receiver]').dataset.state,'CLOSED');assert.notEqual(h.doc.querySelector('[data-ip-admin-receiver-error]').textContent,'');assert.equal(h.doc.querySelector('[data-ip-admin-access-error]').textContent,'');assert.equal(h.timers.size,0);
   }finally{h.close();}
  }
 });
 
 test('session cleanup resets request selection, closes the owned tab and ignores late action failure',async()=>{
  let reject;const h=adminHarness({rows:[request()],activateRequest:()=>new Promise((resolve,no)=>reject=no)});try{
-  h.select(id);h.doc.querySelector('[data-ip-admin-management]').click();h.doc.querySelector('[data-ip-admin-access]').click();h.controller.close();
-  assert.equal(h.tabs[0].closed,true);assert.equal(h.timers.size,0);assert.equal(h.doc.querySelector('[data-ip-admin-request]').value,'');assert.equal(h.doc.querySelector('[data-ip-admin-management]').dataset.state,'CLOSED');
+  h.select(id);h.doc.querySelector('[data-ip-admin-receiver]').click();h.doc.querySelector('[data-ip-admin-access]').click();h.controller.close();
+  assert.equal(h.tabs[0].closed,true);assert.equal(h.timers.size,0);assert.equal(h.doc.querySelector('[data-ip-admin-request]').value,'');assert.equal(h.doc.querySelector('[data-ip-admin-receiver]').dataset.state,'CLOSED');
   reject(Error('Late previous-session response'));await settle();assert.equal(h.doc.querySelector('[data-ip-admin-access-error]').textContent,'');assert.equal(h.doc.querySelector('[data-ip-admin-access]').dataset.state,'CLOSED');
  }finally{h.close();}
 });
@@ -345,7 +345,7 @@ test('sender desk opens independently of approval, binding only an approved chec
    const url=new URL(h.tabs[0].events[0]);
    assert.equal(url.searchParams.get('view'),'sender-access');
    assert.equal(url.searchParams.get('checkoutRequest'),status==='ACTIVE'?id:null);
-   assert.equal(control.dataset.state,'ACTIVE');assert.equal(h.doc.querySelector('[data-ip-admin-management]').dataset.state,'CLOSED');
+   assert.equal(control.dataset.state,'ACTIVE');assert.equal(h.doc.querySelector('[data-ip-admin-management]'),null);
    for(const poll of h.timers.values())poll();
    control.click();assert.equal(h.tabs[0].closed,true);assert.equal(control.dataset.state,'CLOSED');
   }finally{h.close()}
