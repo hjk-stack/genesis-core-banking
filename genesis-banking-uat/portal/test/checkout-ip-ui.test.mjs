@@ -223,8 +223,8 @@ test('pending IP switches close at their deadline even if network polling is del
  try{
   const doc=dom.window.document;expireCheckoutIpControls(doc,Date.parse(row.expiresAt));
   assert.equal(doc.querySelector('[data-ip-toggle]').dataset.state,'CLOSED');
-  assert.equal(doc.querySelector('[data-ip-toggle]').getAttribute('aria-disabled'),'true');
-  assert.equal(doc.querySelector('[data-ip-account]').disabled,true);
+  assert.equal(doc.querySelector('[data-ip-toggle]').getAttribute('aria-disabled'),null);
+  assert.equal(doc.querySelector('[data-ip-account]').disabled,false);
   assert.equal(doc.querySelector('[data-ip-pending]').textContent,'0 awaiting activation');
  }finally{dom.window.close();}
 });
@@ -285,4 +285,15 @@ test('sender desk opens independently of recorded checkouts',()=>{
    control.click();assert.equal(h.tabs[0].closed,true);assert.equal(control.dataset.state,'CLOSED');
   }finally{h.close()}
  }
+});
+
+test('a closed row submits one manual retry with the saved identity and routing',async()=>{
+ const record=request({status:'CLOSED',closedAt:new Date().toISOString(),receivingAccountId:'common'}),dom=domFor([record]),calls=[];
+ try{
+  const doc=dom.window.document;
+  bindCheckoutIp({root:doc,requests:[record],nostros,activate:async input=>calls.push(input),onChange:()=>{}});
+  const toggle=doc.querySelector('[data-ip-toggle]');
+  toggle.click();toggle.click();await settle();
+  assert.deepEqual(calls,[{requestId:id,active:true,retryClosedAt:record.closedAt,receivingAccountId:'common',nostroCashAccountId:null,intermediaryId:null}]);
+ }finally{dom.window.close();}
 });
