@@ -206,15 +206,15 @@ test('IP handler opens an ordinary tab and activation remains an explicit routed
  }finally{await page.close();}
 });
 
-test('expired IP requests return the same selected slider to red without label errors or another activation',async()=>{
+test('expired IP requests stay closed until the operator manually retries the same row',async()=>{
  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',error=>errors.push(error.message));
  try{
   await page.goto(base);const row=page.locator('[data-checkout-ip="'+id+'"]');const access=row.locator('[data-ip-toggle]');await row.waitFor();
   await row.locator('[data-ip-account]').selectOption('common');await assertIpSlider(access,'REQUESTED');
   await page.evaluate(()=>window.fixtureExpireRequests());await assertIpSlider(access,'CLOSED');await assertIpSlider(row.locator('[data-ip-toggle]'),'CLOSED');
-  assert.equal(await access.getAttribute('aria-description'),'Closed');assert.equal(await access.getAttribute('aria-disabled'),'true');
-  await access.focus();await page.keyboard.press('Enter');await row.locator('[data-ip-toggle]').focus();await page.keyboard.press('Space');
-  assert.deepEqual(await page.evaluate(()=>window.fixtureActivations),[]);assert.deepEqual(errors,[]);
+  assert.equal(await access.getAttribute('aria-description'),'Closed');assert.equal(await access.getAttribute('aria-disabled'),null);
+  await access.focus();await page.keyboard.press('Enter');
+  assert.equal((await page.evaluate(()=>window.fixtureActivations))[0].requestId,id);assert.deepEqual(errors,[]);
  }finally{await page.close();}
 });
 
