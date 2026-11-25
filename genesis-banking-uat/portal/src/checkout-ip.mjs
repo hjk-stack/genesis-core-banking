@@ -1,6 +1,7 @@
 import {randomUUID,createHash} from 'node:crypto';
 import {isIP} from 'node:net';
 import {fault,text,money} from './core.mjs';
+import {RECEIVING_OWNERS} from './checkout-ip-settlement.mjs';
 import {CheckoutIpProcessing} from './checkout-ip-processing.mjs';
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
 const amount=value=>{money(value);return value;};
@@ -144,14 +145,45 @@ export class CheckoutIpControl{
  async processing(actor,input){return this.processingControl.publish(actor,input);}
  async claim(actor,input){return this.processingControl.claim(actor,input);}
  async proof(actor,requestId){return this.processingControl.proof(actor,requestId);}
- async accounts(actor){
-  if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403);
+ async receivingAccounts(actor){
+  if(!actor?.ipHandlerService||!actor.id||actor.customerUserId)fault('FORBIDDEN',null,403);
+  const rows=await this.backofficeReceivingAccounts();
+  return {accounts:rows.map(row=>({accountId:row.account_id,accountType:row.owner_type,currency:row.currency_code,abiqIban:row.abiq_iban,label:row.label}))};
+ }
+ async selectReceivingAccount(actor,input){
+  if(!actor?.ipHandlerService||!actor.id||actor.customerUserId)fault('FORBIDDEN',null,403);
+  if(!uuid(input?.requestId)||!uuid(input.receivingAccountId)||input.expectedReceivingAccountId!==null&&!uuid(input.expectedReceivingAccountId))fault('INVALID_FIELD','receivingAccountId');
+  return this.withTransaction(async db=>{
+   const row=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_requests WHERE request_id=$1 FOR UPDATE',[input.requestId])).rows[0];
+   if(!row||row.status!=='ACTIVE'||row.superseded_by)fault('CHECKOUT_IP_STATE','requestId',409);
+   const selected=(await db.query(`SELECT a.account_id FROM avis_core_v2.ledger_accounts a
+    JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id AND b.status='ACTIVE'
+    WHERE a.account_id=$1 AND a.currency_code=$2 AND a.owner_type=ANY($3::text[]) AND a.account_category='LIABILITY'
+     AND a.wallet_scope='FUNDING' AND a.network IS NULL FOR SHARE OF a`,[input.receivingAccountId,row.currency_code,RECEIVING_OWNERS])).rows[0];
+   if(!selected)fault('CHECKOUT_IP_ACCOUNT','receivingAccountId',409);
+   if(row.receiving_account_id===selected.account_id)return {receivingAccountId:selected.account_id};
+   if((row.receiving_account_id||null)!==input.expectedReceivingAccountId)fault('CHECKOUT_IP_ACCOUNT_CHANGED','receivingAccountId',409);
+   const locked=await db.query(`SELECT request_id FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=$1
+    UNION ALL SELECT request_id FROM avis_core_v2.checkout_ip_processing WHERE request_id=$1 AND (operation_completed OR handler_status<>'DRAFT')
+    UNION ALL SELECT request_id FROM avis_core_v2.checkout_ip_settlements WHERE request_id=$1`,[row.request_id]);
+   if(locked.rows.length)fault('CHECKOUT_IP_PROCESSING','receivingAccountId',409);
+   await db.query('UPDATE avis_core_v2.checkout_ip_requests SET receiving_account_id=$2,updated_at=now() WHERE request_id=$1',[row.request_id,selected.account_id]);
+   await db.query("INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,'CHECKOUT_IP_RECEIVING_ACCOUNT_SELECTED',$2)",[actor.id,row.request_id]);
+   return {receivingAccountId:selected.account_id};
+  });
+ }
+ async backofficeReceivingAccounts(){
   return (await this.pool.query(`SELECT a.account_id,a.owner_type,a.currency_code,b.abiq_iban,
+    COALESCE(a.display_name,CASE WHEN a.owner_type='COMMON_POOL' THEN 'Common Account' ELSE 'Suspense Account' END) AS label,
     a.available_balance::text
     FROM avis_core_v2.ledger_accounts a JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id
     WHERE a.owner_type=ANY($1::text[]) AND b.status='ACTIVE' AND a.wallet_scope='FUNDING'
-    ORDER BY a.currency_code,a.owner_type,b.abiq_iban`,
-   [['COMMON_POOL','SUSPENSE_INBOUND','SUSPENSE_OUTBOUND','SUSPENSE_CARD_FX']])).rows;
+     AND a.account_category='LIABILITY' AND a.network IS NULL
+    ORDER BY a.currency_code,a.owner_type,b.abiq_iban`,[RECEIVING_OWNERS])).rows;
+ }
+ async accounts(actor){
+  if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403);
+  return this.backofficeReceivingAccounts();
  }
  async setActive(actor,input){
   if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403);

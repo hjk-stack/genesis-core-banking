@@ -304,6 +304,13 @@ test('HTTP handler feed and admin PDF download enforce sessions, scope and origi
   const contextPath='/api/services/checkout-ip/context',contextBody=Buffer.from(JSON.stringify({requestId:input.requestId}));
   const context=await post(contextPath,{requestId:input.requestId},token(contextPath,contextBody));assert.equal(context.status,200);
   assert.equal((await context.json()).request.processing.transactionReference,value.transactionReference);
+  const registryPath='/api/services/checkout-ip/receivingAccounts',registryBody=Buffer.from('{}');
+  assert.equal((await post(registryPath,{})).status,401);
+  const response=await post(registryPath,{},token(registryPath,registryBody));
+  assert.equal(response.status,200);
+  const {accounts}=await response.json();
+  assert.ok(accounts.some(account=>account.accountId===claimBody.receivingAccountId));
+  assert.ok(accounts.every(a=>a.abiqIban&&['COMMON_POOL','SUSPENSE_INBOUND','SUSPENSE_OUTBOUND','SUSPENSE_CARD_FX'].includes(a.accountType)&&!Object.hasOwn(a,'available_balance')));
   const pathPdf='/api/checkout-ip/'+input.requestId+'/proof.pdf';
   assert.equal((await fetch(base+pathPdf)).status,401);
   const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:'ip-admin',password:'fixture'})});
@@ -322,4 +329,19 @@ test('HTTP handler feed and admin PDF download enforce sessions, scope and origi
   await pool.query('UPDATE avis_core_v2.operator_sessions SET workspace_user_id=1 WHERE actor_id=$1',[admin.id]);
   assert.equal((await fetch(base+pathPdf,{headers:{cookie}})).status,403,'customer workspace cannot read admin proof');
  }finally{await new Promise(resolve=>server.close(resolve))}
+});
+
+test('manual destination permits an active same-currency backoffice account and preserves the settlement claim',async()=>{
+ await new AccountManagement(pool).openAccount(admin,{accountType:'SUSPENSE',fullName:'Manual receiver',currencies:['EUR']},randomUUID());
+ const req=await activeRequest(),directory=await ip.receivingAccounts(handler);
+ const other=directory.accounts.find(a=>a.currency==='EUR'&&a.accountId!==common&&a.accountType.startsWith('SUSPENSE'));
+ assert.ok(other);
+ const selection={requestId:req.requestId,receivingAccountId:other.accountId,expectedReceivingAccountId:common};
+ await assert.rejects(ip.selectReceivingAccount(guest,selection));
+ await assert.rejects(ip.selectReceivingAccount(handler,{...selection,receivingAccountId:nostro.id}));
+ assert.equal((await ip.selectReceivingAccount(handler,selection)).receivingAccountId,other.accountId);
+ assert.equal((await ip.context(handler,{requestId:req.requestId})).routing.receivingAccountId,other.accountId);
+ await assert.rejects(ip.selectReceivingAccount(handler,{...selection,receivingAccountId:common}),/CHECKOUT_IP_ACCOUNT_CHANGED/);
+ await ip.claim(handler,await claimPayload(completed(req)));
+ await assert.rejects(ip.selectReceivingAccount(handler,{...selection,expectedReceivingAccountId:other.accountId,receivingAccountId:common}),/CHECKOUT_IP_PROCESSING/);
 });
