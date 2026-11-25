@@ -34,12 +34,12 @@ const fixtureScript=()=>{
  "const accounts=[{account_id:'common',owner_type:'COMMON_POOL',currency_code:'EUR',abiq_iban:'ABIQ-COMMON'}];",
  "const nostros=[{cash_account_id:'nostro',currency_code:'EUR',is_active:true,institution_name:'Nostro bank',iban_or_account_no:'NOSTRO-IBAN',intermediaries:[]}];",
  'const viewer=createCheckoutIpProof();',
- "window.fixtureActivations=[];const admin=createCheckoutIpAdminControls({activateRequest:async id=>{const row=[...document.querySelectorAll('[data-checkout-ip]')].find(row=>row.dataset.checkoutIp===id),button=row?.querySelector('[data-ip-toggle]');if(button&&!button.disabled)await button.onclick({currentTarget:button});}});",
+ "window.fixtureActivations=[];const admin=createCheckoutIpAdminControls();",
  "function bind(){bindCheckoutIp({root:document,requests:rows,nostros,activate:async input=>{window.fixtureActivations.push(input);rows=rows.map(row=>row.requestId===input.requestId?{...row,status:input.active?'ACTIVE':'CLOSED',receivingAccountId:input.receivingAccountId}:row);return {};},",
  "onChange:()=>{replaceCheckoutIpRegister(document.querySelector('[data-checkout-ip-register]'),rows,accounts,nostros);bind();},",
- "openHandler:record=>window.open(checkoutIpHandlerUrl(record),'_blank','noopener,noreferrer'),openProof:record=>viewer.open(record)});admin.update(rows);}",
+ "openHandler:record=>window.open(checkoutIpHandlerUrl(record),'_blank','noopener,noreferrer'),openProof:record=>viewer.open(record)});}",
  "document.querySelector('#mount').innerHTML=checkoutIpAdminControls()+checkoutIpRegister(rows,accounts,nostros);admin.bind(document);bind();",
- "window.fixtureExpireRequests=()=>{const deadline=Math.max(...rows.filter(row=>row.status==='REQUESTED').map(row=>Date.parse(row.expiresAt)));Date.now=()=>deadline;expireCheckoutIpControls(document,deadline);admin.expire(deadline);};"
+ "window.fixtureExpireRequests=()=>{const deadline=Math.max(...rows.filter(row=>row.status==='REQUESTED').map(row=>Date.parse(row.expiresAt)));Date.now=()=>deadline;expireCheckoutIpControls(document,deadline);};"
  ].join('\n');
 };
 async function assertIpSlider(control,state){
@@ -159,7 +159,7 @@ for(const width of [390,820,1440])test('IP register controls and proof popup sta
   await page.goto(base);await page.locator('[data-checkout-ip="'+id+'"]').waitFor();
   assert.equal(await page.locator('thead th').count(),12);assert.equal(await page.locator('[data-checkout-ip="'+id+'"] td').count(),12);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-  await assertIpSlider(page.locator('[data-ip-admin-access]'),'CLOSED');await assertIpSlider(page.locator('[data-checkout-ip="'+id+'"] [data-ip-toggle]'),'REQUESTED');await assertIpSlider(page.locator('[data-checkout-ip="'+completedId+'"] [data-ip-toggle]'),'ACTIVE');
+  await assertIpSlider(page.locator('[data-checkout-ip="'+id+'"] [data-ip-toggle]'),'REQUESTED');await assertIpSlider(page.locator('[data-checkout-ip="'+completedId+'"] [data-ip-toggle]'),'ACTIVE');
   assert.equal(await page.locator('.pos-activation-label,[data-ip-admin-access-state],[data-ip-admin-receiver-state]').count(),0);
   await page.screenshot({path:'test-results/checkout-ip-slider-'+width+'.png',fullPage:false});
   const wrap=page.locator('.table-wrap');await wrap.evaluate(el=>el.scrollLeft=el.scrollWidth);
@@ -189,15 +189,15 @@ test('IP handler opens an ordinary tab and activation remains an explicit routed
  try{
   await page.route('https://avis.land/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>Handler fixture</title><h1>IP-to-IP handler</h1>'}));
   await page.goto(base);const row=page.locator('[data-checkout-ip="'+id+'"]');await row.waitFor();
-  const access=page.locator('[data-ip-admin-access]');assert.equal(await access.getAttribute('data-state'),'CLOSED');assert.equal(await page.locator('[data-ip-admin-request]').inputValue(),'');
-  await assertIpSlider(access,'CLOSED');await captureIpSlider(page,access,'CLOSED');
-  await page.locator('[data-ip-admin-request]').selectOption(id);assert.equal(await access.getAttribute('data-state'),'REQUESTED');
+  const access=row.locator('[data-ip-toggle]');assert.equal(await page.locator('[data-ip-admin-request],[data-ip-admin-access]').count(),0);
+
+
   await assertIpSlider(access,'REQUESTED');await captureIpSlider(page,access,'REQUESTED');await access.focus();await page.keyboard.press('Enter');assert.equal(await row.locator('[data-ip-toggle]').getAttribute('data-state'),'REQUESTED');assert.equal(await row.locator('[data-ip-account]').evaluate(el=>el===document.activeElement),true);
   assert.deepEqual(await page.evaluate(()=>window.fixtureActivations),[]);
   await row.locator('[data-ip-account]').selectOption('common');await access.focus();await page.keyboard.press('Space');
   await page.locator('[data-checkout-ip="'+id+'"] [data-ip-toggle][data-state="ACTIVE"]').waitFor();
   assert.equal(await access.getAttribute('data-state'),'ACTIVE');assert.equal((await page.evaluate(()=>window.fixtureActivations)).length,1);
-  await assertIpSlider(access,'ACTIVE');await captureIpSlider(page,access,'ACTIVE');await assertIpSlider(row.locator('[data-ip-toggle]'),'ACTIVE');assert.equal(await page.locator('[data-ip-admin-request]').inputValue(),id);
+  await assertIpSlider(access,'ACTIVE');await captureIpSlider(page,access,'ACTIVE');await assertIpSlider(row.locator('[data-ip-toggle]'),'ACTIVE');
   const [tab]=await Promise.all([page.context().waitForEvent('page'),page.locator('[data-checkout-ip="'+id+'"] [data-ip-handler]').click()]);
   await tab.waitForLoadState();assert.equal(new URL(tab.url()).searchParams.get('checkoutRequest'),id);
   assert.equal(await page.locator('iframe').count(),0);await tab.close();await access.focus();await page.keyboard.press('Enter');
@@ -209,10 +209,10 @@ test('IP handler opens an ordinary tab and activation remains an explicit routed
 test('expired IP requests return the same selected slider to red without label errors or another activation',async()=>{
  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',error=>errors.push(error.message));
  try{
-  await page.goto(base);const access=page.locator('[data-ip-admin-access]'),row=page.locator('[data-checkout-ip="'+id+'"]');await row.waitFor();
-  await page.locator('[data-ip-admin-request]').selectOption(id);await row.locator('[data-ip-account]').selectOption('common');await assertIpSlider(access,'REQUESTED');
+  await page.goto(base);const row=page.locator('[data-checkout-ip="'+id+'"]');const access=row.locator('[data-ip-toggle]');await row.waitFor();
+  await row.locator('[data-ip-account]').selectOption('common');await assertIpSlider(access,'REQUESTED');
   await page.evaluate(()=>window.fixtureExpireRequests());await assertIpSlider(access,'CLOSED');await assertIpSlider(row.locator('[data-ip-toggle]'),'CLOSED');
-  assert.equal(await page.locator('[data-ip-admin-request]').inputValue(),id);assert.equal(await access.getAttribute('aria-description'),'Closed');assert.equal(await access.getAttribute('aria-disabled'),'true');
+  assert.equal(await access.getAttribute('aria-description'),'Closed');assert.equal(await access.getAttribute('aria-disabled'),'true');
   await access.focus();await page.keyboard.press('Enter');await row.locator('[data-ip-toggle]').focus();await page.keyboard.press('Space');
   assert.deepEqual(await page.evaluate(()=>window.fixtureActivations),[]);assert.deepEqual(errors,[]);
  }finally{await page.close();}
@@ -227,17 +227,17 @@ for(const [width,mode] of [[390,'empty'],[820,'empty'],[1440,'empty'],[820,'stal
  if(mode==='stalled')await page.route('**/api/views/checkoutip',route=>new Promise(resolve=>held.push({route,resolve})));
  if(mode==='failed')await page.route('**/api/views/checkoutip',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({message:'Could not read checkout requests.'})}));
  try{
-  await page.goto(base+'/admin#payments');const controls=page.locator('[data-ip-admin-controls]'),access=controls.locator('[data-ip-admin-access]'),management=controls.locator('[data-ip-admin-receiver]');await controls.waitFor();
+  await page.goto(base+'/admin#payments');const controls=page.locator('[data-ip-admin-controls]'),management=controls.locator('[data-ip-admin-receiver]');await controls.waitFor();
   if(mode==='empty')await page.locator('[data-checkout-ip-register]').waitFor();
   if(mode==='stalled')await page.waitForFunction(()=>document.querySelector('#panels')?.getAttribute('aria-busy')==='true');
   if(mode==='failed')await page.locator('#panels .panel-error').waitFor();
-  assert.equal(await controls.locator('[role=switch]').count(),2);assert.equal(await page.locator('[data-checkout-ip]').count(),0);assert.equal(await access.getAttribute('data-state'),'CLOSED');assert.equal(await access.getAttribute('aria-disabled'),'true');assert.equal(await management.getAttribute('data-state'),'CLOSED');assert.equal(await management.isEnabled(),true);
+  assert.equal(await controls.locator('[role=switch]').count(),1);assert.equal(await page.locator('[data-checkout-ip]').count(),0);assert.equal(await management.getAttribute('data-state'),'CLOSED');assert.equal(await management.isEnabled(),true);
   assert.equal(await controls.evaluate(el=>!!el.closest('.table-wrap')),false);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-  for(const control of [access,management,controls.locator('[data-ip-admin-request]')]){const box=await control.boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width+1,'administrator control stays inside viewport');}
-  await assertIpSlider(access,'CLOSED');await assertIpSlider(management,'CLOSED');assert.equal(await controls.locator('.pos-activation-label').count(),0);
+  for(const control of [management]){const box=await control.boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width+1,'administrator control stays inside viewport');}
+  await assertIpSlider(management,'CLOSED');assert.equal(await controls.locator('.pos-activation-label').count(),0);
   await page.screenshot({path:'test-results/checkout-ip-admin-'+mode+'-'+width+'.png',fullPage:false});
   const [tab]=await Promise.all([context.waitForEvent('page'),management.click()]);await tab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer/entry?view=sender-access');
-  assert.equal(await tab.evaluate(()=>window.opener===null),true);assert.equal(await management.getAttribute('data-state'),'ACTIVE');await assertIpSlider(management,'ACTIVE');assert.equal(await access.getAttribute('data-state'),'CLOSED');assert.deepEqual(writes,[]);
+  assert.equal(await tab.evaluate(()=>window.opener===null),true);assert.equal(await management.getAttribute('data-state'),'ACTIVE');await assertIpSlider(management,'ACTIVE');assert.deepEqual(writes,[]);
   await page.screenshot({path:'test-results/checkout-ip-admin-'+mode+'-management-'+width+'.png',fullPage:false});
   if(width===1440&&mode==='empty'){
    await tab.reload();await tab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer/entry?view=sender-access');
@@ -260,7 +260,7 @@ test('a handler authentication response keeps the actual tab open and scopes a f
   assert.equal(await tab.evaluate(()=>window.opener===null),true);await management.click();
   assert.equal(await management.getAttribute('data-state'),'ACTIVE');assert.equal(await management.getAttribute('aria-busy'),'true');
   await page.waitForFunction(()=>document.querySelector('[data-ip-admin-receiver]')?.getAttribute('aria-busy')==='false',{},{timeout:6500});
-  assert.equal(tab.isClosed(),false);assert.equal(await management.getAttribute('data-state'),'ACTIVE');assert.match(await page.locator('[data-ip-admin-receiver-error]').textContent(),/Could not close/);assert.equal(await page.locator('[data-ip-admin-access-error]').textContent(),'');
+  assert.equal(tab.isClosed(),false);assert.equal(await management.getAttribute('data-state'),'ACTIVE');assert.match(await page.locator('[data-ip-admin-receiver-error]').textContent(),/Could not close/);
   await tab.close();await page.waitForFunction(()=>document.querySelector('[data-ip-admin-receiver]')?.dataset.state==='CLOSED');assert.equal(await page.locator('[data-ip-admin-receiver-error]').textContent(),'');
  }finally{await context.close();}
 });
