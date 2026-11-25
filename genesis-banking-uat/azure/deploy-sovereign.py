@@ -745,6 +745,19 @@ def main():
             result = api(opener, base, '/api/views/' + view)
             if not isinstance(result.get('rows'), list):
                 raise RuntimeError('Authenticated banking read failed')
+        stage = 'read back reviewed checkout routing'
+        checkout_rows = api(opener, base, '/api/views/checkoutip')['rows']
+        # Report only the reviewed requests' presence and routing. The operational
+        # register is bounded; historical requests can eventually age out.
+        reviewed = {hashlib.md5(row['requestId'].encode(), usedforsecurity=False).hexdigest(): row
+                    for row in checkout_rows}
+        retained = reviewed.get('ae496ea3e5a0567ebd9bfbdcb1d875ed', {})
+        print('Checkout register readback: ' + json.dumps({
+            'superseded_request_visible': '5c702f13d32abe7a689aba986ce4b60d' in reviewed,
+            'retained_request_visible': bool(retained),
+            'retained_request_status': retained.get('status'),
+            'retained_nostro_assigned': bool(retained.get('nostroCashAccountId')),
+        }, sort_keys=True))
         stage = 'Web POS terminal activation registry verification'
         terminals = api(opener, base, '/api/views/terminals')['rows']
         web_pos = [terminal for terminal in terminals if terminal.get('terminal_type') == 'WEB_POS']
