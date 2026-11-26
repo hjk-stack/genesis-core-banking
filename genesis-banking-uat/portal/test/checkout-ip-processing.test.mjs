@@ -350,6 +350,7 @@ test('Payments and the IP handler share one optional NOSTRO choice without activ
  const req=request();await ip.register(checkout,req);
  const other=await new PaymentServer(pool).registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Other EUR bank',bic:'TESTDEFFXXX',accountNumber:'OTHER-EUR',currency:'EUR'},randomUUID());
  const usd=await new PaymentServer(pool).registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'USD bank',bic:'TESTUS33XXX',accountNumber:'OTHER-USD',currency:'USD'},randomUUID());
+ await pool.query('UPDATE avis_core_v2.external_cash_accounts SET is_active=false WHERE cash_account_id=$1',[other.id]);
  const before=await ledgerSnapshot(),choose=(actor,id,previous)=>ip.selectNostroAccount(actor,{requestId:req.requestId,nostroCashAccountId:id,expectedNostroCashAccountId:previous});
  await assert.rejects(choose(checkout,nostro.id,null),e=>e.code==='FORBIDDEN');
  await assert.rejects(choose(handler,usd.id,null),e=>e.code==='CHECKOUT_IP_ACCOUNT');
@@ -357,7 +358,10 @@ test('Payments and the IP handler share one optional NOSTRO choice without activ
  assert.equal((await ip.status(checkout,{requestId:req.requestId})).status,'REQUESTED');
  let context=await ip.context(handler,{requestId:req.requestId});
  assert.equal(context.routing.nostroCashAccountId,nostro.id);
- assert.ok(context.nostroAccounts.some(row=>row.cashAccountId===other.id));
+ assert.ok(context.registeredNostros.some(row=>row.cashAccountId===other.id&&!row.selectable));
+ assert.ok(!context.nostroAccounts.some(row=>row.cashAccountId===other.id));
+ await assert.rejects(choose(handler,other.id,nostro.id),e=>e.code==='CHECKOUT_IP_ACCOUNT');
+ await pool.query('UPDATE avis_core_v2.external_cash_accounts SET is_active=true WHERE cash_account_id=$1',[other.id]);
  assert.ok(context.nostroAccounts.every(row=>row.currency==='EUR'));
  await ip.setActive(admin,{requestId:req.requestId,active:true,receivingAccountId:common,nostroCashAccountId:nostro.id});
  await choose(handler,other.id,nostro.id);

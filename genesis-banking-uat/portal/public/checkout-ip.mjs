@@ -157,11 +157,11 @@ export function checkoutIpRegister(rows=[],accounts=[],nostros=[]){
  ['Checkout / Request','Sender / Bank','Sender Account','Payment','Currency','NOSTRO','Amount Cleared','Beneficiary name','Beneficiary Account','Franchise Payment','Operation Completed','Proof of Payment'].map(label=>'<th scope="col">'+label+'</th>').join('')+
  '</tr></thead><tbody>'+rows.map(r=>{
   const state=ipState(r),id=esc(r.requestId),processing=r.processing||{},eligible=accounts.filter(a=>a.currency_code===r.currency);
-  const banks=nostros.filter(n=>n.currency_code===r.currency&&n.is_active);
+  const banks=nostros.filter(n=>n.currency_code===r.currency);
   const deadline=Number.isFinite(Date.parse(r.expiresAt))?Date.parse(r.expiresAt):0;
   const recipientOptions=eligible.map(a=>'<option value="'+esc(a.account_id)+'" '+(a.account_id===r.receivingAccountId?'selected':'')+'>'+
    esc(a.owner_type?.startsWith('COMMON')?'Common':'Suspense')+' · '+esc(a.abiq_iban)+' · '+esc(a.currency_code)+'</option>').join('');
-  const bankOptions=banks.map(n=>'<option value="'+esc(n.cash_account_id)+'" '+(n.cash_account_id===r.nostroCashAccountId?'selected':'')+'>'+
+  const bankOptions=banks.map(n=>'<option value="'+esc(n.cash_account_id)+'" '+(n.is_active?'':'disabled ')+(n.cash_account_id===r.nostroCashAccountId?'selected':'')+'>'+
    esc(n.currency_code)+' · '+esc(n.institution_name)+' · '+esc(n.iban_or_account_no)+'</option>').join('');
   const selectedBank=banks.find(b=>b.cash_account_id===r.nostroCashAccountId);
   const intermediateRows=Array.isArray(selectedBank?.intermediaries)?selectedBank.intermediaries:[];

@@ -300,12 +300,14 @@ test('a closed row submits one manual retry with the saved identity and routing'
 
 test('an active payment row saves the chosen NOSTRO immediately and accepts subsequent handler changes',async()=>{
  const record=request({status:'ACTIVE',receivingAccountId:'common',nostroCashAccountId:'bank-a',processing:null});
- const dom=domFor([record]),doc=dom.window.document,writes=[];
+ const registered=[{...nostros[0],is_active:false},nostros[1],{...nostros[0],cash_account_id:'usd',currency_code:'USD'}];
+ const dom=new JSDOM('<body>'+checkoutIpRegister([record],accounts,registered)+'</body>'),doc=dom.window.document,writes=[];
  try{
   bindCheckoutIp({root:doc,requests:[record],nostros,selectNostro:async input=>{
    writes.push(input);return {nostroCashAccountId:input.nostroCashAccountId,intermediaryId:null};
   }});
   const bank=doc.querySelector('[data-ip-nostro]');
+  assert.deepEqual([...bank.options].map(o=>o.value),['','bank-a','bank-b']);assert.equal(bank.options[1].disabled,true);
   assert.equal(bank.disabled,false);bank.value='bank-b';bank.dispatchEvent(new dom.window.Event('change'));await settle();
   assert.deepEqual(writes,[{requestId:id,nostroCashAccountId:'bank-b',expectedNostroCashAccountId:'bank-a'}]);
   assert.equal(doc.querySelector('[data-ip-account]').value,'common');

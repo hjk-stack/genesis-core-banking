@@ -152,7 +152,7 @@ export class CheckoutIpControl{
  async receivingAccounts(actor,input={}){
   if(!actor?.ipHandlerService||!actor.id||actor.customerUserId)fault('FORBIDDEN',null,403);
   const rows=await this.backofficeReceivingAccounts();
-  const directory=input.includeNostros===true?{nostroAccounts:await this.processingControl.nostroAccounts(this.pool)}:{};
+  const directory=input.includeNostros===true?await this.processingControl.nostroDirectory(this.pool):{};
   return {...directory,accounts:rows.map(row=>({accountId:row.account_id,accountType:row.owner_type,currency:row.currency_code,abiqIban:row.abiq_iban,label:row.label}))};
  }
  async selectNostroAccount(actor,input){
