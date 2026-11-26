@@ -186,3 +186,15 @@ test('the reviewed closed duplicate leaves only the register and keeps its histo
  await archive();
  assert.ok((await visible()).has(older.requestId),'an explicitly reopened request returns to the register');
 });
+
+test('ordering accounts resolve registered internal holders and expose only account identity',async()=>{
+ const handler={id:'handler-directory',ipHandlerService:true};
+ await assert.rejects(ip.receivingAccounts(guest,{includeOrderingAccounts:true}),e=>e.code==='FORBIDDEN');
+ assert.equal((await ip.receivingAccounts(handler)).orderingAccounts,undefined);
+ const {orderingAccounts}=await ip.receivingAccounts(handler,{includeOrderingAccounts:true});
+ const source=orderingAccounts.find(a=>a.id===accounts.common);
+ assert.ok(source?.holderName);assert.ok(source.number);assert.ok(source.bankName);assert.ok(source.bic);
+ assert.deepEqual(Object.keys(source).sort(),['id','number','currency','holderName','bankName','bic'].sort());
+ assert.deepEqual((await ip.receivingAccounts(handler,{orderingAccountId:source.id})).orderingAccounts,[source]);
+ assert.deepEqual((await ip.receivingAccounts(handler,{orderingAccountId:id()})).orderingAccounts,[]);
+});
