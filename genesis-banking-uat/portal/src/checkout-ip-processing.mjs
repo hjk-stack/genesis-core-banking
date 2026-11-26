@@ -89,10 +89,10 @@ export class CheckoutIpProcessing{
    FROM avis_core_v2.external_cash_accounts c LEFT JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.ledger_account_id
    WHERE $1::text IS NULL OR c.currency_code=$1
    ORDER BY c.institution_name,c.iban_or_account_no,c.cash_account_id`,[currency])).rows
-   .map(c=>({cashAccountId:c.cash_account_id,accountNumber:c.iban_or_account_no,currency:c.currency_code,bankName:c.institution_name,selectable:c.selectable===true,
+   .map(c=>({cashAccountId:c.cash_account_id,accountNumber:c.iban_or_account_no,currency:c.currency_code,bankName:c.institution_name,...(c.selectable===true?{}:{selectable:false}),
     receiverClearing:{receiverBankName:c.institution_name,receiverBankAddress:c.bank_address||'',receiverAccountHolder:c.account_name||'',
      receiverIban:c.iban_or_account_no,receiverBic:c.bic_code||'',receiverSortCode:c.aba||'',receiverCountry:'',receiverBankCode:''}}));
-  const nostroAccounts=registered.filter(bank=>bank.selectable);
+  const nostroAccounts=registered.filter(bank=>bank.selectable!==false);
   return nostroAccounts.length===registered.length?{nostroAccounts}:{nostroAccounts,registeredNostros:registered};
  }
  async context(actor,input){
