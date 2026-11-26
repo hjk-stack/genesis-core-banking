@@ -12,6 +12,7 @@ import {TradingRobotCore,ROBOT_MESSAGES} from './src/trading-robot.mjs';
 import {TradingRuntime,engineStatus} from './src/trading/runtime.mjs';
 import {IndexServiceAuthenticator} from './src/index-service-auth.mjs';
 import {CheckoutPosAuthenticator,CheckoutIpHandlerAuthenticator} from './src/checkout-pos-auth.mjs';
+import {registerHandlerDraft,handlerDraftPdf} from './src/ip-handler-drafts.mjs';
 import {IP_PROOF_MAX_BYTES} from './src/checkout-ip-processing.mjs';
 import {CheckoutPosControl} from './src/checkout-pos.mjs';
 import {CheckoutIpControl} from './src/checkout-ip.mjs';
@@ -195,15 +196,16 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     if(!value||typeof value!=='object'||Array.isArray(value))fault('INVALID_FIELD',null,400);
     return send(res,200,await ipControl[ipService[1]](service,value));
    }
-   const ipHandler=/^\/api\/services\/checkout-ip\/(context|processing|claim|receivingAccounts|selectReceivingAccount|selectNostroAccount)$/.exec(path);
+   const ipHandler=/^\/api\/services\/checkout-ip\/(registerDraft|context|processing|claim|receivingAccounts|selectReceivingAccount|selectNostroAccount)$/.exec(path);
    if(ipHandler){
     if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
     if(!req.headers['content-type']?.startsWith('application/json'))fault('INVALID_FIELD',null,415);
-    const limit=ipHandler[1]==='processing'?Math.ceil(IP_PROOF_MAX_BYTES/3)*4+16384:8192;
+    const limit=['registerDraft','processing'].includes(ipHandler[1])?Math.ceil(IP_PROOF_MAX_BYTES/3)*4+16384:8192;
     const parts=[];let length=0;for await(const chunk of req){length+=chunk.length;if(length>limit)fault('INVALID_FIELD',null,413);parts.push(chunk);}
     const raw=Buffer.concat(parts),service=await ipHandlerAuth.authenticate(req,raw);
     let input;try{input=JSON.parse(raw.toString('utf8'));}catch{fault('INVALID_FIELD',null,400);}
     if(!input||typeof input!=='object'||Array.isArray(input))fault('INVALID_FIELD',null,400);
+    if(ipHandler[1]==='registerDraft')return send(res,200,await registerHandlerDraft(pool,service,input));
     return send(res,200,await ipControl[ipHandler[1]](service,input));
    }
    if(req.method==='GET'&&path==='/readyz'){await pool.query('SELECT 1');return send(res,200,{status:'ready',release});}
@@ -247,6 +249,10 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const receipt=await core.receive(p.profile_id,raw.toString('utf8')),original=await readIso20022(raw.toString('utf8'));
     const reply=await buildPacs002({messageId:randomBytes(16).toString('hex'),uetr:original.uetr,senderBic:p.local_bic,receiverBic:p.peer_bic,status:receipt.status,bankReference:receipt.id.replaceAll('-','')});
     res.setHeader('content-type','application/xml');return res.end(reply);
+   }
+   if(req.method==='GET'&&['/pdf.min.mjs','/pdf.worker.min.mjs'].includes(path)){
+    const script=await readFile(new URL('./node_modules/pdfjs-dist/build'+path,import.meta.url));
+    res.writeHead(200,{'content-type':'text/javascript; charset=utf-8','cache-control':'private, max-age=3600'});return res.end(script);
    }
    if(req.method==='GET'&&['/','/card-message','/app.mjs','/open-account-register.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/nostro-clearing.mjs','/checkout-ip.mjs','/nostro-clearing.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
     const file=path==='/'?'index.html':path==='/card-message'?'public/card-message.html':'public'+path;
@@ -307,13 +313,14 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
      ?nostroStatements.read(actor,{...input,statementId:nostroStatement[2]})
      :nostroStatements.list(actor,input)));
    }
+   const draftPdf=/^\/api\/ip-handler-drafts\/([0-9a-f-]{36})\/copy\.pdf$/i.exec(path);
    const ipProof=/^\/api\/checkout-ip\/([0-9a-f-]{36})\/proof\.pdf$/i.exec(path);
-   if(ipProof&&req.method==='GET'){
-    const proof=await ipControl.proof(actor,ipProof[1]);
+   if((draftPdf||ipProof)&&req.method==='GET'){
+    const proof=draftPdf?await handlerDraftPdf(pool,actor,draftPdf[1]):await ipControl.proof(actor,ipProof[1]);
     res.setHeader('Content-Security-Policy',"default-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'");
     res.writeHead(200,{'content-type':'application/pdf','content-length':proof.bytes.length,
      'content-disposition':(url.searchParams.get('download')==='1'?'attachment':'inline')+'; filename="'+proof.fileName+'"',
-     'cache-control':'private, no-store','x-content-sha256':proof.sha256});
+     'cache-control':'private, no-store','x-content-sha256':proof.sha256||digest(proof.bytes)});
     return res.end(proof.bytes);
    }
    if(path==='/api/session'&&req.method==='GET'){

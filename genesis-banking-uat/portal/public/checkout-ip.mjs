@@ -262,25 +262,26 @@ export function bindCheckoutIp({root=document,requests=[],nostros=[],activate,se
 
 // One original PDF at a time; closing or changing workspace destroys its bytes and preview.
 export function createCheckoutIpProof({root=document,fetcher=(...args)=>fetch(...args),urlApi=URL,onUnauthorized=()=>{}}={}){
- let dialog=null,objectUrl=null,controller=null,generation=0,returnFocus=null,returnRequest=null,returnSelector=null;
+ let documentTask=null,dialog=null,objectUrl=null,controller=null,generation=0,returnFocus=null,returnRequest=null,returnSelector=null;
  const close=()=>{
-  generation++;controller?.abort();controller=null;
+  generation++;if(documentTask){void documentTask.destroy().catch(()=>{});documentTask=null;}controller?.abort();controller=null;
   if(dialog){dialog.close();dialog.remove();dialog=null;}
   if(objectUrl){urlApi.revokeObjectURL(objectUrl);objectUrl=null;}
   const replacement=returnRequest&&returnSelector?[...root.querySelectorAll('[data-checkout-ip]')].find(row=>row.dataset.checkoutIp===returnRequest)?.querySelector(returnSelector):null;
   const target=returnFocus?.isConnected?returnFocus:replacement;target?.focus({preventScroll:true});
   returnFocus=null;returnRequest=null;returnSelector=null;
  };
- async function open(record){
-  close();if(!record?.processing?.proof?.available)return;
+ async function open(record,draftNumber=''){
+  close();if(!draftNumber&&!record?.processing?.proof?.available)return;
   const serial=++generation;returnFocus=root.activeElement;returnRequest=returnFocus?.closest('[data-checkout-ip]')?.dataset.checkoutIp;
   returnSelector=controlSelectors.find(selector=>returnFocus?.matches(selector));controller=new AbortController();
   const own=root.createElement('dialog');dialog=own;own.className='ip-proof-dialog';own.setAttribute('aria-labelledby','ip-proof-title');own.dataset.ipProofDialog='';
-  own.innerHTML='<div class="dialog-heading ip-proof-handle"><div><h2 id="ip-proof-title">Proof of Payment</h2><p>'+esc(record.checkoutReference)+' · '+esc(record.processing.transactionReference)+'</p></div>'+
+  if(draftNumber)own.classList.add('ip-draft-reader');
+  own.innerHTML=draftNumber?'<div class="dialog-heading ip-proof-handle"><h2 id="ip-proof-title">'+esc(draftNumber)+'</h2><button type="button" class="close" aria-label="Close draft PDF">×</button></div><p data-ip-proof-loading>Opening PDF…</p><p class="form-error" data-ip-proof-error role="alert"></p><div class="ip-draft-pages"></div>':'<div class="dialog-heading ip-proof-handle"><div><h2 id="ip-proof-title">Proof of Payment</h2><p>'+esc(record.checkoutReference)+' · '+esc(record.processing.transactionReference)+'</p></div>'+
    '<button type="button" class="close" aria-label="Close proof of payment">×</button></div><div class="ip-proof-toolbar">'+
    '<button type="button" data-ip-print disabled>Print</button><a data-ip-download hidden>Download PDF</a></div>'+
    '<p data-ip-proof-loading>Loading payment proof…</p><p class="form-error" data-ip-proof-error role="alert"></p><iframe title="Original proof of payment PDF" hidden></iframe>';
-  root.body.append(own);own.oncancel=e=>{e.preventDefault();close();};own.querySelector('.close').onclick=close;own.showModal();
+  root.body.append(own);own.oncancel=e=>{e.preventDefault();close();};own.querySelector('.close').onclick=close;if(draftNumber)own.show();else own.showModal();
   const handle=own.querySelector('.ip-proof-handle'),win=root.defaultView;
   handle.onpointerdown=e=>{
    if(e.button!==0||e.target.closest('button'))return;
@@ -290,19 +291,35 @@ export function createCheckoutIpProof({root=document,fetcher=(...args)=>fetch(..
    handle.onpointerup=release;handle.onpointercancel=release;
   };
   const frame=own.querySelector('iframe'),print=own.querySelector('[data-ip-print]'),error=own.querySelector('[data-ip-proof-error]');
-  print.onclick=()=>{try{frame.contentWindow.focus();frame.contentWindow.print();}catch{error.textContent='Download the PDF to print it with your PDF reader.';}};
+  if(print)print.onclick=()=>{try{frame.contentWindow.focus();frame.contentWindow.print();}catch{error.textContent='Download the PDF to print it with your PDF reader.';}};
   try{
-   const response=await fetcher('/api/checkout-ip/'+encodeURIComponent(record.requestId)+'/proof.pdf',{credentials:'same-origin',cache:'no-store',signal:controller.signal});
+   const response=await fetcher(draftNumber?'/api/ip-handler-drafts/'+encodeURIComponent(record.requestId)+'/copy.pdf':'/api/checkout-ip/'+encodeURIComponent(record.requestId)+'/proof.pdf',{credentials:'same-origin',cache:'no-store',signal:controller.signal});
    if(serial!==generation)return;
    if(response.status===401){onUnauthorized();throw Error('Sign in to view this payment proof.');}
    if(!response.ok){let detail;try{detail=await response.json();}catch{}throw Error(detail?.message||'Could not load this payment proof. Try opening it again.');}
    if(response.headers.get('content-type')?.split(';')[0].trim()!=='application/pdf')throw Error('The payment proof response is not a PDF.');
    const blob=await response.blob();if(serial!==generation)return;
+   if(draftNumber){
+    const [pdfjs,bytes]=await Promise.all([import('/pdf.min.mjs'),blob.arrayBuffer()]);
+    if(serial!==generation)return;
+    pdfjs.GlobalWorkerOptions.workerSrc='/pdf.worker.min.mjs';
+    documentTask=pdfjs.getDocument({data:new Uint8Array(bytes),isEvalSupported:false});
+    const pdf=await documentTask.promise,pages=own.querySelector('.ip-draft-pages');
+    for(let i=1;i<=pdf.numPages;i++){
+     if(serial!==generation)return;
+     const page=await pdf.getPage(i);if(serial!==generation)return;
+     const viewport=page.getViewport({scale:1.5}),canvas=root.createElement('canvas');
+     canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);canvas.setAttribute('aria-label','Page '+i);
+     pages.append(canvas);await page.render({canvasContext:canvas.getContext('2d'),viewport}).promise;
+     own.querySelector('[data-ip-proof-loading]').hidden=true;
+    }
+    return;
+   }
    objectUrl=urlApi.createObjectURL(blob);
    const download=own.querySelector('[data-ip-download]');download.href=objectUrl;download.download=record.processing.proof.fileName||'payment-proof.pdf';download.hidden=false;
    frame.onload=()=>{if(serial===generation)print.disabled=false;};frame.src=objectUrl;frame.hidden=false;
    own.querySelector('[data-ip-proof-loading]').hidden=true;
   }catch(e){if(serial===generation&&e.name!=='AbortError'){own.querySelector('[data-ip-proof-loading]').hidden=true;error.textContent=e.message;}}
  }
- return {open,close};
+ return {open,close,openDraft:(id,number)=>open({requestId:id},number)};
 }

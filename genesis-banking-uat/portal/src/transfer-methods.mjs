@@ -326,7 +326,11 @@ export class TransferMethods extends PaymentRegister {
     const {sealed_delivery,instruction,message_content,...safe}=fields(r);return {...safe,beneficiary_name:instruction.receiverName,beneficiary_account:instruction.destinationLabel,payment_reference:instruction.reference};
    });
    const pickups=new Map((await this.pool.query('SELECT * FROM avis_core_v2.transfer_pickups')).rows.map(r=>[r.request_id,r]));
-   let rows=[...banks.map(r=>({...r,payment_method:'BANK'})),...assets].map(r=>({...r,pickup:pickups.get(r.request_id)?.actor_id||null})).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,300);
+   const drafts=view==='paymentregister'&&actor.admin?(await this.pool.query(`SELECT transfer_id AS request_id,saved_at AS created_at,
+    register_number AS payment_reference,beneficiary AS beneficiary_name,account_number AS beneficiary_account,
+    amount_text AS amount,currency_text AS currency_code,'IP-to-IP' AS payment_method,'DRAFT' AS status,'IP_HANDLER_DRAFT' AS record_type
+    FROM avis_core_v2.ip_handler_drafts ORDER BY saved_at DESC LIMIT 300`)).rows:[];
+   let rows=[...drafts,...banks.map(r=>({...r,payment_method:'BANK'})),...assets].map(r=>({...r,pickup:pickups.get(r.request_id)?.actor_id||null})).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,300);
    if(view==='transferalerts')rows=rows.filter(r=>r.status==='OUTGOING'||(r.status==='PROCESSING'&&r.delivery!=='ACKNOWLEDGED'));return rows;
   }
   return super.list(actor,view);
