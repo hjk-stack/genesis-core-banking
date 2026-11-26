@@ -81,7 +81,7 @@ export class CheckoutIpControl{
      if((await db.query('SELECT request_id FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=$1',[input.requestId])).rows.length)
       fault('CHECKOUT_IP_PROCESSING','requestId',409);
      const reopened=(await db.query(`UPDATE avis_core_v2.checkout_ip_requests
-      SET status='REQUESTED',requested_at=now(),expires_at=now()+interval '60 minutes',
+      SET status='REQUESTED',register_archived_at=NULL,requested_at=now(),expires_at=now()+interval '60 minutes',
        approved_at=NULL,closed_at=NULL,approved_by=NULL,receiving_account_id=NULL,
        nostro_cash_account_id=NULL,intermediary_id=NULL,updated_at=now()
       WHERE request_id=$1 RETURNING *`,[input.requestId])).rows[0];
@@ -137,7 +137,7 @@ export class CheckoutIpControl{
   if(!actor?.admin||actor.customerUserId)fault('FORBIDDEN',null,403);
   await this.expire();
   const rows=(await this.pool.query(`SELECT * FROM avis_core_v2.checkout_ip_requests
-   WHERE superseded_by IS NULL
+   WHERE superseded_by IS NULL AND register_archived_at IS NULL
    ORDER BY (status='REQUESTED') DESC,requested_at DESC LIMIT 300`)).rows;
   const reports=await this.processingControl.readReports(this.pool,rows.map(row=>row.request_id));
   return rows.map(row=>({...map(row),processing:reports.get(row.request_id)||null}));
@@ -256,7 +256,7 @@ export class CheckoutIpControl{
       closed_at=NULL WHERE request_id=$1`,[row.request_id]);
      await db.query("INSERT INTO avis_core_v2.checkout_ip_events(request_id,event_type,actor_id) VALUES($1,'REQUEST',$2)",[row.request_id,actor.id]);
     }
-    await db.query(`UPDATE avis_core_v2.checkout_ip_requests SET status='ACTIVE',approved_at=now(),approved_by=$2,
+    await db.query(`UPDATE avis_core_v2.checkout_ip_requests SET status='ACTIVE',register_archived_at=NULL,approved_at=now(),approved_by=$2,
      receiving_account_id=$3,nostro_cash_account_id=$4,intermediary_id=$5,updated_at=now() WHERE request_id=$1`,
      [row.request_id,actor.id,account.account_id,nostro?.cash_account_id||null,intermediary?.intermediary_id||null]);
    }else{

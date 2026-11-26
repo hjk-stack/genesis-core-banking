@@ -272,14 +272,15 @@ test('proof errors remain in their popup and unauthorized access invokes session
  }finally{h.viewer.close();h.dom.window.close();}
 });
 
-test('sender desk opens independently of recorded checkouts',()=>{
- for(const status of ['REQUESTED','ACTIVE']){
-  const h=adminHarness({rows:[request({status})]});
+test('manual IP-Handler opens the direct transfer form independently of checkout requests',()=>{
+ for(const rows of [[],[request({status:'REQUESTED'})],[request({status:'ACTIVE'})]]){
+  const h=adminHarness({rows});
   try{
    const control=h.doc.querySelector('[data-ip-admin-receiver]');control.click();
    const url=new URL(h.tabs[0].events[0]);
-   assert.equal(url.searchParams.get('view'),'sender-access');
-   assert.equal(url.searchParams.get('checkoutRequest'),null);
+   assert.equal(url.origin+url.pathname,'https://avis.land/admin/bank/quantum/direct-transfer/entry');
+   assert.equal(url.search,'');
+   assert.equal(control.getAttribute('aria-label'),'Manual IP-Handler');
    assert.equal(control.dataset.state,'ACTIVE');assert.equal(h.doc.querySelector('[data-ip-admin-management]'),null);
    for(const poll of h.timers.values())poll();
    control.click();assert.equal(h.tabs[0].closed,true);assert.equal(control.dataset.state,'CLOSED');

@@ -1,6 +1,7 @@
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
 import {PGlite} from '@electric-sql/pglite';
 import {JSDOM} from 'jsdom';
 import pg from 'pg';
@@ -144,11 +145,44 @@ test('restoration removes only the synthetic hold and leaves the unfinished requ
  await pool.query("UPDATE avis_core_v2.checkout_ip_requests SET superseded_by=$2,status='CLOSED',closed_at=now() WHERE request_id=$1",[archived.requestId,retained.requestId]);
  await pool.query("INSERT INTO avis_core_v2.checkout_ip_events(request_id,event_type,actor_id) VALUES($1,'CLOSE','system:checkout-duplicate-review')",[archived.requestId]);
  await pool.query("INSERT INTO avis_core_v2.checkout_ip_cancellations(request_id,actor_id) VALUES($1,'system:checkout-duplicate-review')",[archived.requestId]);
- const {readFile}=await import('node:fs/promises');
  const migration=await readFile(new URL('../migrations/048_restore_unfinished_checkout_requests.sql',import.meta.url),'utf8');
  await ip.withTransaction(async conn=>{if(conn.exec)await conn.exec(migration);else await conn.query(migration);});
  const rows=await ip.list(admin);
  assert.equal(rows.find(row=>row.requestId===archived.requestId)?.status,'CLOSED');
  const markers=await pool.query('SELECT request_id FROM avis_core_v2.checkout_ip_cancellations WHERE request_id=$1',[archived.requestId]);
  assert.equal(markers.rows.length,0);
+});
+
+test('the reviewed closed duplicate leaves only the register and keeps its history',async()=>{
+ const older=request(),retained={...older,requestId:id()},unrelated=request();
+ const fingerprint=value=>createHash('md5').update(value).digest('hex');
+ const migration=(await readFile(new URL('../migrations/049_archive_reviewed_checkout_row.sql',import.meta.url),'utf8'))
+  .replace('5c702f13d32abe7a689aba986ce4b60d',fingerprint(older.requestId))
+  .replace('ae496ea3e5a0567ebd9bfbdcb1d875ed',fingerprint(retained.requestId));
+ const archive=()=>ip.withTransaction(conn=>conn.exec?conn.exec(migration):conn.query(migration));
+ const visible=async()=>new Set((await ip.list(admin)).map(row=>row.requestId));
+ await ip.register(service,older);
+ const closed=await ip.setActive(admin,{requestId:older.requestId,active:false});
+ await archive();
+ assert.ok((await visible()).has(older.requestId),'keep the older row if the replacement is missing');
+ await ip.register(service,retained);
+ await ip.setActive(admin,{requestId:retained.requestId,active:true,receivingAccountId:accounts.common,nostroCashAccountId:nostro.id});
+ await ip.register(service,unrelated);
+ await ip.setActive(admin,{requestId:unrelated.requestId,active:false});
+ const before=await pool.query('SELECT event_id FROM avis_core_v2.checkout_ip_events WHERE request_id=$1 ORDER BY event_id',[older.requestId]);
+ await archive();
+ await archive();
+ const rows=await ip.list(admin);
+ assert.equal(rows.some(row=>row.requestId===older.requestId),false);
+ assert.equal(rows.some(row=>row.requestId===unrelated.requestId),true);
+ const kept=rows.find(row=>row.requestId===retained.requestId);
+ assert.equal(kept.status,'ACTIVE');assert.equal(kept.nostroCashAccountId,nostro.id);
+ assert.equal((await ip.status(service,{requestId:older.requestId})).status,'CLOSED');
+ const history=await pool.query('SELECT event_id FROM avis_core_v2.checkout_ip_events WHERE request_id=$1 ORDER BY event_id',[older.requestId]);
+ assert.deepEqual(history.rows,before.rows);
+ const audit=await pool.query("SELECT operation FROM avis_core_v2.operation_audit WHERE resource_id=$1 AND operation='ARCHIVE_CHECKOUT_REGISTER_ROW'",[older.requestId]);
+ assert.equal(audit.rows.length,1);
+ await ip.setActive(admin,{requestId:older.requestId,active:true,retryClosedAt:new Date(closed.closedAt).toISOString(),receivingAccountId:accounts.common});
+ await archive();
+ assert.ok((await visible()).has(older.requestId),'an explicitly reopened request returns to the register');
 });
