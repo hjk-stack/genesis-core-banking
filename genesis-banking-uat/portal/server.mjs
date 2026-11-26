@@ -195,7 +195,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     if(!value||typeof value!=='object'||Array.isArray(value))fault('INVALID_FIELD',null,400);
     return send(res,200,await ipControl[ipService[1]](service,value));
    }
-   const ipHandler=/^\/api\/services\/checkout-ip\/(context|processing|claim|receivingAccounts|selectReceivingAccount)$/.exec(path);
+   const ipHandler=/^\/api\/services\/checkout-ip\/(context|processing|claim|receivingAccounts|selectReceivingAccount|selectNostroAccount)$/.exec(path);
    if(ipHandler){
     if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
     if(!req.headers['content-type']?.startsWith('application/json'))fault('INVALID_FIELD',null,415);
@@ -418,6 +418,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if((path==='/api/abiq'||path==='/api/bankpayments/dispatch')&&!actor.admin)fault('FORBIDDEN',null,403);
    if(path==='/api/abiq')return send(res,200,await processAbiqRequest(core,actor,body));
    if(path==='/api/bankpayments/dispatch')return send(res,200,await dispatchPayment(core,actor,body,req.headers['idempotency-key']));
+   if(path==='/api/checkout-ip/nostro-account')return send(res,200,await ipControl.selectNostroAccount(actor,body));
    if(path==='/api/checkout-ip/activation')return send(res,200,await ipControl.setActive(actor,body));
    if(path==='/api/terminals/activation'){if(!actor.admin)fault('FORBIDDEN',null,403);return send(res,200,await posControl.setActive(actor,body));}
    if(path==='/api/stripe/webpos/checkout')return send(res,200,await stripePos.createCheckout(actor,body,req.headers['idempotency-key']));

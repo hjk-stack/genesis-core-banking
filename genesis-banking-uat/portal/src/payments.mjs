@@ -362,7 +362,7 @@ export class PaymentServer extends SovereignCore {
     COALESCE((SELECT string_agg(g.display_name,', ' ORDER BY g.gateway_code)
      FROM avis_core_v2.payment_gateway_bridges g WHERE g.clearing_account_id=c.cash_account_id),'') AS card_gateways
     FROM avis_core_v2.external_cash_accounts c
-    ORDER BY c.institution_name,c.currency_code LIMIT 300`,
+    ORDER BY c.institution_name,c.currency_code,c.cash_account_id`,
    nostrointermediaries:`SELECT i.intermediary_id,i.cash_account_id,i.bank_name,i.bank_address,i.account_name,i.aba,
     i.reference,i.bic_code,i.account_number,i.created_at,i.updated_at,c.institution_name AS parent_bank_name,
     c.currency_code AS parent_currency,c.iban_or_account_no AS parent_account
