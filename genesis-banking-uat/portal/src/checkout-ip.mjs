@@ -153,6 +153,20 @@ export class CheckoutIpControl{
   if(!actor?.ipHandlerService||!actor.id||actor.customerUserId)fault('FORBIDDEN',null,403);
   const rows=await this.backofficeReceivingAccounts();
   const directory=input.includeNostros===true?await this.processingControl.nostroDirectory(this.pool):{};
+  if(input.includeOrderingAccounts===true||input.orderingAccountId!==undefined){
+   const id=input.orderingAccountId;
+   if(id!==undefined&&!uuid(id))fault('INVALID_FIELD','orderingAccountId');
+   directory.orderingAccounts=(await this.pool.query(`SELECT a.account_id AS id,i.abiq_iban AS number,a.currency_code AS currency,
+     COALESCE(h.full_name,p.institution_name) AS "holderName",p.institution_name AS "bankName",p.abiq_bic AS bic
+     FROM avis_core_v2.ledger_accounts a
+     JOIN avis_core_v2.abiq_account_identifiers i ON i.ledger_account_id=a.account_id AND i.status='ACTIVE'
+     JOIN avis_core_v2.abiq_network_participants p ON p.participant_code=i.participant_code AND p.is_active
+     LEFT JOIN avis_core_v2.holder_identities h ON h.record_user_id=a.user_id
+     WHERE a.network IS NULL AND a.wallet_scope='FUNDING' AND a.account_category='LIABILITY'
+      AND ((a.owner_type='USER' AND h.user_id IS NOT NULL) OR a.owner_type=ANY($1::text[]))
+      AND ($2::uuid IS NULL OR a.account_id=$2)
+     ORDER BY a.currency_code, "holderName", i.abiq_iban`,[RECEIVING_OWNERS,id??null])).rows;
+  }
   return {...directory,accounts:rows.map(row=>({accountId:row.account_id,accountType:row.owner_type,currency:row.currency_code,abiqIban:row.abiq_iban,label:row.label}))};
  }
  async selectNostroAccount(actor,input){
