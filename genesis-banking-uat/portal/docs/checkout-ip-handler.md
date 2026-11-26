@@ -82,10 +82,9 @@ Administrator register reads at `GET /api/views/checkoutip` expose `processing` 
 
 ## Persistent administrator controls
 
-The administrator Payments page mounts two Liquid Glass controls before loading the request register. Both remain visible with zero requests or while register reads are pending.
+The Payments page mounts the **Manual IP-Handler** switch before loading the checkout register. It opens a fresh transfer form through the authenticated direct-transfer entry, including when there are no checkout requests. Red means the handler window is closed. Green means it is open.
 
-- **Checkout access** applies to an explicitly selected existing request. With no selection the switch remains red and sends no activation. Selection preserves the request UUID across sorting and refreshes; removal clears it. A selected request shows the existing red/blue/green state and uses the same routing validation and activation operation as its row control. No placeholder request or new global approval setting is created.
-- **IP-IP management** opens `https://avis.land/admin/bank/quantum/direct-transfer` without a checkout request parameter. Red means the managed tab is closed; green means that tab is open. The switch can close its own tab, and manual closure returns it to red. It does not approve a request, open a receiving window, or indicate bank connectivity. The destination retains its administrator authentication.
+Each checkout row keeps its own activation switch and **Open handler** button. That button passes only the selected request's UUID to the handler.
 
 The management tab opens synchronously from the switch interaction. Its opener is cleared before navigating to the handler. The controller retains the tab handle to observe closure, rather than persisting an assumed open state. The authenticated handler accepts a private closing channel only from its configured core origin with the matching per-tab capability; it closes itself when instructed over that channel. The capability is passed in the URL fragment and retained in the tab's history state for reloads. Request refreshes and selection changes do not navigate the management tab. Signing out or changing workspace clears the controls and requests closure of the tab owned by that page. If the destination cannot honor a close request, the active control stays green until the actual tab closes and shows feedback beside that action.
 

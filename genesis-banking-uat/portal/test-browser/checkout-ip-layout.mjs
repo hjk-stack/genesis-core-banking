@@ -236,17 +236,17 @@ for(const [width,mode] of [[390,'empty'],[820,'empty'],[1440,'empty'],[820,'stal
   for(const control of [management]){const box=await control.boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width+1,'administrator control stays inside viewport');}
   await assertIpSlider(management,'CLOSED');assert.equal(await controls.locator('.pos-activation-label').count(),0);
   await page.screenshot({path:'test-results/checkout-ip-admin-'+mode+'-'+width+'.png',fullPage:false});
-  const [tab]=await Promise.all([context.waitForEvent('page'),management.click()]);await tab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer/entry?view=sender-access');
+  const [tab]=await Promise.all([context.waitForEvent('page'),management.click()]);await tab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer/entry');
   assert.equal(await tab.evaluate(()=>window.opener===null),true);assert.equal(await management.getAttribute('data-state'),'ACTIVE');await assertIpSlider(management,'ACTIVE');assert.deepEqual(writes,[]);
   await page.screenshot({path:'test-results/checkout-ip-admin-'+mode+'-management-'+width+'.png',fullPage:false});
   if(width===1440&&mode==='empty'){
-   await tab.reload();await tab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer/entry?view=sender-access');
+   await tab.reload();await tab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer/entry');
    assert.equal(await tab.evaluate(()=>window.opener===null),true);assert.equal(await management.getAttribute('data-state'),'ACTIVE');
   }
   await closeManagedTab(tab,page,()=>management.click(),consoleMessages);assert.equal(await management.getAttribute('data-state'),'CLOSED');
-  const [manual]=await Promise.all([context.waitForEvent('page'),management.click()]);await manual.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer/entry?view=sender-access');await manual.close();
+  const [manual]=await Promise.all([context.waitForEvent('page'),management.click()]);await manual.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer/entry');await manual.close();
   await page.waitForFunction(()=>document.querySelector('[data-ip-admin-receiver]')?.dataset.state==='CLOSED');
-  const [logoutTab]=await Promise.all([context.waitForEvent('page'),management.click()]);await logoutTab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer/entry?view=sender-access');
+  const [logoutTab]=await Promise.all([context.waitForEvent('page'),management.click()]);await logoutTab.waitForURL('https://avis.land/admin/bank/quantum/direct-transfer/entry');
   await closeManagedTab(logoutTab,page,()=>page.locator('#signout').click(),consoleMessages,{visibleControl:false});await page.locator('#signin').waitFor({state:'visible'});assert.deepEqual(errors,[]);
  }finally{for(const item of held){await item.route.fulfill({contentType:'application/json',body:'{"rows":[]}'}).catch(()=>{});item.resolve();}await context.close();}
 });

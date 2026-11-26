@@ -15,8 +15,8 @@ const intermediaryLabel=record=>{
 
 export function checkoutIpAdminControls(){
  return '<section class="panel ip-admin-controls" data-ip-admin-controls aria-label="IP-to-IP administrator controls">'+
-  '<div class="ip-admin-management"><div class="ip-admin-control-title"><h2>Sender IP &amp; Watchdog</h2><div class="ip-admin-switch-state">'+
-  '<button type="button" class="pos-liquid-switch ip-liquid-slider" role="switch" aria-label="Sender IP and Watchdog desk" aria-checked="false" data-ip-admin-receiver data-state="CLOSED"><span class="pos-liquid-knob" aria-hidden="true"></span></button></div></div>'+
+  '<div class="ip-admin-management"><div class="ip-admin-control-title"><h2>Manual IP-Handler</h2><div class="ip-admin-switch-state">'+
+  '<button type="button" class="pos-liquid-switch ip-liquid-slider" role="switch" aria-label="Manual IP-Handler" aria-checked="false" data-ip-admin-receiver data-state="CLOSED"><span class="pos-liquid-knob" aria-hidden="true"></span></button></div></div>'+
   '<p class="form-error" role="alert" data-ip-admin-receiver-error></p></div></section>';
 }
 
@@ -27,7 +27,7 @@ export function createCheckoutIpAdminControls({root=document,windowApi=root.defa
  const paint=(selector,state)=>{
   const button=panel?.querySelector('[data-ip-admin-'+selector+']');if(!button)return;
   button.dataset.state=state;button.setAttribute('aria-checked',String(state==='ACTIVE'));
-  button.setAttribute('aria-description','Sender desk'+(state==='ACTIVE'?' open':' closed'));
+  button.setAttribute('aria-description','Manual IP-Handler'+(state==='ACTIVE'?' open':' closed'));
  };
  function tabIsOpen(session=managedSession){try{return !!session&&!session.tab.closed;}catch{return false;}}
  function disposeSession(session){
@@ -73,7 +73,7 @@ export function createCheckoutIpAdminControls({root=document,windowApi=root.defa
   if(!tabIsOpen(session)){finishSession(session);return;}
   if(session.closing&&Date.now()>=session.closeDeadline){
    session.closing=false;
-   if(managedSession===session)error(session.kind,'Could not close the sender desk. Close its browser tab.');
+   if(managedSession===session)error(session.kind,'Could not close the manual IP-Handler. Close its browser tab.');
    else{disposeSession(session);return;}
   }else if(session.closing&&session.port){
    sendClose(session);
@@ -110,7 +110,6 @@ export function createCheckoutIpAdminControls({root=document,windowApi=root.defa
    if(!child)throw Error('Allow this page to open the IP-IP management tab.');
    child.opener=null;if(child.opener!==null)throw Error('Could not open the IP-IP management tab securely.');
    const url=new URL(checkoutIpHandlerUrl(null));
-   url.searchParams.set('view','sender-access');
    url.hash=new URLSearchParams({managementToken:token}).toString();child.location.replace(url.href);
    if(child.closed)throw Error('The IP-IP management tab closed before opening.');
    const session={kind,tab:child,token,port:null,pendingPorts:new Set(),attempts:0,attemptLimit:20,closing:false,disposed:false,timer:null};
