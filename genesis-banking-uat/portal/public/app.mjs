@@ -171,8 +171,16 @@ setInterval(async()=>{
  if(!panel&&$('#panels')?.getAttribute('aria-busy')==='true')return;
  ipQueueRefreshing=true;const epoch=sessionEpoch,actionEpoch=ipActionEpoch,renderSerial=loading;
  try{
-  const rows=(await api('views/checkoutip')).rows;
+  const [queue,register]=await Promise.all([api('views/checkoutip'),api('views/paymentregister').catch(error=>{console.error('PAYMENT_REGISTER_REFRESH',error.code||error.name);return null;})]);
+  const rows=queue.rows;
   if(epoch!==sessionEpoch||renderSerial!==loading||location.hash!=='#payments'||ipActionsInFlight||actionEpoch!==ipActionEpoch||(panel&&!panel.isConnected))return;
+  const payments=document.querySelector('[data-register-view="paymentregister"]');
+  if(payments&&register&&JSON.stringify(cache.paymentregister)!==JSON.stringify(register.rows)){
+   cache.paymentregister=register.rows;payments.outerHTML=table('paymentregister','Payment register',register.rows);
+   const updated=document.querySelector('[data-register-view="paymentregister"]');
+   updated.querySelectorAll('[data-draft-pdf]').forEach(b=>b.onclick=()=>ipProof.openDraft(b.dataset.draftPdf,b.dataset.number));
+   updated.querySelectorAll('[data-request]').forEach(b=>b.onclick=()=>paymentWizard.view(b.dataset.request).catch(e=>pageError(e,b)));
+  }
   const old=cache.checkoutip||[];
   if(panel&&checkoutIpFingerprint(old)===checkoutIpFingerprint(rows))return;
   cache.checkoutip=rows;
@@ -192,7 +200,7 @@ function bindIpControls(){
   openHandler:record=>window.open(checkoutIpHandlerUrl(record),'_blank','noopener,noreferrer'),
   openProof:record=>void ipProof.open(record)});
 }
-function table(name,title,rows){return `<section class="panel"><div class="panel-header"><h2>${esc(title)}</h2><span>${rows.length} records${rows.length===300?' · latest 300':''}</span></div><div class="table-wrap"><table><thead><tr>${columns[name].map(([,h])=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${columns[name].map(([k])=>`<td${k.includes('iban')||k==='account_reference'?' class="account-number"':''}>${name==='portfolio'&&['smart_contract','historical_wallet_address'].includes(k)?(r.historical_proof||[]).map(p=>`<a class="portfolio-chain-proof" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(k==='smart_contract'?p.contractAddress:p.walletAddress)}</a>`).join('<br>')||'—':k==='request_id'?`<button type="button" data-request="${esc(r[k])}">View transfer</button>`:k==='status'?`<span class="status">${esc(label(r[k]))}</span>`:esc(k.includes('balance')||['amount','total_amount_eur'].includes(k)?number(r[k]):k==='created_at'?new Date(r[k]).toLocaleString():['abiq_iban','account_reference'].includes(k)?displayAbiq(r[k]):['owner_class','wallet_scope','account_category'].includes(k)&&r[k]?label(r[k]):typeof r[k]==='boolean'?(r[k]?'Yes':'No'):r[k]??'—')}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;}
+function table(name,title,rows){return `<section class="panel" data-register-view="${esc(name)}"><div class="panel-header"><h2>${esc(title)}</h2><span>${rows.length} records${rows.length===300?' · latest 300':''}</span></div><div class="table-wrap"><table><thead><tr>${columns[name].map(([,h])=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${columns[name].map(([k])=>`<td${k.includes('iban')||k==='account_reference'?' class="account-number"':''}>${name==='portfolio'&&['smart_contract','historical_wallet_address'].includes(k)?(r.historical_proof||[]).map(p=>`<a class="portfolio-chain-proof" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(k==='smart_contract'?p.contractAddress:p.walletAddress)}</a>`).join('<br>')||'—':k==='request_id'&&r.record_type==='IP_HANDLER_DRAFT'?`<button type="button" data-draft-pdf="${esc(r[k])}" data-number="${esc(r.payment_reference)}">PDF copy</button>`:k==='request_id'?`<button type="button" data-request="${esc(r[k])}">View transfer</button>`:k==='status'?`<span class="status">${esc(label(r[k]))}</span>`:esc(r.record_type==='IP_HANDLER_DRAFT'&&k==='amount'?(r.amount||'—'):k.includes('balance')||['amount','total_amount_eur'].includes(k)?number(r[k]):k==='created_at'?new Date(r[k]).toLocaleString():['abiq_iban','account_reference'].includes(k)?displayAbiq(r[k]):['owner_class','wallet_scope','account_category'].includes(k)&&r[k]?label(r[k]):typeof r[k]==='boolean'?(r[k]?'Yes':'No'):r[k]??'—')}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;}
 Object.assign(columns,{
  treasurypositions:[['asset_name','Registered asset'],['portfolio_abiq_iban','Portfolio ABIQ IBAN'],['asset_code','Asset identifier'],['isin','ISIN'],['asset_class','Asset class'],['quantity','Units'],['destination','Treasury account'],['booking_reference','Booking reference'],['booked_at','Booked at']],
  portfolio:[['currency_code','Asset'],['network','Blockchain'],['available_balance','Available holdings'],['locked_balance','Reserved holdings'],['smart_contract','Historical smart contract'],['historical_wallet_address','Historical wallet address']],
@@ -299,7 +307,7 @@ html+=results.map((r,i)=>{
    const field=$('#action-form').elements.cashAccountId;
    if(field)field.value=cashId;
   }
- });document.querySelectorAll('[data-request]').forEach(b=>b.onclick=()=>paymentWizard.view(b.dataset.request).catch(e=>pageError(e,b)));document.querySelectorAll('[data-card-row]').forEach(row=>{const show=()=>cardManager.open(row.querySelector('select').value).catch(e=>pageError(e,row));row.onclick=e=>{if(e.target.closest('select'))return;void show();};row.onkeydown=e=>{if(e.target===row&&e.key==='Enter'){e.preventDefault();void show();}};});}
+ });document.querySelectorAll('[data-draft-pdf]').forEach(b=>b.onclick=()=>ipProof.openDraft(b.dataset.draftPdf,b.dataset.number));document.querySelectorAll('[data-request]').forEach(b=>b.onclick=()=>paymentWizard.view(b.dataset.request).catch(e=>pageError(e,b)));document.querySelectorAll('[data-card-row]').forEach(row=>{const show=()=>cardManager.open(row.querySelector('select').value).catch(e=>pageError(e,row));row.onclick=e=>{if(e.target.closest('select'))return;void show();};row.onkeydown=e=>{if(e.target===row&&e.key==='Enter'){e.preventDefault();void show();}};});}
 window.addEventListener('hashchange',()=>{
  ipProof.close();clearNotice();clearForm();paymentWizard.close();accountStatements.close();nostroStatements.close();cardManager.close();portfolioManager.close();
 
