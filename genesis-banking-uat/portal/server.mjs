@@ -119,7 +119,7 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  CHECKOUT_ALREADY_CLOSED:'This checkout has already been completed.',CHECKOUT_NOT_IN_ESCROW:'Select a checkout whose funds are still held in escrow.',
  AUTHORIZATION_ALREADY_CLOSED:'This authorization has already been captured or reversed.',
  SELECT_AVIS_CARD:'Select an active AVIS proprietary card.',CURRENCY_MISMATCH:'Select the card account currency.',
- TERMINAL_NOT_FOUND:'Select an active terminal.',POS_TERMINAL_ID:'Check the POS terminal identifier and checkout reference.',POS_TERMINAL_CONFLICT:'This terminal ID is assigned to a different checkout.',POS_MERCHANT_REQUIRED:'Register the AVISPay Web POS merchant before assigning checkout terminals.',CHECKOUT_IP_NOT_FOUND:'Payment request was not found.',CHECKOUT_IP_STATE:'Payment request has expired or changed.',CHECKOUT_IP_ACCOUNT:'Select a registered receiving account or matching bank.',POS_SERVICE_AUTH:'The checkout service signature could not be verified.',SELECT_BANK_ACCOUNT:'Select AVIS Bank for this account-funded checkout.',
+ TERMINAL_NOT_FOUND:'Select an active terminal.',POS_TERMINAL_ID:'Check the POS terminal identifier and checkout reference.',POS_TERMINAL_CONFLICT:'This terminal ID is assigned to a different checkout.',POS_MERCHANT_REQUIRED:'Register the AVISPay Web POS merchant before assigning checkout terminals.',CHECKOUT_IP_NOT_FOUND:'Payment request was not found.',CHECKOUT_IP_STATE:'Payment request has expired or changed.',CHECKOUT_IP_ACCOUNT:'Select a registered receiving account or matching bank.',CHECKOUT_IP_ACCOUNT_CHANGED:'The account selection changed. Refresh this payment row.',POS_SERVICE_AUTH:'The checkout service signature could not be verified.',SELECT_BANK_ACCOUNT:'Select AVIS Bank for this account-funded checkout.',
  STRIPE_CONFIGURATION:'Configure the Stripe merchant connection in Banking Administration.',
  STRIPE_PROVIDER_RESPONSE:'The card checkout request could not complete. Retry from this payment.',
  STRIPE_SIGNATURE:'The Stripe event could not be verified.',STRIPE_EVENT_MISMATCH:'The card payment details did not match the original checkout.',
@@ -195,7 +195,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     if(!value||typeof value!=='object'||Array.isArray(value))fault('INVALID_FIELD',null,400);
     return send(res,200,await ipControl[ipService[1]](service,value));
    }
-   const ipHandler=/^\/api\/services\/checkout-ip\/(context|processing|claim|receivingAccounts|selectReceivingAccount)$/.exec(path);
+   const ipHandler=/^\/api\/services\/checkout-ip\/(context|processing|claim|receivingAccounts|selectReceivingAccount|selectNostroAccount)$/.exec(path);
    if(ipHandler){
     if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
     if(!req.headers['content-type']?.startsWith('application/json'))fault('INVALID_FIELD',null,415);
@@ -418,6 +418,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if((path==='/api/abiq'||path==='/api/bankpayments/dispatch')&&!actor.admin)fault('FORBIDDEN',null,403);
    if(path==='/api/abiq')return send(res,200,await processAbiqRequest(core,actor,body));
    if(path==='/api/bankpayments/dispatch')return send(res,200,await dispatchPayment(core,actor,body,req.headers['idempotency-key']));
+   if(path==='/api/checkout-ip/nostro-account')return send(res,200,await ipControl.selectNostroAccount(actor,body));
    if(path==='/api/checkout-ip/activation')return send(res,200,await ipControl.setActive(actor,body));
    if(path==='/api/terminals/activation'){if(!actor.admin)fault('FORBIDDEN',null,403);return send(res,200,await posControl.setActive(actor,body));}
    if(path==='/api/stripe/webpos/checkout')return send(res,200,await stripePos.createCheckout(actor,body,req.headers['idempotency-key']));

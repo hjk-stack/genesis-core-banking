@@ -157,12 +157,12 @@ export function checkoutIpRegister(rows=[],accounts=[],nostros=[]){
  ['Checkout / Request','Sender / Bank','Sender Account','Payment','Currency','NOSTRO','Amount Cleared','Beneficiary name','Beneficiary Account','Franchise Payment','Operation Completed','Proof of Payment'].map(label=>'<th scope="col">'+label+'</th>').join('')+
  '</tr></thead><tbody>'+rows.map(r=>{
   const state=ipState(r),id=esc(r.requestId),processing=r.processing||{},eligible=accounts.filter(a=>a.currency_code===r.currency);
-  const banks=nostros.filter(n=>n.currency_code===r.currency&&n.is_active);
+  const banks=nostros.filter(n=>n.currency_code===r.currency);
   const deadline=Number.isFinite(Date.parse(r.expiresAt))?Date.parse(r.expiresAt):0;
   const recipientOptions=eligible.map(a=>'<option value="'+esc(a.account_id)+'" '+(a.account_id===r.receivingAccountId?'selected':'')+'>'+
    esc(a.owner_type?.startsWith('COMMON')?'Common':'Suspense')+' · '+esc(a.abiq_iban)+' · '+esc(a.currency_code)+'</option>').join('');
-  const bankOptions=banks.map(n=>'<option value="'+esc(n.cash_account_id)+'" '+(n.cash_account_id===r.nostroCashAccountId?'selected':'')+'>'+
-   esc(n.institution_name)+' · '+esc(n.iban_or_account_no)+'</option>').join('');
+  const bankOptions=banks.map(n=>'<option value="'+esc(n.cash_account_id)+'" '+(n.is_active?'':'disabled ')+(n.cash_account_id===r.nostroCashAccountId?'selected':'')+'>'+
+   esc(n.currency_code)+' · '+esc(n.institution_name)+' · '+esc(n.iban_or_account_no)+'</option>').join('');
   const selectedBank=banks.find(b=>b.cash_account_id===r.nostroCashAccountId);
   const intermediateRows=Array.isArray(selectedBank?.intermediaries)?selectedBank.intermediaries:[];
   const intermediateOptions=intermediateRows.map(i=>'<option value="'+esc(i.intermediaryId)+'" '+(i.intermediaryId===r.intermediaryId?'selected':'')+'>'+esc(intermediaryLabel(i))+'</option>').join('');
@@ -177,10 +177,10 @@ export function checkoutIpRegister(rows=[],accounts=[],nostros=[]){
    '<td class="account-number">'+value(r.senderAccount)+'<small>'+esc(r.senderAccountName)+'</small></td>'+
    '<td data-ip-payment>'+value(processing.bankServerSentAmount)+'<small>Amount Server Sent</small><small>Requested '+esc(r.amount)+'</small><small>'+esc(r.source)+'</small></td>'+
    '<td>'+esc(r.currency)+'</td>'+
-   '<td><label class="ip-row-label">Registered network<select data-ip-nostro '+(state==='ACTIVE'?'disabled':'')+'>'+
+   '<td><label class="ip-row-label">NOSTRO bank<select data-ip-nostro data-saved-bank="'+esc(r.nostroCashAccountId||'')+'" '+(processing.operationCompleted||processing.handlerStatus==='SETTLED'?'disabled':'')+'>'+
    '<option value="">No NOSTRO specified</option>'+bankOptions+'</select></label>'+
    '<label class="ip-row-label">Incoming intermediary<select data-ip-intermediary '+(state==='ACTIVE'?'disabled':'')+'>'+
-   '<option value="">No intermediary</option>'+intermediateOptions+'</select></label><small>IBAN '+value(processing.nostroIban||selectedBank?.iban_or_account_no)+'</small></td>'+
+   '<option value="">No intermediary</option>'+intermediateOptions+'</select></label><small data-ip-nostro-iban>IBAN '+value(selectedBank?.iban_or_account_no||(processing.operationCompleted?processing.nostroIban:null))+'</small></td>'+
    '<td>'+value(processing.amountCleared)+'<small>IBAN '+value(processing.receivingAbiqIban||eligible.find(a=>a.account_id===r.receivingAccountId)?.abiq_iban)+'</small>'+
    '<label class="ip-row-label">ABIQ Common / Suspense<select data-ip-account '+(state==='ACTIVE'?'disabled':'')+'>'+
    '<option value="">Select receiving account</option>'+recipientOptions+'</select></label></td>'+
@@ -198,12 +198,13 @@ export function checkoutIpRegister(rows=[],accounts=[],nostros=[]){
 export function replaceCheckoutIpRegister(panel,rows,accounts=[],nostros=[]){
  const selectors=routeSelectors,doc=panel.ownerDocument;
  const selections=new Map([...panel.querySelectorAll('[data-checkout-ip]:not([data-ip-state="ACTIVE"])')].map(row=>[
-  row.dataset.checkoutIp,selectors.map(selector=>row.querySelector(selector)?.value)]));
+  row.dataset.checkoutIp,[...selectors.map(selector=>row.querySelector(selector)?.value),row.querySelector('[data-ip-nostro]')?.dataset.savedBank]]));
  const focused=doc.activeElement,focusRequest=focused?.closest('[data-checkout-ip]')?.dataset.checkoutIp;
  const focusSelector=controlSelectors.find(selector=>focused?.matches(selector));
  const scroll=panel.querySelector('.table-wrap').scrollLeft;
  const displayRows=rows.map(row=>{
   const selection=selections.get(row.requestId);if(!selection||ipState(row)==='ACTIVE')return row;
+  if((row.nostroCashAccountId||'')!==selection[3])return {...row,receivingAccountId:selection[0]};
   return {...row,receivingAccountId:selection[0],nostroCashAccountId:selection[1],intermediaryId:selection[2]};
  });
  const holder=doc.createElement('div');holder.innerHTML=checkoutIpRegister(displayRows,accounts,nostros);
@@ -213,15 +214,30 @@ export function replaceCheckoutIpRegister(panel,rows,accounts=[],nostros=[]){
  return replacement;
 }
 
-export function bindCheckoutIp({root=document,requests=[],nostros=[],activate,onChange,openHandler,openProof}){
+export function bindCheckoutIp({root=document,requests=[],nostros=[],activate,selectNostro,onChange,openHandler,openProof}){
  const panel=root.querySelector('[data-checkout-ip-register]');if(!panel)return;
  for(const row of panel.querySelectorAll('[data-checkout-ip]')){
   const record=requests.find(r=>r.requestId===row.dataset.checkoutIp),bank=row.querySelector('[data-ip-nostro]');
   if(!record)continue;
   const intermediary=row.querySelector('[data-ip-intermediary]'),Option=row.ownerDocument.defaultView.Option;
-  bank.onchange=()=>{
+  const changeOptions=()=>{
    const n=nostros.find(x=>x.cash_account_id===bank.value);
+   row.querySelector('[data-ip-nostro-iban]').textContent='IBAN '+(n?.iban_or_account_no||'—');
    intermediary.replaceChildren(new Option('No intermediary',''),...(n?.intermediaries||[]).map(i=>new Option(intermediaryLabel(i),i.intermediaryId)));
+  };
+  bank.onchange=async()=>{
+   const previous=record.nostroCashAccountId||null,selected=bank.value||null,previousIntermediary=intermediary.value;
+   changeOptions();
+   if(!selectNostro||selected===previous)return;
+   const error=row.querySelector('[data-ip-error]'),toggle=row.querySelector('[data-ip-toggle]'),open=row.querySelector('[data-ip-handler]');
+   error.textContent='';bank.disabled=toggle.disabled=open.disabled=true;
+   try{
+    const saved=await selectNostro({requestId:record.requestId,nostroCashAccountId:selected,expectedNostroCashAccountId:previous});
+    record.nostroCashAccountId=saved.nostroCashAccountId;record.intermediaryId=saved.intermediaryId;
+    bank.dataset.savedBank=saved.nostroCashAccountId||'';
+   }catch(e){
+    bank.value=previous||'';changeOptions();intermediary.value=previousIntermediary;error.textContent=e.message;
+   }finally{bank.disabled=toggle.disabled=open.disabled=false;}
   };
   row.querySelector('[data-ip-toggle]').onclick=async e=>{
    const button=e.currentTarget,state=ipState(record),active=state!=='ACTIVE';
@@ -235,7 +251,7 @@ export function bindCheckoutIp({root=document,requests=[],nostros=[],activate,on
    button.disabled=true;
    try{
     const result=await activate({requestId:record.requestId,active,...(state==='CLOSED'?{retryClosedAt:record.closedAt||record.expiresAt}:{}),receivingAccountId:receiving.value,
-     nostroCashAccountId:bank.value||null,intermediaryId:intermediary.value||null});
+     nostroCashAccountId:bank.value||null,...(selectNostro?{expectedNostroCashAccountId:record.nostroCashAccountId||null}:{}),intermediaryId:intermediary.value||null});
     onChange(result);
    }catch(e){error.textContent=e.message;}
    finally{button.disabled=false;}

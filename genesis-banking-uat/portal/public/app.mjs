@@ -182,9 +182,13 @@ setInterval(async()=>{
  }catch(e){console.error('CHECKOUT_IP_REFRESH',e.code||e.name)}
  finally{ipQueueRefreshing=false}
 },7000);
+async function postIpAction(path,input){
+ ipActionsInFlight++;ipActionEpoch++;
+ try{return await api(path,input);}finally{ipActionsInFlight--;ipActionEpoch++;}
+}
 function bindIpControls(){
  bindCheckoutIp({root:$('#panels'),requests:cache.checkoutip||[],nostros:cache.nostroclearing||[],
-  activate:async input=>{ipActionsInFlight++;ipActionEpoch++;try{return await api('checkout-ip/activation',input);}finally{ipActionsInFlight--;ipActionEpoch++;}},onChange:()=>void render(),
+  activate:input=>postIpAction('checkout-ip/activation',input),selectNostro:input=>postIpAction('checkout-ip/nostro-account',input),onChange:()=>void render(),
   openHandler:record=>window.open(checkoutIpHandlerUrl(record),'_blank','noopener,noreferrer'),
   openProof:record=>void ipProof.open(record)});
 }

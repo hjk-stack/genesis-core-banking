@@ -81,6 +81,20 @@ export class CheckoutIpProcessing{
    nostroCashAccountId:row?.nostro_cash_account_id||null,nostroIban:row?.iban_or_account_no||null,
    intermediaryId:row?.intermediary_id||null};
  }
+ async nostroDirectory(db,currency=null){
+  const registered=(await db.query(`SELECT c.cash_account_id,c.iban_or_account_no,c.currency_code,c.institution_name,
+   c.bank_address,c.account_name,c.bic_code,c.aba,
+   (c.is_active AND a.currency_code=c.currency_code AND a.account_category='ASSET' AND
+    a.owner_type IN ('CORRESPONDENT_NOSTRO','CENTRAL_BANK_RESERVE') AND a.network IS NULL AND a.wallet_scope='FUNDING') AS selectable
+   FROM avis_core_v2.external_cash_accounts c LEFT JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.ledger_account_id
+   WHERE $1::text IS NULL OR c.currency_code=$1
+   ORDER BY c.institution_name,c.iban_or_account_no,c.cash_account_id`,[currency])).rows
+   .map(c=>({cashAccountId:c.cash_account_id,accountNumber:c.iban_or_account_no,currency:c.currency_code,bankName:c.institution_name,...(c.selectable===true?{}:{selectable:false}),
+    receiverClearing:{receiverBankName:c.institution_name,receiverBankAddress:c.bank_address||'',receiverAccountHolder:c.account_name||'',
+     receiverIban:c.iban_or_account_no,receiverBic:c.bic_code||'',receiverSortCode:c.aba||'',receiverCountry:'',receiverBankCode:''}}));
+  const nostroAccounts=registered.filter(bank=>bank.selectable!==false);
+  return nostroAccounts.length===registered.length?{nostroAccounts}:{nostroAccounts,registeredNostros:registered};
+ }
  async context(actor,input){
   authorizeHandler(actor);
   if(!uuid(input?.requestId))fault('INVALID_FIELD','requestId');
@@ -88,21 +102,13 @@ export class CheckoutIpProcessing{
   if(!row)fault('CHECKOUT_IP_NOT_FOUND','requestId',404);
   const reports=await this.readReports(this.pool,[row.request_id]);
   const claim=mapClaim((await this.pool.query('SELECT * FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=$1',[row.request_id])).rows[0]);
-  const nostroAccounts=(await this.pool.query(`SELECT c.cash_account_id,c.iban_or_account_no,c.currency_code,c.institution_name,
-   c.bank_address,c.account_name,c.bic_code,c.aba
-   FROM avis_core_v2.external_cash_accounts c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.ledger_account_id
-   WHERE c.is_active AND c.currency_code=$1 AND a.currency_code=$1 AND a.account_category='ASSET'
-    AND a.owner_type=ANY($2::text[]) AND a.network IS NULL AND a.wallet_scope='FUNDING'
-   ORDER BY c.institution_name,c.iban_or_account_no,c.cash_account_id`,[row.currency_code,['CORRESPONDENT_NOSTRO','CENTRAL_BANK_RESERVE']])).rows
-   .map(c=>({cashAccountId:c.cash_account_id,accountNumber:c.iban_or_account_no,currency:c.currency_code,bankName:c.institution_name,
-    receiverClearing:{receiverBankName:c.institution_name,receiverBankAddress:c.bank_address||'',receiverAccountHolder:c.account_name||'',
-     receiverIban:c.iban_or_account_no,receiverBic:c.bic_code||'',receiverSortCode:c.aba||'',receiverCountry:'',receiverBankCode:''}}));
+  const directory=await this.nostroDirectory(this.pool,row.currency_code);
   const receiving=(await this.pool.query(`SELECT a.account_id,a.owner_type,a.currency_code,b.abiq_iban,
    COALESCE(a.display_name,CASE WHEN a.owner_type='COMMON_POOL' THEN 'Common Account' ELSE 'Suspense Account' END) AS label
    FROM avis_core_v2.ledger_accounts a LEFT JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id
    WHERE a.account_id=$1`,[row.receiving_account_id])).rows[0];
   return {request:{...this.mapRequest(row),processing:reports.get(row.request_id)||null},
-   routing:claim?.routing||await this.routing(this.pool,row),claim,nostroAccounts,
+   routing:claim?.routing||await this.routing(this.pool,row),claim,...directory,
    receivingAccount:receiving?{accountId:receiving.account_id,accountType:receiving.owner_type,label:receiving.label,
     currency:receiving.currency_code,abiqIban:receiving.abiq_iban}:null};
  }

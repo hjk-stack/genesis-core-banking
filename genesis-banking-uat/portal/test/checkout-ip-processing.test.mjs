@@ -345,3 +345,31 @@ test('manual destination permits an active same-currency backoffice account and 
  await ip.claim(handler,await claimPayload(completed(req)));
  await assert.rejects(ip.selectReceivingAccount(handler,{...selection,expectedReceivingAccountId:other.accountId,receivingAccountId:common}),/CHECKOUT_IP_PROCESSING/);
 });
+
+test('Payments and the IP handler share one optional NOSTRO choice without activating or posting the payment',async()=>{
+ const req=request();await ip.register(checkout,req);
+ const other=await new PaymentServer(pool).registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Other EUR bank',bic:'TESTDEFFXXX',accountNumber:'OTHER-EUR',currency:'EUR'},randomUUID());
+ const usd=await new PaymentServer(pool).registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'USD bank',bic:'TESTUS33XXX',accountNumber:'OTHER-USD',currency:'USD'},randomUUID());
+ await pool.query('UPDATE avis_core_v2.external_cash_accounts SET is_active=false WHERE cash_account_id=$1',[other.id]);
+ const before=await ledgerSnapshot(),choose=(actor,id,previous)=>ip.selectNostroAccount(actor,{requestId:req.requestId,nostroCashAccountId:id,expectedNostroCashAccountId:previous});
+ await assert.rejects(choose(checkout,nostro.id,null),e=>e.code==='FORBIDDEN');
+ await assert.rejects(choose(handler,usd.id,null),e=>e.code==='CHECKOUT_IP_ACCOUNT');
+ assert.deepEqual(await choose(admin,nostro.id,null),{nostroCashAccountId:nostro.id,intermediaryId:null});
+ assert.equal((await ip.status(checkout,{requestId:req.requestId})).status,'REQUESTED');
+ let context=await ip.context(handler,{requestId:req.requestId});
+ assert.equal(context.routing.nostroCashAccountId,nostro.id);
+ assert.ok(context.registeredNostros.some(row=>row.cashAccountId===other.id&&!row.selectable));
+ assert.ok(!context.nostroAccounts.some(row=>row.cashAccountId===other.id));
+ await assert.rejects(choose(handler,other.id,nostro.id),e=>e.code==='CHECKOUT_IP_ACCOUNT');
+ await pool.query('UPDATE avis_core_v2.external_cash_accounts SET is_active=true WHERE cash_account_id=$1',[other.id]);
+ assert.ok(context.nostroAccounts.every(row=>row.currency==='EUR'));
+ await ip.setActive(admin,{requestId:req.requestId,active:true,receivingAccountId:common,nostroCashAccountId:nostro.id});
+ await choose(handler,other.id,nostro.id);
+ await assert.rejects(choose(admin,null,nostro.id),e=>e.code==='CHECKOUT_IP_ACCOUNT_CHANGED');
+ const row=(await ip.list(admin)).find(row=>row.requestId===req.requestId);
+ assert.equal(row.nostroCashAccountId,other.id);assert.equal(row.receivingAccountId,common);assert.equal(row.status,'ACTIVE');
+ await choose(handler,null,other.id);
+ context=await ip.context(handler,{requestId:req.requestId});
+ assert.equal(context.routing.nostroCashAccountId,null);assert.equal(context.routing.receivingAccountId,common);
+ assert.deepEqual(await ledgerSnapshot(),before);
+});

@@ -149,10 +149,34 @@ export class CheckoutIpControl{
  async processing(actor,input){return this.processingControl.publish(actor,input);}
  async claim(actor,input){return this.processingControl.claim(actor,input);}
  async proof(actor,requestId){return this.processingControl.proof(actor,requestId);}
- async receivingAccounts(actor){
+ async receivingAccounts(actor,input={}){
   if(!actor?.ipHandlerService||!actor.id||actor.customerUserId)fault('FORBIDDEN',null,403);
   const rows=await this.backofficeReceivingAccounts();
-  return {accounts:rows.map(row=>({accountId:row.account_id,accountType:row.owner_type,currency:row.currency_code,abiqIban:row.abiq_iban,label:row.label}))};
+  const directory=input.includeNostros===true?await this.processingControl.nostroDirectory(this.pool):{};
+  return {...directory,accounts:rows.map(row=>({accountId:row.account_id,accountType:row.owner_type,currency:row.currency_code,abiqIban:row.abiq_iban,label:row.label}))};
+ }
+ async selectNostroAccount(actor,input){
+  if(!(actor?.admin||actor?.ipHandlerService)||!actor.id||actor.customerUserId)fault('FORBIDDEN',null,403);
+  if(!uuid(input?.requestId)||![input.nostroCashAccountId,input.expectedNostroCashAccountId].every(id=>id===null||uuid(id)))
+   fault('INVALID_FIELD','nostroCashAccountId');
+  return this.withTransaction(async db=>{
+   const row=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_requests WHERE request_id=$1 FOR UPDATE',[input.requestId])).rows[0];
+   if(!row||row.superseded_by)fault('CHECKOUT_IP_NOT_FOUND','requestId',404);
+   const selected=input.nostroCashAccountId?.toLowerCase()||null;
+   if(selected===row.nostro_cash_account_id)return {nostroCashAccountId:selected,intermediaryId:row.intermediary_id};
+   if(row.nostro_cash_account_id!==input.expectedNostroCashAccountId)fault('CHECKOUT_IP_ACCOUNT_CHANGED','nostroCashAccountId',409);
+   if(selected){
+    const registered=await db.query('SELECT cash_account_id FROM avis_core_v2.external_cash_accounts WHERE cash_account_id=$1 AND currency_code=$2 AND is_active FOR SHARE',[selected,row.currency_code]);
+    if(!registered.rows.length)fault('CHECKOUT_IP_ACCOUNT','nostroCashAccountId',409);
+   }
+   const booked=await db.query(`SELECT request_id FROM avis_core_v2.checkout_ip_settlement_claims WHERE request_id=$1
+    UNION ALL SELECT request_id FROM avis_core_v2.checkout_ip_settlements WHERE request_id=$1
+    UNION ALL SELECT request_id FROM avis_core_v2.checkout_ip_processing WHERE request_id=$1 AND (operation_completed OR handler_status='SETTLED')`,[row.request_id]);
+   if(booked.rows.length)fault('CHECKOUT_IP_PROCESSING','nostroCashAccountId',409);
+   await db.query('UPDATE avis_core_v2.checkout_ip_requests SET nostro_cash_account_id=$2,intermediary_id=NULL,updated_at=now() WHERE request_id=$1',[row.request_id,selected]);
+   await db.query("INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,'CHECKOUT_IP_NOSTRO_SELECTED',$2)",[actor.id,row.request_id]);
+   return {nostroCashAccountId:selected,intermediaryId:null};
+  });
  }
  async selectReceivingAccount(actor,input){
   if(!actor?.ipHandlerService||!actor.id||actor.customerUserId)fault('FORBIDDEN',null,403);
@@ -197,6 +221,7 @@ export class CheckoutIpControl{
    const row=(await db.query('SELECT * FROM avis_core_v2.checkout_ip_requests WHERE request_id=$1 FOR UPDATE',[input.requestId])).rows[0];
    if(!row)fault('CHECKOUT_IP_NOT_FOUND','requestId',404);
    if(input.active){
+    if(input.expectedNostroCashAccountId!==undefined&&row.nostro_cash_account_id!==input.expectedNostroCashAccountId)fault('CHECKOUT_IP_ACCOUNT_CHANGED','nostroCashAccountId',409);
     const retry=input.retryClosedAt!==undefined;
     if(retry){
      if(row.status!=='CLOSED'||row.superseded_by||typeof input.retryClosedAt!=='string'||
