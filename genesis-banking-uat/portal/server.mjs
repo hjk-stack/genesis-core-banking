@@ -34,6 +34,7 @@ import {authenticateMessage,connectorCredentials,dispatchPayment,recoverPaymentD
 import {buildPacs002,readIso20022} from './src/iso20022.mjs';
 import {FinTerminal} from './src/fin-terminal.mjs';
 import {FinPeers} from './src/fin-peer.mjs';
+import {FinListener} from './src/fin-listener.mjs';
 
 const digest=v=>createHash('sha256').update(v).digest('hex');
 // A session-bound token stays valid across tabs and is renewed at every login.
@@ -155,7 +156,9 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  FIN_BOOKING_ACCOUNT:'Select a Common or Suspense account in the message\'s currency.',FIN_NOSTRO_ACCOUNT:'Select an active NOSTRO account in the message\'s currency.',
  FIN_TOKEN_WALLET:'Select a "+" wallet; AG and AGi are not booked here.',
  FIN_BOOKING_MISMATCH:'The debtor\'s IBAN and BIC are not those of the chosen Common or Suspense account.',
- FIN_NOSTRO_MISMATCH:'The receiver, INDA and the settlement account are not those of the chosen NOSTRO account.'
+ FIN_NOSTRO_MISMATCH:'The receiver, INDA and the settlement account are not those of the chosen NOSTRO account.',
+ FIN_LISTENING:'The listening port is open: close it to connect out.',FIN_LISTENER_NO_PEER:'Whitelist a peer bank\'s IP address before opening the port.',
+ LISTENER_CONFIGURATION:'The listening certificate (AVIS_CONNECTOR_LISTENER) is not in place in Azure.'
 };
 export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={}}) {
  const core=new TradingRobotCore(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map(),indexService=new IndexServiceAuthenticator(pool,{env:core.secretEnv,fetcher:transferOptions.indexServiceFetcher||core.cryptoFetch});
@@ -164,6 +167,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
  const posControl=new CheckoutPosControl(pool),ipControl=new CheckoutIpControl(pool),posAuth=new CheckoutPosAuthenticator(pool,{fetcher:transferOptions.posServiceFetcher||fetch});
  const ipHandlerAuth=new CheckoutIpHandlerAuthenticator(pool,{fetcher:transferOptions.ipHandlerServiceFetcher||transferOptions.posServiceFetcher||fetch});
  const nostroStatements=new NostroStatements(pool),finTerminal=new FinTerminal(pool),finPeers=new FinPeers(pool,transferOptions.transport);
+ const finListener=new FinListener(pool,finPeers,transferOptions.finListener).watch();
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  const server=http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
@@ -390,11 +394,22 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    // Screen A's peer banks (src/fin-peer.mjs): the IP-to-IP connectors, and the session messages sent to each with its answers.
    const finPeer=/^\/api\/fin-terminal\/peers(?:\/([A-Z0-9_]{1,35})\/messages)?$/.exec(path);
    if(req.method==='GET'&&finPeer)return send(res,200,finPeer[1]?await finPeers.messages(actor,finPeer[1]):{peers:await finPeers.list(actor)});
+   // Step 5's listening port (src/fin-listener.mjs) and the peers' whitelisted IP addresses.
+   if(req.method==='GET'&&path==='/api/fin-terminal/listener')return send(res,200,await finListener.status(actor));
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
    if(path==='/api/fin-terminal/drafts')return send(res,200,{draft:await finTerminal.save(actor,body)});
    if(path==='/api/fin-terminal/validate')return send(res,200,await finTerminal.validate(actor,body));
    if(finPeer?.[1])return send(res,200,await finPeers.send(actor,finPeer[1],body));
+   if(path==='/api/fin-terminal/listener'){
+    if(typeof body?.open!=='boolean')fault('INVALID_FIELD','open');
+    return send(res,200,body.open?await finListener.open(actor,body):await finListener.close(actor));
+   }
+   const finAddress=/^\/api\/fin-terminal\/peers\/([A-Z0-9_]{1,35})\/addresses(\/remove)?$/.exec(path);
+   if(finAddress){
+    const result=finAddress[2]?await finPeers.removeAddress(actor,finAddress[1],body):await finPeers.addAddress(actor,finAddress[1],body);
+    await finListener.refresh();return send(res,200,result);
+   }
    if(path==='/api/abiq/cleanup'){
     if(!Array.isArray(body.rows)||!body.rows.length||body.rows.length>500)fault('INVALID_FIELD','rows');
     const result=await core.operation(actor,'REPAIR_LEGACY_ACCOUNTS',body,req.headers['idempotency-key'],async db=>{
@@ -478,7 +493,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
  const posExpirySweep=setInterval(()=>void posControl.expirePending().catch(error=>
    console.error(JSON.stringify({operation:'POS_REQUEST_EXPIRY',code:error.code||'POS_SWEEP'}))),30000);
  posExpirySweep.unref?.();
- server.once('close',()=>{clearInterval(posExpirySweep);clearInterval(ipExpirySweep);});
+ server.once('close',()=>{clearInterval(posExpirySweep);clearInterval(ipExpirySweep);void finListener.stop();});
  return server;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){

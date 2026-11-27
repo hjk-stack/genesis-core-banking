@@ -10,8 +10,10 @@
 <section class="fin-peer" aria-labelledby="fin-peer-title" data-fin-peer>
 <h2 id="fin-peer-title">Peer Server Handshake &amp; Direct IP Interaction — NODE: <span data-fin-peer-node>—</span></h2>
 <p class="fin-peer-link" role="status" data-fin-peer-link data-state="NOT_CONNECTED">Peer link: NOT CONNECTED</p>
+<div class="fin-peer-listen"><select data-fin-listen-time aria-label="Listening time"><option value="15">15 min</option><option value="60">1 h</option><option value="480">8 h</option></select><button type="button" data-fin-listen disabled>Open Port</button><span class="fin-peer-listen-state" role="status" data-fin-listen-state data-state="CLOSED">Port closed</span></div>
 <div class="fin-peer-out">
 <label><span>Peer Server</span><select data-fin-peer-server disabled><option value="">No peer server registered</option></select></label>
+<div class="fin-peer-whitelist"><span id="fin-peer-whitelist-title">Whitelisted IPs</span><ul class="fin-peer-addresses" aria-labelledby="fin-peer-whitelist-title" data-fin-peer-addresses></ul><span class="fin-with-button"><input class="fin-code" data-fin-peer-address maxlength="45" spellcheck="false" aria-label="Whitelisted IP address" placeholder="IP address" disabled><button type="button" data-fin-peer-address-add aria-label="Add IP address" title="Add" disabled>+</button></span></div>
 <label><span>Outgoing Welcome / Session Message (Transmitted to Peer Server)</span><textarea class="fin-code" data-fin-peer-text maxlength="1000" rows="3" spellcheck="false"></textarea></label>
 <div class="fin-peer-send"><select data-fin-peer-event aria-label="Session message"><option value="INIT">INIT_SESSION / READY</option><option value="HEARTBEAT">HEARTBEAT</option><option value="END">END_SESSION</option></select><button type="button" data-fin-peer-send disabled>Send to Peer Server</button></div>
 <p class="fin-peer-problem" role="alert" data-fin-peer-problem hidden></p>

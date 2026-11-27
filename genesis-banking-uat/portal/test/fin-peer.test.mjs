@@ -93,10 +93,10 @@ const rows=async profileId=>(await pool.query('SELECT * FROM avis_core_v2.fin_te
 test('the peers are the bank\'s IP-to-IP connectors to peer banks, shown to bank administrators only',async()=>{
  const port=name=>String(name==='TLS'?tlsServer.address().port:httpsServer.address().port);
  assert.deepEqual(await peers.list(admin),[
-  {profileId:'EXAMPLE_TLS_PEER',name:'EXAMPLE-GW01',address:'localhost:'+port('TLS'),transport:'TLS',localBic:'EXMPDEFFXXX',peerBic:'SMPLFRPPXXX'},
-  {profileId:'EXAMPLE_HTTPS_PEER',name:'EXAMPLE-GW02',address:'localhost:'+port('HTTPS'),transport:'HTTPS',localBic:'EXMPDEFFXXX',peerBic:'SMPLGB2L'},
-  {profileId:'EXAMPLE_CLOSED_PEER',name:'EXAMPLE-GW03',address:'localhost:'+closedPort,transport:'TLS',localBic:'EXMPDEFFXXX',peerBic:'SMPLFRPPXXX'},
-  {profileId:'EXAMPLE_NO_CERT',name:'EXAMPLE-GW04',address:'localhost:'+port('TLS'),transport:'TLS',localBic:'EXMPDEFFXXX',peerBic:'SMPLFRPPXXX'}]);
+  {profileId:'EXAMPLE_TLS_PEER',name:'EXAMPLE-GW01',address:'localhost:'+port('TLS'),transport:'TLS',localBic:'EXMPDEFFXXX',peerBic:'SMPLFRPPXXX',addresses:[]},
+  {profileId:'EXAMPLE_HTTPS_PEER',name:'EXAMPLE-GW02',address:'localhost:'+port('HTTPS'),transport:'HTTPS',localBic:'EXMPDEFFXXX',peerBic:'SMPLGB2L',addresses:[]},
+  {profileId:'EXAMPLE_CLOSED_PEER',name:'EXAMPLE-GW03',address:'localhost:'+closedPort,transport:'TLS',localBic:'EXMPDEFFXXX',peerBic:'SMPLFRPPXXX',addresses:[]},
+  {profileId:'EXAMPLE_NO_CERT',name:'EXAMPLE-GW04',address:'localhost:'+port('TLS'),transport:'TLS',localBic:'EXMPDEFFXXX',peerBic:'SMPLFRPPXXX',addresses:[]}]);
  // A peer nothing was sent to yet is not connected.
  const first=await peers.messages(admin,'EXAMPLE_CLOSED_PEER');
  assert.deepEqual(first.messages,[]);assert.equal(first.link.state,'NOT_CONNECTED');assert.equal(first.link.since,null);assert.equal(first.link.error,null);
