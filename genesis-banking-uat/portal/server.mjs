@@ -213,7 +213,6 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    }
    const deskPolicy=privateDesk || process.env.BANK_DESK_ENFORCE==='1';
    const deviceAdmission=privateDesk ? await workstationAdmission.fromRequest(req) : null;
-   const fingerprint=privateDesk&&!deviceAdmission ? workstationFingerprint(req) : null;
    if(privateDesk&&!deviceAdmission) {
     // An approved bank session may open the FinTerminal in a new browser window
     // without the original browser workstation admission (for example after
@@ -221,7 +220,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     // than show the generic denial inside that terminal. The handoff itself
     // validates the administrator and device on AVIS.Land.
     try {
-     const admission=await contactIncubator('admit',{fp:fingerprint});
+     const admission=await contactIncubator('admit',{fp:workstationFingerprint(req)});
      if(admission.approved!==true)fault('BANK_WORKSTATION_REQUIRED',null,403);
     } catch(error) {
      if(req.method==='GET'&&path==='/fin-terminal'&&isStaffAccessDocument(req)&&error?.code==='BANK_WORKSTATION_REQUIRED') {
