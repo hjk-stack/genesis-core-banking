@@ -1,6 +1,7 @@
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import tls from 'node:tls';
+import net from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -23,7 +24,7 @@ import {exampleForm} from './helpers/fin-example.mjs';
 // certificates, and peer servers the bank connects out to.
 const admin={id:'fin-listener-admin',username:'fin-listener',admin:true},guest={id:'guest',admin:false};
 const BANK='EXMPDEFFXXX',PEER_A='SMPLFRPPXXX',PEER_B='SMPLGB2LXXX';
-let pool,db,dir,certs,env,peers,listener,peerServer,oldServer;
+let pool,db,dir,certs,env,peers,listener,peerServer,oldServer,delay=0;
 const refused=(code,status)=>error=>error.code===code&&(status===undefined||error.status===status);
 const certificate=async(name,san)=>{
  execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-days','1','-subj','/CN='+name,...(san?['-addext','subjectAltName='+san]:[]),
@@ -35,10 +36,10 @@ const fromPeer=(event,{text='HELLO EXAMPLE BANK',from=PEER_A,id='PEERMSG'+random
  buildSessionMessage({localBic:from,peerBic:BANK,businessMessageId:id,event,text,at:new Date()});
 const value=(xml,name)=>new RegExp('<'+name+'>([^<]*)</'+name+'>').exec(xml)?.[1];
 // A peer's connection to the port: each message in a frame, its answer awaited; a connection the bank refuses ends without one.
-function exchange(messages,{identity=certs.peerA,localAddress='127.0.0.1',maxVersion='TLSv1.3',keep=false}={}){
+function exchange(messages,{identity=certs.peerA,localAddress='127.0.0.1',host='127.0.0.1',port=listener.boundPort()||1,maxVersion='TLSv1.3',keep=false}={}){
  return new Promise(resolve=>{
   const answers=[];let data=Buffer.alloc(0),next=0,protocol=null;
-  const socket=tls.connect({host:'127.0.0.1',port:listener.boundPort()||1,servername:'localhost',ca:certs.bank.cert,cert:identity?.cert,key:identity?.key,localAddress,maxVersion});
+  const socket=tls.connect({host,port,servername:'localhost',ca:certs.bank.cert,cert:identity?.cert,key:identity?.key,localAddress,maxVersion});
   const finish=()=>resolve({answers,protocol,socket});
   const send=()=>{if(next<messages.length)socket.write(frame(messages[next++]));else if(keep)finish();else socket.end();};
   socket.on('secureConnect',()=>{protocol=socket.getProtocol();send();});
@@ -67,7 +68,7 @@ before(async()=>{
  // Peer A's own server the bank connects out to (TLS 1.3), and an old one speaking TLS 1.2 only.
  const serve=(options,answer)=>tls.createServer({...certs.peerA,ca:certs.bank.cert,requestCert:true,rejectUnauthorized:true,...options},socket=>{
   let data=Buffer.alloc(0);socket.on('error',()=>{});
-  socket.on('data',chunk=>{data=Buffer.concat([data,chunk]);if(data.length>=2&&data.length===2+data.readUInt16BE())socket.end(frame(answer(data.subarray(2).toString())));});
+  socket.on('data',chunk=>{data=Buffer.concat([data,chunk]);if(data.length>=2&&data.length===2+data.readUInt16BE()){const xml=data.subarray(2).toString();setTimeout(()=>socket.end(frame(answer(xml))),delay);}});
  });
  const acknowledge=xml=>buildSessionMessage({localBic:PEER_A,peerBic:BANK,businessMessageId:'PEERMSG0001',event:'INIT',text:'WELCOME',at:new Date()});
  peerServer=serve({},acknowledge);oldServer=serve({maxVersion:'TLSv1.2'},acknowledge);
@@ -220,4 +221,48 @@ test('the bank serves the port\'s state, opens and closes it and keeps the white
   assert.deepEqual(await (await ask('/api/fin-terminal/peers/EXAMPLE_PEER_B/addresses/remove',{address:'198.51.100.7'})).json(),{addresses:[]});
   assert.equal((await ask('/api/fin-terminal/peers/EXAMPLE_PEER_B/addresses',{address:'nowhere'})).status,422);
  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
+test('a session message on its way keeps the port closed until it has its answer (review finding: never both, also at the same moment)',async()=>{
+ await peers.addAddress(admin,'EXAMPLE_PEER_A',{address:'127.0.0.1'});
+ delay=1500;
+ try{
+  const sending=peers.send(admin,'EXAMPLE_PEER_A',{event:'INIT',text:'HELLO'});
+  await until(async()=>(await rows()).some(row=>row.direction==='OUT'&&row.answer_to===null&&row.status==='SENDING'),'the message on its way');
+  await assert.rejects(listener.open(admin,{minutes:15}),refused('FIN_SENDING',409));
+  assert.equal((await listener.status(admin)).open,false);assert.equal(listener.boundPort(),null);
+  assert.equal((await sending).messages.at(-1).status,'ACK');
+ }finally{delay=0;}
+ assert.equal((await listener.open(admin,{minutes:15})).listening,true);
+ await listener.close(admin);
+});
+
+test('without a host the port listens on IPv6 and IPv4 alike, or on IPv4 alone where the machine has no IPv6 (review finding)',async()=>{
+ const ipv6=await new Promise(resolve=>{const probe=net.createServer();probe.once('error',()=>resolve(false));probe.listen(0,'::1',()=>probe.close(()=>resolve(true)));});
+ const both=new FinListener(pool,peers,{env,port:0});
+ await peers.addAddress(admin,'EXAMPLE_PEER_A',{address:'127.0.0.1'});
+ if(ipv6)await peers.addAddress(admin,'EXAMPLE_PEER_A',{address:'::1'});
+ try{
+  assert.equal((await both.open(admin,{minutes:15})).listening,true);
+  assert.equal(both.server.address().address,ipv6?'::':'0.0.0.0');
+  // An IPv4 peer either way (where IPv6 listens too, its address comes as ::ffff:127.0.0.1), and an IPv6 peer by its IPv6 address.
+  assert.equal((await exchange([fromPeer('HEARTBEAT')],{port:both.boundPort()})).answers.length,1);
+  if(ipv6)assert.equal((await exchange([fromPeer('HEARTBEAT')],{port:both.boundPort(),host:'::1',localAddress:'::1'})).answers.length,1);
+ }finally{await both.close(admin);await both.stop();if(ipv6)await peers.removeAddress(admin,'EXAMPLE_PEER_A',{address:'::1'});}
+});
+
+test('a broken listening certificate keeps the port from opening, and a window opened by another server says why this one does not listen (review finding)',async()=>{
+ await peers.addAddress(admin,'EXAMPLE_PEER_A',{address:'127.0.0.1'});
+ for(const broken of [{cert:'not a certificate',key:'not a key'},{cert:certs.bank.cert,key:certs.peerA.key}]){
+  const other=new FinListener(pool,peers,{env:{...env,AVIS_CONNECTOR_LISTENER:JSON.stringify(broken)},port:0,host:'127.0.0.1'});
+  try{
+   await assert.rejects(other.open(admin,{minutes:15}),refused('LISTENER_CONFIGURATION',503));
+   assert.equal((await other.status(admin)).open,false);
+   await pool.query(`INSERT INTO avis_core_v2.fin_terminal_listener(listener_id,open_until,changed_by) VALUES(1,now()+interval '15 minutes','another server')
+    ON CONFLICT(listener_id) DO UPDATE SET open_until=EXCLUDED.open_until,changed_by=EXCLUDED.changed_by`);
+   await other.reconcile();
+   const status=await other.status(admin);
+   assert.deepEqual([status.open,status.listening,status.error],[true,false,'LISTENER_CONFIGURATION']);assert.equal(other.boundPort(),null);
+  }finally{await other.close(admin);await other.stop();}
+ }
 });

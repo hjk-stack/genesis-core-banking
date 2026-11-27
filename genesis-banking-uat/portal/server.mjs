@@ -157,7 +157,7 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  FIN_TOKEN_WALLET:'Select a "+" wallet; AG and AGi are not booked here.',
  FIN_BOOKING_MISMATCH:'The debtor\'s IBAN and BIC are not those of the chosen Common or Suspense account.',
  FIN_NOSTRO_MISMATCH:'The receiver, INDA and the settlement account are not those of the chosen NOSTRO account.',
- FIN_LISTENING:'The listening port is open: close it to connect out.',FIN_LISTENER_NO_PEER:'Whitelist a peer bank\'s IP address before opening the port.',
+ FIN_LISTENING:'The listening port is open: close it to connect out.',FIN_SENDING:'A session message is on its way: open the port once it has its answer.',FIN_LISTENER_NO_PEER:'Whitelist a peer bank\'s IP address before opening the port.',
  LISTENER_CONFIGURATION:'The listening certificate (AVIS_CONNECTOR_LISTENER) is not in place in Azure.'
 };
 export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={}}) {

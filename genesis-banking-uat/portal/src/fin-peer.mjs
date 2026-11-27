@@ -111,6 +111,17 @@ const REFUSALS={NOT_ISO20022:'Not an ISO 20022 message.',SCHEMA:'The message doe
 export const plainAddress=value=>{const text=String(value??'').trim(),mapped=/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(text);return mapped?mapped[1]:text.toLowerCase();};
 const ADDRESSES='SELECT profile_id,host(address) AS address FROM avis_core_v2.fin_terminal_peer_addresses';
 const LISTENING='SELECT 1 FROM avis_core_v2.fin_terminal_listener WHERE open_until>now()';
+// Never both (review finding): a session message is kept as being sent, and the listening port opened (src/fin-listener.mjs), each
+// under the connector's one lock - the one waits for the other, and each sees the other.
+export async function underConnectorLock(pool,work){
+ const client=await pool.connect();
+ try{
+  await client.query('BEGIN');
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended('avis_core_v2:fin-terminal-connector',0))");
+  const result=await work(client);await client.query('COMMIT');return result;
+ }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}
+ finally{client.release?.();}
+}
 
 // The bank's IP-to-IP connectors to peer banks (Administration, "Add bank connector"), enabled and on an active clearing account.
 const PEERS=`SELECT p.profile_id,c.display_name,c.endpoint_url,c.credential_reference,p.local_bic,p.peer_bic
@@ -199,15 +210,17 @@ export class FinPeers{
  // owner: "not both working at the same time"). Over TLS 1.3, as the specification's connector.
  async send(actor,profileId,body){
   this.#administrator(actor);
-  if((await this.pool.query(LISTENING)).rows.length)fault('FIN_LISTENING',null,409);
   if(typeof body?.event!=='string'||!Object.hasOwn(SESSION_EVENTS,body.event))fault('INVALID_FIELD','event');
   const text=this.#text(body.text),peer=await this.#peer(profileId),credentials=this.credentials(peer.credential_reference);
   const at=new Date(),businessMessageId=newMessageId(at),{code,parameters}=SESSION_EVENTS[body.event];
   const xml=buildSessionMessage({localBic:peer.local_bic,peerBic:peer.peer_bic,businessMessageId,event:body.event,text,at});
   if(!(await passes(xml,ADMI004)))fault('INVALID_FIELD','text');
   const messageId=randomUUID();
-  await this.pool.query(`INSERT INTO avis_core_v2.fin_terminal_peer_messages(message_id,profile_id,direction,message_type,business_message_id,event_code,event_parameters,event_text,status,content,created_by)
-   VALUES($1,$2,'OUT',$3,$4,$5,$6,$7,'SENDING',$8,$9)`,[messageId,peer.profile_id,ADMI004,businessMessageId,code,parameters,text||null,xml,String(actor.id)]);
+  await underConnectorLock(this.pool,async db=>{
+   if((await db.query(LISTENING)).rows.length)fault('FIN_LISTENING',null,409);
+   await db.query(`INSERT INTO avis_core_v2.fin_terminal_peer_messages(message_id,profile_id,direction,message_type,business_message_id,event_code,event_parameters,event_text,status,content,created_by)
+    VALUES($1,$2,'OUT',$3,$4,$5,$6,$7,'SENDING',$8,$9)`,[messageId,peer.profile_id,ADMI004,businessMessageId,code,parameters,text||null,xml,String(actor.id)]);
+  });
   let answer=null,error=null;
   try{answer=await this.transmit(peer,xml,credentials,{minVersion:'TLSv1.3'});}catch(failure){error=diagnostic(failure);}
   // An answer is kept as it came; text cannot hold a zero byte.

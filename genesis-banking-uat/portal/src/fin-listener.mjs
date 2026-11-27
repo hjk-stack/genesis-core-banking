@@ -2,7 +2,7 @@ import tls from 'node:tls';
 import {X509Certificate} from 'node:crypto';
 import {fault} from './core.mjs';
 import {frame} from './payment-transport.mjs';
-import {plainAddress,diagnostic} from './fin-peer.mjs';
+import {plainAddress,diagnostic,underConnectorLock} from './fin-peer.mjs';
 
 // FinTerminal step 5, the connector's listening port. Requested by the bank owner: "the connecter must be ready for connect to real
 // servers and banks in listening with an time selector keeping port open for white listed IPs or I can connect to servers that
@@ -11,10 +11,12 @@ import {plainAddress,diagnostic} from './fin-peer.mjs';
 // peer bank get through, over TLS 1.3 with a certificate from that peer's own issuer (kept with the connector's credentials in
 // Azure); a peer's session message is answered (src/fin-peer.mjs). While the port is open the terminal does not connect out.
 export const LISTEN_PORT=8443,LISTEN_MINUTES=Object.freeze([15,60,480]);
-// The bank's own certificate on the port, kept in Azure (Key Vault) like the connectors' own.
+// The bank's own certificate on the port, kept in Azure (Key Vault) like the connectors' own - a certificate and its key that make
+// a TLS context together (review finding: a broken one must not leave the port open and silent).
 export function listenerCredentials(env=process.env){
  let credentials;try{credentials=JSON.parse(env.AVIS_CONNECTOR_LISTENER);}catch{fault('LISTENER_CONFIGURATION',null,503);}
  if(typeof credentials?.cert!=='string'||typeof credentials?.key!=='string')fault('LISTENER_CONFIGURATION',null,503);
+ try{tls.createSecureContext({cert:credentials.cert,key:credentials.key});}catch{fault('LISTENER_CONFIGURATION',null,503);}
  return credentials;
 }
 // The whitelisted addresses of the bank's IP-to-IP connectors to peer banks, enabled and on an active clearing account.
@@ -23,7 +25,11 @@ const PEER_ADDRESSES=`SELECT host(w.address) AS address,p.profile_id,c.credentia
  JOIN avis_core_v2.platform_connectors c ON c.connector_code=p.profile_id JOIN avis_core_v2.external_cash_accounts a USING(cash_account_id)
  WHERE p.protocol='IP_TO_IP' AND c.is_enabled AND a.is_active`;
 const WINDOW='SELECT now() AS now,(SELECT open_until FROM avis_core_v2.fin_terminal_listener WHERE listener_id=1) AS open_until';
-const certificates=bundle=>(String(bundle||'').match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g)||[]);
+// A session message on its way out (finished within the transport's 15 seconds; one older never finished).
+const SENDING=`SELECT 1 FROM avis_core_v2.fin_terminal_peer_messages WHERE direction='OUT' AND answer_to IS NULL AND status='SENDING'
+ AND updated_at>=now()-interval '1 minute' LIMIT 1`;
+const certificates=bundle=>(String(bundle||'').match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g)||[])
+ .filter(pem=>{try{new X509Certificate(pem);return true;}catch{return false;}});
 // The certificate a peer showed comes from that peer's own issuer: a certificate of its chain is one the peer's credentials name,
 // or is signed by one.
 function issuedBy(socket,bundle){
@@ -33,7 +39,9 @@ function issuedBy(socket,bundle){
 }
 
 export class FinListener{
- constructor(pool,peers,{env=process.env,port=Number(env.AVIS_FIN_LISTENER_PORT)||LISTEN_PORT,host='0.0.0.0',credentials=peers.credentials,poll=15000}={}){
+ // Without a host the port listens on IPv6 and IPv4 alike, or on IPv4 alone where the machine has no IPv6 (review finding: a
+ // peer whitelisted by its IPv6 address must get through).
+ constructor(pool,peers,{env=process.env,port=Number(env.AVIS_FIN_LISTENER_PORT)||LISTEN_PORT,host=null,credentials=peers.credentials,poll=15000}={}){
   Object.assign(this,{pool,peers,env,port,host,credentials,poll});
   this.server=null;this.sockets=new Set();this.allowed=new Set();this.issuers=[];this.failure=null;this.queue=Promise.resolve();this.timer=null;this.watcher=null;this.stopped=false;
  }
@@ -51,8 +59,12 @@ export class FinListener{
   if(!LISTEN_MINUTES.includes(body?.minutes))fault('INVALID_FIELD','minutes');
   listenerCredentials(this.env);
   if(!(await this.pool.query(PEER_ADDRESSES+' LIMIT 1')).rows.length)fault('FIN_LISTENER_NO_PEER','address',409);
-  await this.pool.query(`INSERT INTO avis_core_v2.fin_terminal_listener(listener_id,open_until,changed_by) VALUES(1,now()+make_interval(mins=>$1),$2)
-   ON CONFLICT(listener_id) DO UPDATE SET open_until=EXCLUDED.open_until,changed_by=EXCLUDED.changed_by,changed_at=now()`,[body.minutes,String(actor.id)]);
+  // Never both: a session message on its way keeps the port closed until it has its answer (src/fin-peer.mjs).
+  await underConnectorLock(this.pool,async db=>{
+   if((await db.query(SENDING)).rows.length)fault('FIN_SENDING',null,409);
+   await db.query(`INSERT INTO avis_core_v2.fin_terminal_listener(listener_id,open_until,changed_by) VALUES(1,now()+make_interval(mins=>$1),$2)
+    ON CONFLICT(listener_id) DO UPDATE SET open_until=EXCLUDED.open_until,changed_by=EXCLUDED.changed_by,changed_at=now()`,[body.minutes,String(actor.id)]);
+  });
   await this.reconcile();
   return this.status(actor);
  }
@@ -90,8 +102,9 @@ export class FinListener{
   for(const socket of this.sockets)if(!this.allowed.has(plainAddress(socket.remoteAddress)))socket.destroy();
  }
  async #start(){
-  let own;try{own=listenerCredentials(this.env);}catch(error){this.failure=error.code;return;}
-  const server=tls.createServer({cert:own.cert,key:own.key,ca:this.issuers,requestCert:true,rejectUnauthorized:true,minVersion:'TLSv1.3'});
+  let own,server;
+  try{own=listenerCredentials(this.env);server=tls.createServer({cert:own.cert,key:own.key,ca:this.issuers,requestCert:true,rejectUnauthorized:true,minVersion:'TLSv1.3'});}
+  catch{this.failure='LISTENER_CONFIGURATION';return;}
   // An address not whitelisted is let go before its TLS handshake.
   server.on('connection',socket=>{
    if(!this.allowed.has(plainAddress(socket.remoteAddress)))return socket.destroy();
@@ -99,8 +112,12 @@ export class FinListener{
   });
   server.on('secureConnection',socket=>this.#serve(socket));
   server.on('tlsClientError',(error,socket)=>socket.destroy());
-  try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(this.port,this.host,()=>{server.off('error',reject);resolve();});});}
-  catch(error){this.failure=diagnostic(error);return;}
+  let failure=null;
+  for(const host of this.host?[this.host]:['::','0.0.0.0']){
+   try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(this.port,host,()=>{server.off('error',reject);resolve();});});failure=null;break;}
+   catch(error){failure=error;if(!['EAFNOSUPPORT','EADDRNOTAVAIL'].includes(error.code))break;}
+  }
+  if(failure){this.failure=diagnostic(failure);return;}
   server.on('error',()=>{});
   this.server=server;this.failure=null;
  }
