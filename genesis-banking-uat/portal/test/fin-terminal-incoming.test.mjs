@@ -11,17 +11,19 @@ import {createBankServer} from '../server.mjs';
 import {exampleForm} from './helpers/fin-example.mjs';
 
 // Requested by the bank owner: "We now register an incoming transfer so AVISPay PLC is the receiver" - AVISPay PLC's chosen
-// account on the creditor side, the NOSTRO where the money arrives as the sender, and the money booked on the bank's inbound
-// suspense until the NOSTRO statement confirms it.
+// account on the creditor side, the NOSTRO where the money arrives as the sender - and then "All Nostro we control manually not
+// automatically": registered, the money is booked at once on the NOSTRO and on the chosen account (specification v3,
+// "CORE_BANKING_&_NOSTRO", ACSC).
 const admin={id:'fin-incoming-admin',username:'fin-incoming',admin:true},guest={id:'guest',admin:false};
 let pool,db,fin,suspense,account,nostro,nostroLedger;
 const refused=(code,field)=>error=>error.code===code&&(field===undefined||error.field===field);
 // The example transfer turned round: the example debtor sends, AVISPay PLC's chosen account receives through the NOSTRO.
 const incoming=(overrides={})=>({...exampleForm(),uetr:newUetr(),senderBic:'EXMPDEFFXXX',receiverBic:account.bic,settlement:'INGA',
  settlementAccount:'NOSTRO-EXAMPLE-1',creditorName:account.institution,creditorIban:account.iban,creditorAgentBic:account.bic,...overrides});
-const balances=async()=>(await pool.query(`SELECT account_id::text,available_balance::text,locked_balance::text FROM avis_core_v2.ledger_accounts
- WHERE account_id=ANY($1::uuid[]) ORDER BY account_id`,[[suspense.id,nostroLedger]])).rows;
-const registrations=async()=>(await pool.query(`SELECT (SELECT count(*) FROM avis_core_v2.ledger_journals WHERE event_type='FIN_INCOMING_REGISTERED')::int AS journals,
+// The NOSTRO's and the chosen account's balances, in cents.
+const balances=async()=>Object.fromEntries((await pool.query(`SELECT account_id::text,(available_balance*100)::bigint::text AS cents FROM avis_core_v2.ledger_accounts
+ WHERE account_id=ANY($1::uuid[])`,[[suspense.id,nostroLedger]])).rows.map(row=>[row.account_id===suspense.id?'account':'nostro',BigInt(row.cents)]));
+const registrations=async()=>(await pool.query(`SELECT (SELECT count(*) FROM avis_core_v2.ledger_journals WHERE event_type='FIN_INCOMING_BOOKED')::int AS journals,
  (SELECT count(*) FROM avis_core_v2.fin_terminal_drafts)::int AS drafts`)).rows[0];
 before(async()=>{
  if(process.env.TEST_DATABASE_URL){const url=new URL(process.env.TEST_DATABASE_URL);assert.equal(url.pathname,'/avispay_ci');
@@ -39,7 +41,7 @@ before(async()=>{
 });
 after(async()=>{if(db)await db.close();else await pool.end()});
 
-test('registered, an incoming transfer is booked on the inbound suspense only - never on the NOSTRO or the chosen account before the NOSTRO statement',async()=>{
+test('registered, an incoming transfer is booked at once on the NOSTRO and on AVISPay PLC\'s chosen account',async()=>{
  const selection={bookingAccountId:suspense.id,nostroAccountId:nostro.id},written=incoming(),before=await balances();
  const registered=await fin.register(admin,{form:written,selection});
  assert.equal(registered.direction,'INCOMING');assert.equal(registered.registered,true);assert.equal(registered.schemaValid,true);
@@ -49,15 +51,16 @@ test('registered, an incoming transfer is booked on the inbound suspense only - 
  const message=registered.xml.replace(/\n\s*/g,'');
  assert.ok(message.includes('<Cdtr><Nm>AVISPay PLC</Nm></Cdtr><CdtrAcct><Id><IBAN>'+account.iban+'</IBAN></Id></CdtrAcct>'));
  assert.ok(message.includes('<SttlmInf><SttlmMtd>INGA</SttlmMtd><SttlmAcct><Id><Othr><Id>NOSTRO-EXAMPLE-1</Id></Othr></Id></SttlmAcct></SttlmInf>'));
- // Expected at the NOSTRO, owed to AVISPay PLC: both on the bank's inbound suspense, for this NOSTRO.
+ // On the NOSTRO, where the money arrived, and on the chosen account, AVISPay PLC's.
  const entries=(await pool.query(`SELECT j.event_type,j.reference_id,e.direction,e.amount::numeric(20,2)::text AS amount,a.owner_type,a.account_category,a.sub_account_code,a.currency_code
   FROM avis_core_v2.fin_terminal_drafts d JOIN avis_core_v2.ledger_journals j ON j.journal_id=d.registered_journal_id
   JOIN avis_core_v2.ledger_entries e USING(journal_id) JOIN avis_core_v2.ledger_accounts a USING(account_id) WHERE d.draft_id=$1 ORDER BY e.direction DESC`,[registered.draftId])).rows;
  assert.deepEqual(entries,[
-  {event_type:'FIN_INCOMING_REGISTERED',reference_id:written.businessMessageId,direction:'DEBIT',amount:'1250000.00',owner_type:'SUSPENSE_INBOUND',account_category:'ASSET',sub_account_code:'FIN_EXPECTED:'+nostro.id,currency_code:'EUR'},
-  {event_type:'FIN_INCOMING_REGISTERED',reference_id:written.businessMessageId,direction:'CREDIT',amount:'1250000.00',owner_type:'SUSPENSE_INBOUND',account_category:'LIABILITY',sub_account_code:'FIN_INCOMING:'+nostro.id,currency_code:'EUR'}]);
- assert.deepEqual(await balances(),before);
- assert.equal((await pool.query("SELECT count(*)::int AS n FROM avis_core_v2.operation_audit WHERE operation='FIN_INCOMING_REGISTERED' AND actor_id=$1",[admin.id])).rows[0].n,1);
+  {event_type:'FIN_INCOMING_BOOKED',reference_id:written.businessMessageId,direction:'DEBIT',amount:'1250000.00',owner_type:'CORRESPONDENT_NOSTRO',account_category:'ASSET',sub_account_code:entries[0].sub_account_code,currency_code:'EUR'},
+  {event_type:'FIN_INCOMING_BOOKED',reference_id:written.businessMessageId,direction:'CREDIT',amount:'1250000.00',owner_type:'SUSPENSE_INBOUND',account_category:'LIABILITY',sub_account_code:entries[1].sub_account_code,currency_code:'EUR'}]);
+ const after=await balances();
+ assert.deepEqual([after.nostro-before.nostro,after.account-before.account],[125000000n,125000000n]);
+ assert.equal((await pool.query("SELECT count(*)::int AS n FROM avis_core_v2.operation_audit WHERE operation='FIN_INCOMING_BOOKED' AND actor_id=$1",[admin.id])).rows[0].n,1);
  // Kept for good: not saved, registered or deleted again; its UETR names this payment only.
  const again={draftId:registered.draftId,revision:registered.revision,form:registered.form,selection};
  await assert.rejects(fin.save(admin,{...again,direction:'INCOMING'}),e=>refused('FIN_DRAFT_REGISTERED','draftId')(e)&&e.status===409);
@@ -71,15 +74,14 @@ test('registered, an incoming transfer is booked on the inbound suspense only - 
 });
 
 test('an incoming draft is saved first and registered from it, at the revision it was opened at',async()=>{
- const selection={bookingAccountId:suspense.id,nostroAccountId:nostro.id};
+ const selection={bookingAccountId:suspense.id,nostroAccountId:nostro.id},before=await balances();
  const saved=await fin.save(admin,{form:incoming({amount:'990.50'}),selection,direction:'INCOMING'});
  assert.deepEqual([saved.direction,saved.registered,saved.registeredAt],['INCOMING',false,null]);
  await assert.rejects(fin.register(admin,{draftId:saved.draftId,revision:0,form:saved.form,selection}),e=>refused('FIN_DRAFT_CHANGED','draftId')(e)&&e.status===409);
  const registered=await fin.register(admin,{draftId:saved.draftId,revision:saved.revision,form:saved.form,selection});
  assert.deepEqual([registered.draftId,registered.revision,registered.registered],[saved.draftId,2,true]);
- const owed=(await pool.query(`SELECT available_balance::numeric(20,2)::text AS balance FROM avis_core_v2.ledger_accounts
-  WHERE owner_type='SUSPENSE_INBOUND' AND sub_account_code=$1 AND currency_code='EUR'`,['FIN_INCOMING:'+nostro.id])).rows[0].balance;
- assert.equal(owed,'1250990.50');
+ const after=await balances();
+ assert.deepEqual([after.nostro-before.nostro,after.account-before.account],[99050n,99050n]);
 });
 
 test('nothing is booked or kept for an incoming transfer that does not name its accounts as chosen or does not pass its check',async()=>{

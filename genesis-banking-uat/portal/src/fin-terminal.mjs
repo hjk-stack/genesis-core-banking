@@ -212,9 +212,9 @@ export class FinTerminal{
   });
  }
  // Registered, an incoming transfer's message - one that passed both schemas, naming AVISPay PLC's chosen account as the creditor's
- // and the NOSTRO as the sender - is kept for good, and its money is booked on the bank's inbound suspense: expected at the NOSTRO
- // and owed to the chosen account until the NOSTRO statement confirms it. Neither the NOSTRO nor the chosen account is booked
- // before that, so money not yet confirmed is never spent.
+ // and the NOSTRO as the sender - is kept for good, and its money is booked at once: on the NOSTRO, where it arrived, and on the
+ // chosen account. The bank owner: "All Nostro we control manually not automatically"; the FinTerminal specification v3,
+ // "CORE_BANKING_&_NOSTRO", ACSC.
  async register(actor,body){
   this.#administrator(actor);
   const form=this.#form(body?.form),selection=this.#selection(body?.selection),xml=buildFinMessage(form),draftId=body?.draftId??null;
@@ -227,13 +227,15 @@ export class FinTerminal{
    if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
    await this.#checkSelection(client,selection,form,'INCOMING');
    if(draftId!==null)await this.#opened(client,draftId,body.revision);
-   const core=new SovereignCore(null);
-   const expected=await core.system(client,'SUSPENSE_INBOUND',form.currency,'FIN_EXPECTED:'+selection.nostroAccountId,'ASSET');
-   const owed=await core.system(client,'SUSPENSE_INBOUND',form.currency,'FIN_INCOMING:'+selection.nostroAccountId);
-   const journalId=await core.post(client,actor,'fin-incoming:'+form.uetr,'FIN_INCOMING_REGISTERED',form.businessMessageId,
-    [{accountId:expected,direction:'DEBIT',amount:form.amount},{accountId:owed,direction:'CREDIT',amount:form.amount}]);
+   // The NOSTRO's own ledger account: an asset of the bank at its correspondent, in the transfer's currency.
+   const nostro=(await client.query(`SELECT a.account_id FROM avis_core_v2.external_cash_accounts c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.ledger_account_id
+    WHERE c.cash_account_id=$1 AND c.is_active AND a.currency_code=$2 AND a.account_category='ASSET' AND a.network IS NULL AND a.wallet_scope='FUNDING'
+     AND a.owner_type IN ('CORRESPONDENT_NOSTRO','CENTRAL_BANK_RESERVE') FOR SHARE OF c`,[selection.nostroAccountId,form.currency])).rows[0];
+   if(!nostro)fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
+   const journalId=await new SovereignCore(null).post(client,actor,'fin-incoming:'+form.uetr,'FIN_INCOMING_BOOKED',form.businessMessageId,
+    [{accountId:nostro.account_id,direction:'DEBIT',amount:form.amount},{accountId:selection.bookingAccountId,direction:'CREDIT',amount:form.amount}]);
    const row=await this.#keep(client,actor,draftId,{form,xml,valid:true,selection,direction:'INCOMING'},journalId);
-   await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_INCOMING_REGISTERED',journalId]);
+   await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_INCOMING_BOOKED',journalId]);
    return draftOf(row);
   });
  }

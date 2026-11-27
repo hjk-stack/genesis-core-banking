@@ -257,15 +257,15 @@ test('Incoming: the chosen account is the creditor and the NOSTRO\'s bank the se
   assert.deepEqual([select('bookingAccountId').value,select('nostroAccountId').value],[commonEur.id,nostroEur.id]);
   page.fill({debtorName:'Example Debtor GmbH',debtorIban:exampleForm().debtorIban,debtorAgentBic:'EXMPDEFFXXX'});
   await page.press('[data-fin-register]');
-  assert.deepEqual([page.state(),page.verdict()],['Incoming registered · awaiting NOSTRO statement','XSD: PASSED']);
+  assert.deepEqual([page.state(),page.verdict()],['Incoming booked · ACSC','XSD: PASSED']);
   assert.deepEqual([register.hidden,save.hidden,turn.disabled],[true,true,true]);
   const list=page.$('[data-fin-drafts]'),draftId=list.value;
-  assert.match(list.selectedOptions[0].textContent,/^XSD ✓ · Incoming registered · 1250000\.00 EUR · Example Debtor GmbH · /);
+  assert.match(list.selectedOptions[0].textContent,/^XSD ✓ · Incoming booked · 1250000\.00 EUR · Example Debtor GmbH · /);
   // A new message is outgoing again; the registered transfer opens as it was kept.
   await page.press('[data-fin-new]');
   assert.deepEqual([turn.value,turn.disabled,register.hidden,save.hidden],['OUTGOING',false,true,false]);
   await page.choose(draftId);
-  assert.deepEqual([turn.value,page.state(),register.hidden,save.hidden],['INCOMING','Incoming registered · awaiting NOSTRO statement',true,true]);
+  assert.deepEqual([turn.value,page.state(),register.hidden,save.hidden],['INCOMING','Incoming booked · ACSC',true,true]);
   assert.deepEqual(values(['creditorIban','senderBic','settlement']),[account.iban,'EXMPCHZZXXX','INGA']);
  }finally{page.close();}
 });

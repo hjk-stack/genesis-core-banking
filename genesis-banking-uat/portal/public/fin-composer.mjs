@@ -43,7 +43,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   for(const input of inputs)if(named.has(input.dataset.finField))input.setAttribute('aria-invalid','true');else input.removeAttribute('aria-invalid');
  }
  function paintState(){
-  state.textContent=registered?'Incoming registered · awaiting NOSTRO statement':
+  state.textContent=registered?'Incoming booked · ACSC':
    draft?(dirty?'Draft · changes not saved':'Draft saved · revision '+draft.revision):(dirty?'New message · not saved':'New message');
   list.value=draft?.draftId||'';
  }
@@ -151,7 +151,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   if(!Array.isArray(rows))rows=[];
   // An incoming transfer is listed with its sender, an outgoing one with its creditor.
   const incoming=row=>row.direction==='INCOMING';
-  list.replaceChildren(choice('','New message'),...rows.map(row=>choice(row.draftId,[row.schemaValid?'XSD ✓':'XSD ✗',...(incoming(row)?['·',row.registered?'Incoming registered':'Incoming']:[]),
+  list.replaceChildren(choice('','New message'),...rows.map(row=>choice(row.draftId,[row.schemaValid?'XSD ✓':'XSD ✗',...(incoming(row)?['·',row.registered?'Incoming booked':'Incoming']:[]),
    '·',row.amount||'—',row.currency,'·',(incoming(row)?row.debtorName:row.creditorName)||'—','·',when(row.updatedAt)].join(' '))));
   list.value=draft?.draftId||'';
  }
