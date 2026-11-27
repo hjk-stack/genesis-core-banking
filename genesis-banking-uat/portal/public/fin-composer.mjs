@@ -19,7 +19,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  const turn=$('[data-fin-direction]'),register=$('[data-fin-register]'),keep=$('[data-fin-save]');
  let form=blankForm(),draft=null,dirty=false,edits=0,broken=null,pause=null,busy=false,refused=null,selection=noChoice();
  // The bank owner: "We now register an incoming transfer so AVISPay PLC is the receiver".
- let direction='OUTGOING',registered=false;
+ let direction='OUTGOING',registered=false,converted=null;
  let accounts={bookingAccounts:[],nostroAccounts:[],tokenWallets:[]};
 
  // A choice the XML holds that the list does not offer is shown as a choice of its own: the form shows what the XML says.
@@ -43,7 +43,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   for(const input of inputs)if(named.has(input.dataset.finField))input.setAttribute('aria-invalid','true');else input.removeAttribute('aria-invalid');
  }
  function paintState(){
-  state.textContent=registered?'Incoming booked · ACSC':
+  state.textContent=registered?(converted?'Incoming converted · ACSC · '+converted.quantity+' '+converted.asset:'Incoming booked · ACSC'):
    draft?(dirty?'Draft · changes not saved':'Draft saved · revision '+draft.revision):(dirty?'New message · not saved':'New message');
   list.value=draft?.draftId||'';
  }
@@ -151,7 +151,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   if(!Array.isArray(rows))rows=[];
   // An incoming transfer is listed with its sender, an outgoing one with its creditor.
   const incoming=row=>row.direction==='INCOMING';
-  list.replaceChildren(choice('','New message'),...rows.map(row=>choice(row.draftId,[row.schemaValid?'XSD ✓':'XSD ✗',...(incoming(row)?['·',row.registered?'Incoming booked':'Incoming']:[]),
+  list.replaceChildren(choice('','New message'),...rows.map(row=>choice(row.draftId,[row.schemaValid?'XSD ✓':'XSD ✗',...(incoming(row)?['·',row.registered?(row.conversion?'Incoming converted':'Incoming booked'):'Incoming']:[]),
    '·',row.amount||'—',row.currency,'·',(incoming(row)?row.debtorName:row.creditorName)||'—','·',when(row.updatedAt)].join(' '))));
   list.value=draft?.draftId||'';
  }
@@ -188,19 +188,19 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   flush();
   if(broken)throw Object.assign(new Error('XML: '+broken),{code:'FIN_MESSAGE_INVALID'});
   const at=edits,{draft:kept}=await request('POST','/api/fin-terminal/incoming',{form,selection,...(draft?{draftId:draft.draftId,revision:draft.revision}:{})});
-  draft={draftId:kept.draftId,revision:kept.revision};registered=kept.registered===true;
+  draft={draftId:kept.draftId,revision:kept.revision};registered=kept.registered===true;converted=kept.conversion||null;
   if(edits===at){form=whole(kept.form);selection=chosen(kept.selection);dirty=false;paint();paintChoices();xml.value=kept.xml;show('passed','XSD: PASSED');}
   await listDrafts();paintState();paintDirection();
  }
  const chosen=kept=>Object.fromEntries(CHOICES.map(name=>[name,typeof kept?.[name]==='string'?kept[name]:'']));
  function start(){
-  form=blankForm(new Date());selection=noChoice();draft=null;dirty=false;broken=null;refused=null;direction='OUTGOING';registered=false;
+  form=blankForm(new Date());selection=noChoice();draft=null;dirty=false;broken=null;refused=null;direction='OUTGOING';registered=false;converted=null;
   paint();paintChoices();write();show('unchecked','XSD: not checked');paintState();paintDirection();
  }
  async function open(draftId){
   const {draft:loaded}=await request('GET','/api/fin-terminal/drafts/'+encodeURIComponent(draftId));
   form=whole(loaded.form);selection=chosen(loaded.selection);draft={draftId:loaded.draftId,revision:loaded.revision};dirty=false;broken=null;refused=null;
-  direction=loaded.direction==='INCOMING'?'INCOMING':'OUTGOING';registered=loaded.registered===true;
+  direction=loaded.direction==='INCOMING'?'INCOMING':'OUTGOING';registered=loaded.registered===true;converted=loaded.conversion||null;
   paint();paintChoices();xml.value=loaded.xml;paintState();paintDirection();await check();
  }
  async function listAccounts(){

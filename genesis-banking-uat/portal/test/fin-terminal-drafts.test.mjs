@@ -50,7 +50,8 @@ test('a draft keeps the form as written and its message as built; saved again, i
  assert.equal(saved.updatedBy,admin.id);assert.equal(saved.creditorName,'Example Creditor SARL');
  const listed=(await fin.drafts(admin)).find(row=>row.draftId===saved.draftId);
  assert.deepEqual(listed,{draftId:saved.draftId,revision:1,uetr:written.uetr,messageType:'pacs.008.001.08',amount:'1250000.00',currency:'EUR',
-  creditorName:'Example Creditor SARL',debtorName:'Example Debtor GmbH',schemaValid:true,direction:'OUTGOING',registered:false,updatedAt:saved.updatedAt,updatedBy:admin.id});
+  creditorName:'Example Creditor SARL',debtorName:'Example Debtor GmbH',schemaValid:true,direction:'OUTGOING',registered:false,updatedAt:saved.updatedAt,updatedBy:admin.id,
+  conversion:null});
  assert.deepEqual(await fin.draft(admin,saved.draftId),saved);
  const changed=await fin.save(admin,{draftId:saved.draftId,revision:1,form:{...saved.form,amount:'990.50'}});
  assert.equal(changed.revision,2);assert.equal(changed.draftId,saved.draftId);assert.match(changed.xml,/<IntrBkSttlmAmt Ccy="EUR">990\.50<\/IntrBkSttlmAmt>/);

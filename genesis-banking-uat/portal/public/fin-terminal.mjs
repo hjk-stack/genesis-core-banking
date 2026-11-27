@@ -2,6 +2,7 @@ import {FIN_TERMINAL_CHANNEL} from './fin-terminal-switch.mjs';
 import {createFinComposer} from './fin-composer.mjs';
 import {createFinPeer} from './fin-peer.mjs';
 import {createFinSettlement} from './fin-settlement.mjs';
+import {createFinConverter} from './fin-converter.mjs';
 
 // The FinTerminal window opened by its switch on the Payments page (fin-terminal-switch.mjs). It shares the bank's sign-in
 // and shows itself to a signed-in bank administrator only; its address opened by anyone else stays empty.
@@ -33,7 +34,7 @@ export async function startFinTerminal({root=document,fetcher=fetch,windowApi=ro
   terminal.hidden=!session;csrf=session?.csrf||'';
   if(session){
    shown=true;
-   if(!composer){composer=createFinComposer({root,request});composer?.start();peer=createFinPeer({root,request});void peer?.start();settlement=createFinSettlement({root,request});settlement?.start();}
+   if(!composer){composer=createFinComposer({root,request});composer?.start();peer=createFinPeer({root,request});void peer?.start();settlement=createFinSettlement({root,request});settlement?.start();createFinConverter({root,request})?.start();}
    return;
   }
   // Closed once: the terminal's other requests that find the sign-in ended do not close it again.
