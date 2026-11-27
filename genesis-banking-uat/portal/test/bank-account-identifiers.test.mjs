@@ -86,7 +86,7 @@ before(async()=>{
    await insertAccount(client,{owner:'USER',user:1,currency:'TOKEN',network:'ETHEREUM',scope:'CUSTODY'})
   ];
  }finally{client.release();}
- const treasury=await bookTreasuryOpening(pool,{CONTAINER_APP_NAME:'genesis-banking-uat',CONTAINER_APP_ENV_DNS_SUFFIX:'orangemushroom-9faae382.italynorth.azurecontainerapps.io',PGDATABASE:'fineract_default'});
+ const treasury=await bookTreasuryOpening(pool,{CONTAINER_APP_NAME:'genesis-banking-uat',CONTAINER_APP_ENV_DNS_SUFFIX:'purplepebble-81c147aa.italynorth.azurecontainerapps.io',PGDATABASE:'fineract_default'});
  cryptoIds.push(...treasury.positions.filter(p=>p.accountId).map(p=>p.accountId));
  snapshot=await financialSnapshot();
  const upgrade=await pool.connect();try{await migrate(upgrade);await migrate(upgrade);}finally{upgrade.release();}

@@ -54,7 +54,7 @@ def initialize(request):
 def main():
     existing = deployment.app(deployment.APP)
     base = 'https://' + existing['properties']['configuration']['ingress']['fqdn']
-    if base != 'https://genesis-banking-uat.orangemushroom-9faae382.italynorth.azurecontainerapps.io':
+    if base != 'https://genesis-banking-uat.purplepebble-81c147aa.italynorth.azurecontainerapps.io':
         raise RuntimeError('Unexpected banking application')
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
     login = deployment.api(opener, base, '/api/login', {'username': 'mifos', 'password': deployment.secret('genesis-mifos-uat', 'admin-password')})

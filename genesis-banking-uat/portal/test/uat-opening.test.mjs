@@ -12,7 +12,7 @@ import {migrate} from '../src/migrate.mjs';
 import {SovereignCore} from '../src/core.mjs';
 import {applyAuthorizedUatOpening,OPENING_REQUEST} from '../src/uat-opening.mjs';
 let db,pool,core,original,receipt;
-const env={CONTAINER_APP_NAME:'genesis-banking-uat',CONTAINER_APP_ENV_DNS_SUFFIX:'orangemushroom-9faae382.italynorth.azurecontainerapps.io',PGDATABASE:'fineract_default'};
+const env={CONTAINER_APP_NAME:'genesis-banking-uat',CONTAINER_APP_ENV_DNS_SUFFIX:'purplepebble-81c147aa.italynorth.azurecontainerapps.io',PGDATABASE:'fineract_default'};
 const actor={id:'opening-fixture',admin:true};
 const accounts=async()=>(await pool.query('SELECT account_id,available_balance::text,locked_balance::text,wallet_scope FROM avis_core_v2.ledger_accounts ORDER BY account_id')).rows;
 before(async()=>{
