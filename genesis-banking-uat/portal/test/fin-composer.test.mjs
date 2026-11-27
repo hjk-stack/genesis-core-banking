@@ -216,9 +216,16 @@ test('Accounts: a Common or Suspense account and a NOSTRO account write the mess
   const draftId=page.$('[data-fin-drafts]').value;
   await page.press('[data-fin-new]');assert.deepEqual(chosen(),['','','']);
   await page.choose(draftId);assert.deepEqual(chosen(),[commonEur.id,nostroEur.id,walletUsdc]);
-  // Another currency: the accounts chosen in euros are left and the dollar ones offered; the wallet stays.
+  // A field that names a chosen account, written otherwise, lets that account go; the others stay (review finding).
+  page.type('debtorAgentBic','EXMPDEFFXXX');assert.deepEqual(chosen(),['',nostroEur.id,walletUsdc]);
+  await page.writeXml(page.xml.value.replace('<Id>NOSTRO-EXAMPLE-1</Id>','<Id>NOSTRO-OTHER-9</Id>'));assert.deepEqual(chosen(),['','',walletUsdc]);
+  page.pick('bookingAccountId',commonEur.id);page.pick('nostroAccountId',nostroEur.id);assert.deepEqual(chosen(),[commonEur.id,nostroEur.id,walletUsdc]);
+  // Another currency: the accounts chosen in euros are let go with the fields they wrote, the dollar ones are offered; the wallet
+  // stays (review finding).
   page.type('currency','USD');
   assert.deepEqual(chosen(),['','',walletUsdc]);
+  assert.deepEqual(['debtorName','debtorIban','debtorAgentBic','receiverBic','settlementAccount','settlement'].map(name=>page.field(name).value),['','','','','','INDA']);
+  assert.doesNotMatch(page.xml.value,/NOSTRO-EXAMPLE-1|EXMPCHZZXXX/);
   assert.deepEqual(texts('bookingAccountId'),['—','Example Common · '+commonUsd.abiqIban+' · USD']);
   assert.deepEqual(texts('nostroAccountId'),['—','Example Dollar NOSTRO · NOSTRO-EXAMPLE-2 · USD']);
  }finally{page.close();}

@@ -66,6 +66,13 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   bookingAccountId:id=>{const account=accounts.bookingAccounts.find(item=>item.accountId===id);return account&&{debtorName:account.institution,debtorIban:account.iban,debtorAgentBic:account.bic};},
   nostroAccountId:id=>{const account=accounts.nostroAccounts.find(item=>item.accountId===id);return account&&{...(account.bic?{receiverBic:account.bic}:{}),settlement:'INDA',settlementAccount:account.account};},
   tokenWalletId:()=>null};
+ // The fields that name a chosen account: written otherwise, the message no longer goes with that account (review finding).
+ const binds={bookingAccountId:['debtorIban','debtorAgentBic'],nostroAccountId:['receiverBic','settlement','settlementAccount']};
+ const bound=(name,now=normalizeForm(form))=>{
+  const fill=selection[name]&&fills[name](selection[name]);if(!fill)return null;
+  const wrote=normalizeForm({...form,...fill});
+  return binds[name].filter(field=>field in fill).every(field=>wrote[field]===now[field])?fill:false;
+ };
  for(const select of choices)select.addEventListener('change',()=>{
   const name=select.dataset.finChoice;if(selection[name]===select.value)return;
   selection={...selection,[name]:select.value};
@@ -73,16 +80,26 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   if(fill){form={...form,...fill};paint();broken=null;write();}
   changed();
  });
- // Another currency leaves the accounts chosen in the former one.
- function currencyChanged(before){
-  if(normalizeForm(form).currency===normalizeForm(before).currency)return;
-  selection={...selection,bookingAccountId:'',nostroAccountId:''};paintChoices();
+ // After the form changed: in another currency, the accounts chosen in the former one are let go, and the fields they wrote
+ // that still say so are emptied (review finding); a chosen account whose fields were written otherwise is let go.
+ function rebind(before){
+  const now=normalizeForm(form),clear={},was=JSON.stringify(selection),moved=now.currency!==normalizeForm(before).currency;
+  if(moved){
+   for(const [name,fields] of [['bookingAccountId',['debtorName','debtorIban','debtorAgentBic']],['nostroAccountId',['receiverBic','settlementAccount']]]){
+    const fill=bound(name,now);
+    if(fill)for(const field of fields)if(field in fill&&normalizeForm({...form,...fill})[field]===now[field])clear[field]='';
+    selection={...selection,[name]:''};
+   }
+  }
+  for(const name of Object.keys(binds))if(bound(name,now)===false)selection={...selection,[name]:''};
+  if(Object.keys(clear).length){form={...form,...clear};paint();write();}
+  if(moved||JSON.stringify(selection)!==was)paintChoices();
  }
  // The form writes the XML.
  const take=event=>{
   const field=event.target?.dataset?.finField;if(!field||form[field]===event.target.value)return;
   if(event.target.tagName==='SELECT')choose(event.target,event.target.value);
-  const before=form;form={...form,[field]:event.target.value};broken=null;write();currencyChanged(before);changed();
+  const before=form;form={...form,[field]:event.target.value};broken=null;write();rebind(before);changed();
  };
  const sheet=$('[data-fin-form]');
  sheet.addEventListener('input',take);sheet.addEventListener('change',take);sheet.addEventListener('submit',event=>event.preventDefault());
@@ -94,7 +111,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   if(result.error){broken=result.error;show('broken','XML: '+result.error);return;}
   broken=null;
   if(same(result.form,form)){if(verdict.dataset.state==='broken')show('unchecked','XSD: not checked');return;}
-  const before=form;form=result.form;paint();currencyChanged(before);changed();
+  const before=form;form=result.form;paint();rebind(before);changed();
  }
  const flush=()=>{if(pause!==null)read();};
  xml.addEventListener('input',()=>{view.clearTimeout(pause);pause=view.setTimeout(read,PAUSE);});

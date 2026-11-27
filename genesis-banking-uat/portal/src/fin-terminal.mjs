@@ -58,6 +58,10 @@ const WALLETS=`SELECT l.account_id,u.full_name,l.currency_code,l.network,a.name
  WHERE l.owner_type='USER' AND l.network IS NOT NULL AND l.wallet_scope='FUNDING' AND l.account_category='LIABILITY'
   AND l.wallet_visible IS NOT FALSE AND l.currency_code NOT IN ('AG','AGi')`;
 const ID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// A NOSTRO account settles a transfer as its settlement account: the register keeps account numbers of up to 128 characters,
+// the message's account up to 34 (review finding) - a longer number is not offered.
+const settlementNumber=value=>normalizeForm({settlementAccount:String(value??'')}).settlementAccount;
+const fitsSettlement=row=>{const number=settlementNumber(row.iban_or_account_no);return number.length>0&&number.length<=LIMITS.settlementAccount;};
 const CHOICES={bookingAccountId:'booking_account_id',nostroAccountId:'nostro_cash_account_id',tokenWalletId:'token_wallet_account_id'};
 
 const draftOf=(row,full=true)=>({draftId:row.draft_id,revision:row.revision,uetr:row.uetr,messageType:row.message_type,
@@ -89,10 +93,20 @@ export class FinTerminal{
    return [name,value.toLowerCase()];
   }));
  }
- // A chosen account is one of the lists the terminal offers, in the message's currency where it holds money in one.
- async #checkSelection(db,selection,currency){
-  if(selection.bookingAccountId&&!(await db.query(BOOKING+' AND a.account_id=$2 AND a.currency_code=$3',[RECEIVING_OWNERS,selection.bookingAccountId,currency])).rows.length)fault('FIN_BOOKING_ACCOUNT','bookingAccountId',409);
-  if(selection.nostroAccountId&&!(await db.query(NOSTRO+' WHERE cash_account_id=$1 AND currency_code=$2 AND is_active',[selection.nostroAccountId,currency])).rows.length)fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
+ // A chosen account is one of the lists the terminal offers, in the message's currency where it holds money in one, and the
+ // message says it (review finding): the debtor's IBAN and BIC are the Common or Suspense account's, the receiver, INDA and
+ // the settlement account the NOSTRO account's.
+ async #checkSelection(db,selection,form){
+  if(selection.bookingAccountId){
+   const row=(await db.query(BOOKING+' AND a.account_id=$2 AND a.currency_code=$3',[RECEIVING_OWNERS,selection.bookingAccountId,form.currency])).rows[0];
+   if(!row)fault('FIN_BOOKING_ACCOUNT','bookingAccountId',409);
+   if(form.debtorIban!==row.abiq_iban||form.debtorAgentBic!==row.abiq_bic)fault('FIN_BOOKING_MISMATCH','bookingAccountId',409);
+  }
+  if(selection.nostroAccountId){
+   const row=(await db.query(NOSTRO+' WHERE cash_account_id=$1 AND currency_code=$2 AND is_active',[selection.nostroAccountId,form.currency])).rows[0];
+   if(!row||!fitsSettlement(row))fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
+   if(form.settlement!=='INDA'||form.settlementAccount!==settlementNumber(row.iban_or_account_no)||(row.bic_code&&form.receiverBic!==row.bic_code.toUpperCase()))fault('FIN_NOSTRO_MISMATCH','nostroAccountId',409);
+  }
   if(selection.tokenWalletId&&!(await db.query(WALLETS+' AND l.account_id=$1',[selection.tokenWalletId])).rows.length)fault('FIN_TOKEN_WALLET','tokenWalletId',409);
  }
  async accounts(actor){
@@ -103,7 +117,7 @@ export class FinTerminal{
   return {
    bookingAccounts:booking.map(row=>({accountId:row.account_id,type:row.owner_type==='COMMON_POOL'?'COMMON':'SUSPENSE',label:row.label,
     currency:row.currency_code,iban:row.abiq_iban,bic:row.abiq_bic,institution:row.institution_name})),
-   nostroAccounts:nostro.map(row=>({accountId:row.cash_account_id,institution:row.institution_name,bic:row.bic_code||'',
+   nostroAccounts:nostro.filter(fitsSettlement).map(row=>({accountId:row.cash_account_id,institution:row.institution_name,bic:row.bic_code||'',
     account:row.iban_or_account_no,accountName:row.account_name||'',currency:row.currency_code,active:row.is_active===true})),
    tokenWallets:wallets.map(row=>({accountId:row.account_id,holder:row.full_name,currency:row.currency_code,network:row.network,name:row.name||row.currency_code}))
   };
@@ -144,7 +158,7 @@ export class FinTerminal{
   try{
    await client.query('BEGIN');
    if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
-   await this.#checkSelection(client,selection,form.currency);
+   await this.#checkSelection(client,selection,form);
    const chosen=[selection.bookingAccountId,selection.nostroAccountId,selection.tokenWalletId];
    let row;
    if(draftId===null){

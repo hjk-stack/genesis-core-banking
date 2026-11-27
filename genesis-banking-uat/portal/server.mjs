@@ -152,7 +152,9 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  FIN_DRAFT_CHANGED:'This draft was saved meanwhile. Open it again before saving.',FIN_DRAFT_NOT_FOUND:'Select an existing FinTerminal draft.',
  FIN_MESSAGE_INVALID:'Write the ISO 20022 message as XML, without a document type.',
  FIN_BOOKING_ACCOUNT:'Select a Common or Suspense account in the message\'s currency.',FIN_NOSTRO_ACCOUNT:'Select an active NOSTRO account in the message\'s currency.',
- FIN_TOKEN_WALLET:'Select a "+" wallet; AG and AGi are not booked here.'
+ FIN_TOKEN_WALLET:'Select a "+" wallet; AG and AGi are not booked here.',
+ FIN_BOOKING_MISMATCH:'The debtor\'s IBAN and BIC are not those of the chosen Common or Suspense account.',
+ FIN_NOSTRO_MISMATCH:'The receiver, INDA and the settlement account are not those of the chosen NOSTRO account.'
 };
 export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={}}) {
  const core=new TradingRobotCore(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map(),indexService=new IndexServiceAuthenticator(pool,{env:core.secretEnv,fetcher:transferOptions.indexServiceFetcher||core.cryptoFetch});
