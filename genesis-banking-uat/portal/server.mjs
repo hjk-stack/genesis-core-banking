@@ -163,7 +163,9 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  FIN_NOSTRO_MISMATCH:'The receiver, INDA and the settlement account are not those of the chosen NOSTRO account.',
  FIN_CREDITOR_MISMATCH:'The creditor\'s IBAN and BIC and the receiver are not those of the chosen Common or Suspense account.',
  FIN_NOSTRO_SENDER_MISMATCH:'The sender, INGA and the settlement account are not those of the chosen NOSTRO account.',
- FIN_INCOMING_INVALID:'Register a message that passes Validate XML.',FIN_DRAFT_REGISTERED:'This incoming transfer is registered and is not changed any more.',
+ FIN_INCOMING_INVALID:'Register a message that passes Validate XML.',FIN_CONVERT_RATE:'No live rate for the chosen wallet\'s asset now. Try again.',
+ FIN_CONVERT_QUANTITY:'The amount converts to no token at four decimals.',FIN_IVMS101:'The IVMS101 travel-rule data is not complete: debtor name and IBAN, wallet holder.',
+FIN_DRAFT_REGISTERED:'This incoming transfer is registered and is not changed any more.',
  FIN_LISTENING:'The listening port is open: close it to connect out.',FIN_SENDING:'A session message is on its way: open the port once it has its answer.',FIN_LISTENER_NO_PEER:'Whitelist a peer bank\'s IP address before opening the port.',
  LISTENER_CONFIGURATION:'The listening certificate (AVIS_CONNECTOR_LISTENER) is not in place in Azure.'
 };
@@ -176,7 +178,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
  const workstationFetcher=transferOptions.workstationFetcher||fetch;
  const workstationAuth=new WorkstationAdmissionAuthenticator(pool,{fetcher:workstationFetcher});
  const workstationAdmission=new WorkstationAdmission(pool,{fetcher:workstationFetcher});
- const nostroStatements=new NostroStatements(pool),finTerminal=new FinTerminal(pool),finPeers=new FinPeers(pool,transferOptions.transport);
+ const nostroStatements=new NostroStatements(pool),finTerminal=new FinTerminal(pool,{pricing:transferOptions.finPricing}),finPeers=new FinPeers(pool,{...transferOptions.transport,terminal:finTerminal});
  const finListener=new FinListener(pool,finPeers,transferOptions.finListener).watch();
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  const server=http.createServer(async(req,res)=>{
@@ -308,7 +310,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const script=await readFile(new URL('./node_modules/pdfjs-dist/build'+path,import.meta.url));
     res.writeHead(200,{'content-type':'text/javascript; charset=utf-8','cache-control':'private, max-age=3600'});return res.end(script);
    }
-   if(req.method==='GET'&&['/','/card-message','/fin-terminal','/fin-terminal.mjs','/fin-terminal.css','/fin-terminal-switch.mjs','/fin-message.mjs','/fin-composer.mjs','/fin-peer.mjs','/fin-settlement.mjs','/app.mjs','/open-account-register.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/nostro-clearing.mjs','/checkout-ip.mjs','/nostro-clearing.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
+   if(req.method==='GET'&&['/','/card-message','/fin-terminal','/fin-terminal.mjs','/fin-terminal.css','/fin-terminal-switch.mjs','/fin-message.mjs','/fin-composer.mjs','/fin-peer.mjs','/fin-settlement.mjs','/fin-converter.mjs','/app.mjs','/open-account-register.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/nostro-clearing.mjs','/checkout-ip.mjs','/nostro-clearing.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
     const page=['/','/card-message','/fin-terminal'].includes(path),file=path==='/'?'index.html':page?'public'+path+'.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     // Always present the deployed UAT revision's current application source after an update.
@@ -476,12 +478,15 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(req.method==='GET'&&path==='/api/fin-terminal/listener')return send(res,200,await finListener.status(actor));
    // The specification v3's top bar and Screen B's "Final Settlement Ledgers" (src/fin-terminal.mjs), with the listening port's state.
    if(req.method==='GET'&&path==='/api/fin-terminal/telemetry')return send(res,200,{...await finTerminal.telemetry(actor),listener:await finListener.status(actor)});
+   // Screen B's Fiat-to-Crypto/Stablecoin Selector: the accounts' conversion wallets, the live rates and the transfers converted.
+   if(req.method==='GET'&&path==='/api/fin-terminal/converter')return send(res,200,await finTerminal.converter(actor));
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
    if(path==='/api/fin-terminal/drafts')return send(res,200,{draft:await finTerminal.save(actor,body)});
    if(path==='/api/fin-terminal/validate')return send(res,200,await finTerminal.validate(actor,body));
    if(path==='/api/fin-terminal/incoming')return send(res,200,{draft:await finTerminal.register(actor,body)});
    if(path==='/api/fin-terminal/mode')return send(res,200,await finTerminal.mode(actor,body));
+   if(path==='/api/fin-terminal/converter')return send(res,200,await finTerminal.route(actor,body));
    if(finPeer?.[1])return send(res,200,await finPeers.send(actor,finPeer[1],body));
    if(path==='/api/fin-terminal/listener'){
     if(typeof body?.open!=='boolean')fault('INVALID_FIELD','open');

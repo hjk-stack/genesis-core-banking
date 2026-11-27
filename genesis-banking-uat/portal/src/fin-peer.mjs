@@ -273,17 +273,18 @@ export class FinPeers{
  }
  // A peer's own message, taken on the listening port once its TLS, certificate and IP address were checked (src/fin-listener.mjs):
  // kept as it came, with the bank's answer as it leaves; the listener tells what became of the answer.
- // A peer's credit transfer is booked at once (src/fin-terminal.mjs) in the same transaction, and answered with its status.
+ // A peer's credit transfer is booked at once (src/fin-terminal.mjs) in the same transaction, and answered with its status; one to
+ // be converted into crypto has its live rate read before.
  async receive(profileId,xml){
   const peer=await this.#peer(profileId),received=String(xml).replaceAll('\0','');
   const read=await readPeerMessage(received,{localBic:peer.local_bic,peerBic:peer.peer_bic,own:await this.#own()});
   const at=new Date(),head={localBic:read.to||peer.local_bic,peerBic:peer.peer_bic,businessMessageId:newMessageId(at),at};
-  const transfer=read.status==='RECEIVED'&&read.type===PACS008?read.transfer:null;
+  const transfer=read.status==='RECEIVED'&&read.type===PACS008?read.transfer:null,quote=transfer&&await this.terminal.quoteIncoming(transfer);
   const messageId=randomUUID(),answerId=randomUUID(),client=await this.pool.connect();
   let answer;
   try{
    await client.query('BEGIN');
-   const settled=transfer&&await this.terminal.receiveIncoming(client,peer,transfer);
+   const settled=transfer&&await this.terminal.receiveIncoming(client,peer,transfer,quote);
    answer=settled?{type:PACS002,code:settled.status,parameters:[transfer.uetr,...(settled.reason?[settled.reason]:[])],text:settled.text,
      xml:buildPaymentStatus({...head,original:read.original,endToEndId:transfer.endToEndId,uetr:transfer.uetr,status:settled.status,reason:settled.reason,description:settled.text})}
     :read.status==='RECEIVED'

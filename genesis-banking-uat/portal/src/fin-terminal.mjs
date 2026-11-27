@@ -1,9 +1,11 @@
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {XMLParser} from 'fast-xml-parser';
 import {validateXML} from 'xmllint-wasm';
-import {SovereignCore,fault} from './core.mjs';
+import {SovereignCore,fault,money,decimal} from './core.mjs';
 import {RECEIVING_OWNERS} from './checkout-ip-settlement.mjs';
+import {cryptoLedgerAccount} from './crypto/rolling-ledger.mjs';
+import {MetaMaskPricing} from './metamask-pricing.mjs';
 import {FIELDS,LIMITS,HEAD,PACS008,buildFinMessage,normalizeForm,fieldProblems} from '../public/fin-message.mjs';
 
 // The FinTerminal's composer on the server: requested by the bank owner with the FinTerminal ISO 20022 specification,
@@ -58,7 +60,7 @@ const BOOKING=`SELECT a.account_id,a.owner_type,a.currency_code,b.abiq_iban,p.ab
  WHERE a.owner_type=ANY($1::text[]) AND b.status='ACTIVE' AND a.wallet_scope='FUNDING' AND a.account_category='LIABILITY' AND a.network IS NULL`;
 const NOSTRO=`SELECT cash_account_id,institution_name,bic_code,iban_or_account_no,account_name,currency_code,is_active
  FROM avis_core_v2.external_cash_accounts`;
-const WALLETS=`SELECT l.account_id,u.full_name,l.currency_code,l.network,a.name
+const WALLETS=`SELECT l.account_id,l.user_id,u.full_name,l.currency_code,l.network,a.name
  FROM avis_core_v2.ledger_accounts l JOIN avis_core_v2.sovereign_users u USING(user_id)
  LEFT JOIN avis_core_v2.crypto_assets a ON a.currency_code=l.currency_code
  WHERE l.owner_type='USER' AND l.network IS NOT NULL AND l.wallet_scope='FUNDING' AND l.account_category='LIABILITY'
@@ -88,16 +90,44 @@ const REJECTED={
  FIN_CREDITOR_MISMATCH:{reason:'AC03',text:'The creditor\'s agent and the receiver are not the bank of the creditor\'s account.'},
  FIN_NOSTRO_ACCOUNT:{reason:'NARR',text:'The bank holds no active NOSTRO account at this peer in this currency.'},
  FIN_NOSTRO_SENDER_MISMATCH:{reason:'NARR',text:'Not settled INGA on the bank\'s NOSTRO account at this peer, sent by this peer.'},
- FIN_UETR_DUPLICATE:{reason:'DUPL',text:'This UETR names another payment already.'}};
+ FIN_UETR_DUPLICATE:{reason:'DUPL',text:'This UETR names another payment already.'},
+ FIN_CONVERT_RATE:{reason:'NARR',text:'No live rate for converting into the account\'s wallet now.'},
+ FIN_CONVERT_QUANTITY:{reason:'NARR',text:'The amount converts to no token at four decimals.'},
+ FIN_TOKEN_WALLET:{reason:'NARR',text:'The account\'s conversion wallet is not open.'},
+ FIN_IVMS101:{reason:'NARR',text:'The IVMS101 travel-rule data is not complete.'}};
+
+// The specification v3's Direct Crypto Converter: "Interactive asset selector (EURC, USDC, BTC, ETH, SOL)". A transfer converted is
+// loaded at the live rate - EURC 1:1 for euros (MiCA), any other at its market price (MetaMask) - less 0.05%: amount x rate x 0.9995
+// to four decimals, rounded half to even as its backend's quantize(Decimal("0.0001")); its hash is "0x" and the SHA-256 of its UETR.
+export const CONVERT_ASSETS=Object.freeze(['EURC','USDC','BTC','ETH','SOL']);
+const SCALE=10n**18n;
+export function convertedQuantity(amount,rate){
+ const product=money(String(amount))*money(String(rate))*9995n,unit=10n**36n,rest=product%unit;
+ let quantity=product/unit;if(rest*2n>unit||rest*2n===unit&&quantity%2n===1n)quantity++;
+ return decimal(quantity,4);
+}
+export const transferHash=uetr=>'0x'+createHash('sha256').update(uetr).digest('hex');
+const four=value=>{const [whole,fraction='']=String(value).split('.');return whole+'.'+fraction.padEnd(4,'0').slice(0,4);};
+// The IVMS101 travel-rule data a conversion is kept with: who sent the money and from which account, who holds the wallet the tokens
+// are loaded into and which wallet - verified when each is named.
+const legal=name=>({legalPerson:{name:{nameIdentifier:[{legalPersonName:name,legalPersonNameIdentifierType:'LEGL'}]}}});
+function ivms101(form,wallet){
+ const account=wallet.public_address||wallet.account_id;
+ return {originator:{originatorPersons:[legal(form.debtorName)],accountNumber:[form.debtorIban]},
+  beneficiary:{beneficiaryPersons:[legal(wallet.full_name)],accountNumber:[account]},verified:[form.debtorName,form.debtorIban,wallet.full_name,account].every(Boolean)};
+}
+const DRAFT_ROWS=`SELECT d.*,c.asset AS converted_asset,c.quantity::text AS converted_quantity,c.tx_hash AS converted_hash
+ FROM avis_core_v2.fin_terminal_drafts d LEFT JOIN avis_core_v2.fin_terminal_conversions c ON c.draft_id=d.draft_id`;
 
 const draftOf=(row,full=true)=>({draftId:row.draft_id,revision:row.revision,uetr:row.uetr,messageType:row.message_type,
  amount:row.form.amount,currency:row.form.currency,creditorName:row.form.creditorName,debtorName:row.form.debtorName,schemaValid:row.schema_valid,
  direction:row.direction,registered:row.registered_journal_id!=null,updatedAt:new Date(row.updated_at).toISOString(),updatedBy:row.updated_by,
+ conversion:row.converted_asset?{asset:row.converted_asset,quantity:four(row.converted_quantity),txHash:row.converted_hash}:null,
  ...(full?{form:row.form,xml:row.message,selection:Object.fromEntries(Object.entries(CHOICES).map(([name,column])=>[name,row[column]??null])),
   registeredAt:row.registered_at==null?null:new Date(row.registered_at).toISOString()}:{})});
 
 export class FinTerminal{
- constructor(pool){this.pool=pool;}
+ constructor(pool,{pricing=new MetaMaskPricing()}={}){this.pool=pool;this.pricing=pricing;}
  #administrator(actor){if(!actor?.admin)fault('FORBIDDEN',null,403);}
  #form(input){
   if(!input||typeof input!=='object'||Array.isArray(input))fault('INVALID_FIELD','form');
@@ -175,12 +205,12 @@ export class FinTerminal{
  }
  async drafts(actor){
   this.#administrator(actor);
-  return (await this.pool.query('SELECT * FROM avis_core_v2.fin_terminal_drafts ORDER BY updated_at DESC LIMIT 200')).rows.map(row=>draftOf(row,false));
+  return (await this.pool.query(DRAFT_ROWS+' ORDER BY d.updated_at DESC LIMIT 200')).rows.map(row=>draftOf(row,false));
  }
  async draft(actor,draftId){
   this.#administrator(actor);
   if(!UETR.test(String(draftId)))fault('FIN_DRAFT_NOT_FOUND','draftId',404);
-  const row=(await this.pool.query('SELECT * FROM avis_core_v2.fin_terminal_drafts WHERE draft_id=$1',[draftId])).rows[0];
+  const row=(await this.pool.query(DRAFT_ROWS+' WHERE d.draft_id=$1',[draftId])).rows[0];
   if(!row)fault('FIN_DRAFT_NOT_FOUND','draftId',404);
   return draftOf(row);
  }
@@ -259,7 +289,50 @@ export class FinTerminal{
   if(!selection.bookingAccountId)fault('FIN_BOOKING_ACCOUNT','bookingAccountId',409);
   if(!selection.nostroAccountId)fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
   if(fieldProblems(form).length||!(await validateFinMessage(xml)).valid)fault('FIN_INCOMING_INVALID','xml');
+  // A "+" wallet chosen, the converter is active: the transfer is converted into it at the live rate, and nothing arrives at the
+  // NOSTRO (the bank owner: "when the crypto converter is active then nothing will arrive at the NOSTRO instead will be the wallet
+  // loaded").
+  if(selection.tokenWalletId){
+   const wallet=await this.#wallet(this.pool,selection.tokenWalletId),quote=await this.#rate(form.currency,wallet);
+   return this.#transaction(async client=>draftOf((await this.#convert(client,actor,{form,xml,selection,wallet,quote,mode:'MANUAL',draftId,revision:body.revision})).row));
+  }
   return this.#transaction(async client=>draftOf(await this.#book(client,actor,{form,xml,selection,draftId,revision:body.revision})));
+ }
+ // A wallet the converter loads: a "+" wallet in one of its assets, with the address its holder's deposits come to on its chain.
+ async #wallet(db,accountId){
+  const wallet=(await db.query(WALLETS+' AND l.account_id=$1 AND l.currency_code=ANY($2::text[])',[accountId,CONVERT_ASSETS])).rows[0];
+  if(!wallet)fault('FIN_TOKEN_WALLET','tokenWalletId',409);
+  const address=(await db.query('SELECT public_address FROM avis_core_v2.user_deposit_addresses WHERE user_id=$1 AND network=$2 ORDER BY is_primary DESC,address_id LIMIT 1',[wallet.user_id,wallet.network])).rows[0];
+  return {...wallet,public_address:address?.public_address||null};
+ }
+ // The live rate: the tokens for one unit of the transfer's currency - EURC 1:1 for euros (MiCA), any other at its market price on
+ // the wallet's chain (MetaMask).
+ async #rate(currency,wallet){
+  if(wallet.currency_code==='EURC'&&currency==='EUR')return {rate:'1.000000000000000000',source:'MiCA 1:1',observedAt:new Date()};
+  const descriptor=(await this.pool.query(`SELECT n.network,n.contract_address FROM avis_core_v2.crypto_asset_networks n JOIN avis_core_v2.crypto_assets a USING(asset_id)
+   WHERE a.currency_code=$1 AND n.network=$2`,[wallet.currency_code,wallet.network])).rows[0];
+  let price;try{price=money((await this.pricing.spot(descriptor,currency)).rate);}catch{fault('FIN_CONVERT_RATE','tokenWalletId',503);}
+  return {rate:decimal(SCALE*SCALE/price),source:'MetaMask',observedAt:new Date()};
+ }
+ // An incoming transfer converted at the rate quoted: its tokens loaded into the wallet and into the bank's custody on that chain
+ // (the "Direct Institutional MPC Wallet"); the NOSTRO and the core banking cash stay as they are.
+ async #convert(client,actor,{form,xml,selection,wallet,quote,mode,draftId=null,revision}){
+  if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
+  await this.#checkSelection(client,selection,form,'INCOMING');
+  if(draftId!==null)await this.#opened(client,draftId,revision);
+  const quantity=convertedQuantity(form.amount,quote.rate),hash=transferHash(form.uetr),travel=ivms101(form,wallet);
+  if(!/[1-9]/.test(quantity))fault('FIN_CONVERT_QUANTITY','amount',409);
+  if(!travel.verified)fault('FIN_IVMS101','form',409);
+  const custody=await cryptoLedgerAccount(client,{owner:'HOT_WALLET',currency:wallet.currency_code,network:wallet.network,bucket:'CHAIN_CUSTODY',category:'ASSET'});
+  const journalId=await new SovereignCore(null).post(client,actor,'fin-incoming:'+form.uetr,'FIN_INCOMING_CONVERTED',form.businessMessageId,
+   [{accountId:custody,direction:'DEBIT',amount:quantity},{accountId:wallet.account_id,direction:'CREDIT',amount:quantity}]);
+  const row=await this.#keep(client,actor,draftId,{form,xml,valid:true,selection,direction:'INCOMING'},journalId);
+  await client.query(`INSERT INTO avis_core_v2.fin_terminal_conversions(uetr,draft_id,journal_id,token_wallet_account_id,fiat_amount,fiat_currency,asset,network,
+   rate,rate_source,rate_observed_at,quantity,tx_hash,mode,ivms101,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16)`,
+   [form.uetr,row.draft_id,journalId,wallet.account_id,form.amount,form.currency,wallet.currency_code,wallet.network,quote.rate,quote.source,
+    quote.observedAt.toISOString(),quantity,hash,mode,JSON.stringify(travel),String(actor.id)]);
+  await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_INCOMING_CONVERTED',journalId]);
+  return {row:{...row,converted_asset:wallet.currency_code,converted_quantity:quantity,converted_hash:hash},asset:wallet.currency_code,quantity,hash};
  }
  async #book(client,actor,{form,xml,selection,draftId=null,revision}){
   if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
@@ -279,27 +352,84 @@ export class FinTerminal{
  // A peer bank's credit transfer taken on the listening port (src/fin-peer.mjs), the FinTerminal specification v3's
  // receive_ip2ip_pacs008: booked at once as one registered by hand - on the bank's NOSTRO at that peer (its connector's clearing
  // account) and on AVISPay PLC's account its creditor's IBAN names - in the transaction that keeps the message and the bank's
- // answer: ACSC, or RJCT with the reason. The same transfer again is answered as before and booked once.
- async receiveIncoming(client,peer,input){
+ // answer: ACSC, or RJCT with the reason. The same transfer again is answered as before and booked once. While ROBOTIC STP is
+ // active and the account has a wallet to convert into (quoteIncoming), it is converted into that wallet instead: "AUTO_CRYPTO".
+ async receiveIncoming(client,peer,input,quote=null){
   let form;try{form=this.#form(input);}catch{return {status:'RJCT',...REJECTED.FIN_INCOMING_INVALID};}
-  const settled={status:'ACSC',reason:null,text:'CORE_BANKING_&_NOSTRO:+'+form.amount+' '+form.currency};
-  const before=(await client.query('SELECT form,direction,nostro_cash_account_id,registered_journal_id FROM avis_core_v2.fin_terminal_drafts WHERE uetr=$1',[form.uetr])).rows[0];
+  const settled=converted=>({status:'ACSC',reason:null,text:converted?'AUTO_CRYPTO:'+four(converted.quantity)+' '+converted.asset+' (TX:'+converted.hash.slice(0,14)+'...)'
+   :'CORE_BANKING_&_NOSTRO:+'+form.amount+' '+form.currency});
+  const before=(await client.query(`SELECT d.form,d.direction,d.nostro_cash_account_id,d.registered_journal_id,c.asset,c.quantity::text AS quantity,c.tx_hash AS hash
+   FROM avis_core_v2.fin_terminal_drafts d LEFT JOIN avis_core_v2.fin_terminal_conversions c ON c.draft_id=d.draft_id WHERE d.uetr=$1`,[form.uetr])).rows[0];
   if(before?.registered_journal_id&&before.direction==='INCOMING'&&before.nostro_cash_account_id===peer.cash_account_id
-   &&['amount','currency','creditorIban'].every(field=>before.form[field]===form[field]))return settled;
+   &&['amount','currency','creditorIban'].every(field=>before.form[field]===form[field]))return settled(before.asset?before:null);
   const xml=buildFinMessage(form);
   if(fieldProblems(form).length||!(await validateFinMessage(xml)).valid)return {status:'RJCT',...REJECTED.FIN_INCOMING_INVALID};
   const account=(await client.query(BOOKING+' AND b.abiq_iban=$2 AND a.currency_code=$3 ORDER BY a.account_id LIMIT 1',[RECEIVING_OWNERS,form.creditorIban,form.currency])).rows[0];
   if(!account)return {status:'RJCT',...REJECTED.FIN_BOOKING_ACCOUNT};
+  if(quote?.failed)return {status:'RJCT',...REJECTED[quote.failed]};
   await client.query('SAVEPOINT fin_incoming');
   try{
-   await this.#book(client,{id:'listener:'+peer.profile_id},{form,xml,selection:{bookingAccountId:account.account_id,nostroAccountId:peer.cash_account_id,tokenWalletId:null}});
+   const actor={id:'listener:'+peer.profile_id},selection={bookingAccountId:account.account_id,nostroAccountId:peer.cash_account_id,tokenWalletId:quote?.wallet.account_id??null};
+   const converted=quote?await this.#convert(client,actor,{form,xml,selection,wallet:quote.wallet,quote,mode:'ROBOTIC'}):(await this.#book(client,actor,{form,xml,selection}),null);
    await client.query('RELEASE SAVEPOINT fin_incoming');
-   return settled;
+   return settled(converted);
   }catch(error){
    await client.query('ROLLBACK TO SAVEPOINT fin_incoming');
    const code=error.code==='23505'?'FIN_UETR_DUPLICATE':error.code;
    if(!Object.hasOwn(REJECTED,code))throw error;
    return {status:'RJCT',...REJECTED[code]};
   }
+ }
+ // Before a peer's transfer is taken (src/fin-peer.mjs), with no transaction open yet: whether it is converted - ROBOTIC STP active
+ // and a wallet routed for AVISPay PLC's account its creditor's IBAN names - and at which live rate.
+ async quoteIncoming(input){
+  const form=normalizeForm(input);
+  const route=(await this.pool.query(`SELECT r.token_wallet_account_id FROM avis_core_v2.fin_terminal_crypto_routes r
+   JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=r.booking_account_id AND b.status='ACTIVE'
+   JOIN avis_core_v2.ledger_accounts a ON a.account_id=r.booking_account_id
+   JOIN avis_core_v2.fin_terminal_mode m ON m.mode_id=1 AND m.robotic_stp
+   WHERE b.abiq_iban=$1 AND a.currency_code=$2`,[form.creditorIban,form.currency])).rows[0];
+  if(!route)return null;
+  try{const wallet=await this.#wallet(this.pool,route.token_wallet_account_id);return {wallet,...await this.#rate(form.currency,wallet)};}
+  catch(error){return {failed:Object.hasOwn(REJECTED,error.code)?error.code:'FIN_CONVERT_RATE'};}
+ }
+ // Screen B's Fiat-to-Crypto/Stablecoin Selector (the specification v3): each of AVISPay PLC's accounts with the wallet its credits
+ // are converted into while ROBOTIC STP is active, the wallets offered and their live rates, and the transfers converted with their
+ // IVMS101 verification.
+ async converter(actor){
+  this.#administrator(actor);
+  const accounts=(await this.pool.query(BOOKING+' ORDER BY a.currency_code,a.owner_type,b.abiq_iban',[RECEIVING_OWNERS])).rows;
+  const routes=new Map((await this.pool.query('SELECT booking_account_id,token_wallet_account_id FROM avis_core_v2.fin_terminal_crypto_routes')).rows
+   .map(row=>[row.booking_account_id,row.token_wallet_account_id]));
+  const wallets=(await this.pool.query(WALLETS+' AND l.currency_code=ANY($1::text[]) ORDER BY l.currency_code,l.network,u.full_name',[CONVERT_ASSETS])).rows;
+  const pairs=[...new Set(accounts.map(row=>row.currency_code))].flatMap(currency=>[...new Map(wallets.map(row=>[row.currency_code+'|'+row.network,row])).values()]
+   .map(wallet=>({currency,wallet})));
+  const rates=await Promise.all(pairs.map(async({currency,wallet})=>{
+   const quote=await this.#rate(currency,wallet).catch(()=>null);
+   return {currency,asset:wallet.currency_code,network:wallet.network,rate:quote?.rate??null,source:quote?.source??null};
+  }));
+  const conversions=(await this.pool.query(`SELECT c.*,c.quantity::text AS units,c.rate::text AS price,c.fiat_amount::text AS fiat FROM avis_core_v2.fin_terminal_conversions c
+   ORDER BY c.created_at DESC LIMIT 20`)).rows;
+  return {assets:CONVERT_ASSETS,
+   accounts:accounts.map(row=>({accountId:row.account_id,label:row.label,iban:row.abiq_iban,currency:row.currency_code,tokenWalletId:routes.get(row.account_id)??null})),
+   wallets:wallets.map(row=>({accountId:row.account_id,holder:row.full_name,currency:row.currency_code,network:row.network})),rates,
+   conversions:conversions.map(row=>({uetr:row.uetr,at:new Date(row.created_at).toISOString(),amount:row.fiat,currency:row.fiat_currency,asset:row.asset,network:row.network,
+    quantity:four(row.units),rate:row.price,rateSource:row.rate_source,txHash:row.tx_hash,mode:row.mode,
+    ivms101:{verified:row.ivms101.verified===true,originator:row.ivms101.originator.originatorPersons[0].legalPerson.name.nameIdentifier[0].legalPersonName,
+     beneficiary:row.ivms101.beneficiary.beneficiaryPersons[0].legalPerson.name.nameIdentifier[0].legalPersonName,wallet:row.ivms101.beneficiary.accountNumber[0]}}))};
+ }
+ // A bank administrator routes an account's credits into a wallet, or back to the NOSTRO (no wallet).
+ async route(actor,body){
+  this.#administrator(actor);
+  const {bookingAccountId,tokenWalletId}=this.#selection({bookingAccountId:body?.bookingAccountId,tokenWalletId:body?.tokenWalletId});
+  if(!bookingAccountId||!(await this.pool.query(BOOKING+' AND a.account_id=$2',[RECEIVING_OWNERS,bookingAccountId])).rows.length)fault('FIN_BOOKING_ACCOUNT','bookingAccountId',409);
+  if(tokenWalletId){
+   await this.#wallet(this.pool,tokenWalletId);
+   await this.pool.query(`INSERT INTO avis_core_v2.fin_terminal_crypto_routes(booking_account_id,token_wallet_account_id,changed_by) VALUES($1,$2,$3)
+    ON CONFLICT(booking_account_id) DO UPDATE SET token_wallet_account_id=EXCLUDED.token_wallet_account_id,changed_by=EXCLUDED.changed_by,changed_at=now()`,
+    [bookingAccountId,tokenWalletId,String(actor.id)]);
+  }else await this.pool.query('DELETE FROM avis_core_v2.fin_terminal_crypto_routes WHERE booking_account_id=$1',[bookingAccountId]);
+  await this.pool.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_CRYPTO_ROUTE',bookingAccountId]);
+  return this.converter(actor);
  }
 }
