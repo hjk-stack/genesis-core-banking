@@ -50,6 +50,9 @@ const delivered=()=>until(async()=>(await rows()).every(row=>row.status!=='SENDI
 const balance=async accountId=>(await pool.query('SELECT available_balance::numeric(20,2)::text AS b FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[accountId])).rows[0].b;
 const balances=async()=>[await balance(nostro.ledger),await balance(suspense.id)];
 // The peer's transfer to AVISPay PLC's account: sent by the peer, settled on the bank's NOSTRO there (INGA).
+const robotic=on=>pool.query('UPDATE avis_core_v2.fin_terminal_mode SET robotic_stp=$1 WHERE mode_id=1',[on]);
+// A batch: the transfer twice in one message.
+const batch=xml=>{const tx=/<CdtTrfTxInf>[\s\S]*<\/CdtTrfTxInf>/.exec(xml)[0];return xml.replace(tx,tx+tx).replace('<NbOfTxs>1</NbOfTxs>','<NbOfTxs>2</NbOfTxs>');};
 const transfer=(overrides={})=>normalizeForm({...exampleForm(),uetr:newUetr(),businessMessageId:newMessageId(),senderBic:PEER,receiverBic:account.bic,
  settlement:'INGA',settlementAccount:'NOSTRO-EXAMPLE-1',debtorAgentBic:PEER,creditorName:'AVISPay PLC',creditorIban:account.iban,creditorAgentBic:account.bic,...overrides});
 
@@ -75,6 +78,8 @@ before(async()=>{
  peers=new FinPeers(pool,{credentials:reference=>connectorCredentials(reference,env)});
  listener=new FinListener(pool,peers,{env,port:0,host:'127.0.0.1'});
  await peers.addAddress(admin,'EXAMPLE_PEER',{address:'127.0.0.1'});await listener.open(admin,{minutes:15});
+ // ROBOTIC STP active: a transfer is booked at once ("Automated Robotic Mode").
+ await robotic(true);
 });
 after(async()=>{await listener?.close(admin).catch(()=>{});await listener?.stop();if(dir)await rm(dir,{recursive:true,force:true});if(db)await db.close();else await pool?.end();});
 
@@ -111,6 +116,13 @@ test('a peer\'s credit transfer over IP is booked at once on the NOSTRO and AVIS
  assert.deepEqual([value(again,'TxSts'),value(again,'OrgnlUETR')],['ACSC',form.uetr]);
  assert.deepEqual(await balances(),['1250000.00','1250000.00']);
  assert.equal((await pool.query("SELECT count(*)::int AS n FROM avis_core_v2.ledger_journals WHERE event_type='FIN_INCOMING_BOOKED'")).rows[0].n,1);
+ // The same UETR with another field changed is another payment, not this one again (review finding).
+ const [altered]=await exchange([buildFinMessage({...form,endToEndId:'ALTERED-E2E-0001'})]);
+ assert.deepEqual([value(altered,'TxSts'),value(altered,'Cd')],['RJCT','DUPL']);assert.deepEqual(await balances(),['1250000.00','1250000.00']);
+ // Delivered twice at once, a new transfer is booked once and both deliveries are answered ACSC (review finding).
+ const twice=transfer(),[[first],[second]]=await Promise.all([exchange([buildFinMessage(twice)]),exchange([buildFinMessage(twice)])]);
+ assert.deepEqual([value(first,'TxSts'),value(second,'TxSts')],['ACSC','ACSC']);assert.deepEqual(await balances(),['2500000.00','2500000.00']);
+ await delivered();
  // Its status names a transfer by the transfer's own message id, which the header need not repeat.
  const own=transfer(),xml=buildFinMessage(own).replace('<MsgId>'+own.businessMessageId+'</MsgId>','<MsgId>PEERGROUP0001</MsgId>');
  assert.notEqual(xml,buildFinMessage(own));
@@ -136,8 +148,35 @@ test('a transfer the bank cannot book is answered RJCT with the reason, and noth
  assert.deepEqual(await balances(),before);
  // Booked once, a UETR is not booked again for another amount.
  assert.deepEqual([value((await exchange([buildFinMessage(booked)]))[0],'TxSts'),value((await exchange([buildFinMessage({...booked,amount:'5.00'})]))[0],'Cd')],['ACSC','DUPL']);
+ // A batch is refused as a message: one credit transfer per message (review finding).
+ const [several]=await exchange([batch(buildFinMessage(transfer()))]);
+ assert.deepEqual([value(several,'MsgDefIdr'),value(several,'RjctgPtyRsn')],['admi.002.001.01','BATCH']);
  // A transfer to another bank is not the bank's: refused as a message (admi.002), not as a payment.
  const [other]=await exchange([buildFinMessage(transfer({receiverBic:'OTHRDEFFXXX'}))]);
  assert.deepEqual([value(other,'MsgDefIdr'),value(other,'RjctgPtyRsn')],['admi.002.001.01','HEADER']);
  await delivered();
+});
+
+test('under MANUAL INTERVENTION a peer\'s transfer is held for the operator and answered ACTC; nothing is booked until the operator registers it',async()=>{
+ await robotic(false);
+ try{
+  const form=transfer(),message=buildFinMessage(form),before=await balances();
+  const [answer]=await exchange([message]);
+  assert.deepEqual([value(answer,'TxSts'),value(answer,'OrgnlUETR'),value(answer,'Cd')],['ACTC',form.uetr,undefined]);
+  assert.deepEqual(await balances(),before);
+  // Kept as an incoming draft on AVISPay PLC's account and the NOSTRO it names, not registered.
+  const held=(await fin.drafts(admin)).find(item=>item.uetr===form.uetr),opened=await fin.draft(admin,held.draftId);
+  assert.deepEqual([held.direction,held.registered,held.updatedBy],['INCOMING',false,'listener:EXAMPLE_PEER']);
+  assert.deepEqual(opened.selection,{bookingAccountId:suspense.id,nostroAccountId:nostro.id,tokenWalletId:null});
+  await delivered();const [kept,sent]=(await rows()).slice(-2);
+  assert.deepEqual([kept.event_text,sent.event_code,sent.event_text],['RECEIVED 1250000.00 EUR -> HELD FOR MANUAL INTERVENTION','ACTC','HELD FOR MANUAL INTERVENTION']);
+  assert.match(streamLine((await peers.messages(admin,'EXAMPLE_PEER')).messages.at(-1)),/^>>> .* ANSWER pacs\.002 ACTC SENT \(Seq #\d{6}\) · HELD FOR MANUAL INTERVENTION$/);
+  // Again: held still.
+  assert.equal(value((await exchange([message]))[0],'TxSts'),'ACTC');assert.deepEqual(await balances(),before);
+  // The operator registers it: booked now; delivered again, it is answered as booked.
+  assert.equal((await fin.register(admin,{form:opened.form,selection:opened.selection,draftId:opened.draftId,revision:opened.revision})).registered,true);
+  assert.deepEqual(await balances(),before.map(figure=>(Number(figure)+1250000).toFixed(2)));
+  assert.equal(value((await exchange([message]))[0],'TxSts'),'ACSC');
+  await delivered();
+ }finally{await robotic(true);}
 });

@@ -15,7 +15,7 @@ const REASONS={NOT_ISO20022:'not an admi.004 or admi.002 message',SCHEMA:'it doe
  OTHER_EVENT:'not an answer to the message sent',OTHER_MESSAGE:'it refers to another message'};
 // Why a peer's own message was not taken; the bank answered it with a message reject saying so.
 const TAKEN={NOT_ISO20022:'not an ISO 20022 message',SCHEMA:'it does not pass its official schema',HEADER:'its header names other banks or another message',
- OTHER_EVENT:'another event than INIT, HBT or END'};
+ OTHER_EVENT:'another event than INIT, HBT or END',BATCH:'more than one credit transfer in one message'};
 const untaken=message=>message.error==='NOT_SUPPORTED'?'a '+message.type+' message is not taken on this connection':TAKEN[message.error]||message.error||'';
 // The stream is looked at again every few seconds while it is shown: another operator's messages come in too.
 const LOOK=5;

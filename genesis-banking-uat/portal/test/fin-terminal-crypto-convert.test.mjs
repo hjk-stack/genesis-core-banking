@@ -147,13 +147,13 @@ test('over IP with ROBOTIC STP active, a transfer to a routed account is loaded 
  await delivered();assert.equal((await rows()).at(-1).event_text,settled);
 });
 
-test('with MANUAL INTERVENTION the routed account\'s transfer arrives at the NOSTRO; a rate that cannot be read is answered RJCT and nothing is booked',async()=>{
+test('with MANUAL INTERVENTION the routed account\'s transfer is held for the operator, nothing converted; a rate that cannot be read is answered RJCT and nothing is booked',async()=>{
  await fin.route(admin,{bookingAccountId:suspense.id,tokenWalletId:eurc});await robotic(false);
- const cash=transfer(),nostroBefore=await balance(nostro.ledger),walletBefore=await balance(eurc);
- const [answer]=await exchange([buildFinMessage(cash)]);
- assert.equal(value(answer,'TxSts'),'ACSC');
- assert.deepEqual([Number(await balance(nostro.ledger))-Number(nostroBefore),await balance(eurc)],[250000,walletBefore]);
- await delivered();assert.equal((await rows()).at(-1).event_text,'CORE_BANKING_&_NOSTRO:+250000.00 EUR');
+ const held=transfer(),nostroBefore=await balance(nostro.ledger),walletBefore=await balance(eurc);
+ const [answer]=await exchange([buildFinMessage(held)]);
+ assert.equal(value(answer,'TxSts'),'ACTC');
+ assert.deepEqual([await balance(nostro.ledger),await balance(eurc)],[nostroBefore,walletBefore]);
+ await delivered();assert.equal((await rows()).at(-1).event_text,'HELD FOR MANUAL INTERVENTION');
  // Routed into BTC with no live price: refused, nothing booked.
  await fin.route(admin,{bookingAccountId:suspense.id,tokenWalletId:btc});await robotic(true);priced=false;
  try{
