@@ -37,7 +37,7 @@ export function createFinTerminalSwitch({root=document,windowApi=root.defaultVie
    // A terminal already open - its switch lost with a reload of this page - comes forward as it is, never reloaded, so
    // nothing written in it is lost.
    let shown='';try{shown=child.location.pathname;}catch{}
-   if(shown!==FIN_TERMINAL_PATH)child.location.replace(FIN_TERMINAL_PATH);
+   if(shown!==FIN_TERMINAL_PATH){try{child.sessionStorage?.setItem('avisFinTerminalAfterAdmission',FIN_TERMINAL_PATH);}catch{}child.location.replace(FIN_TERMINAL_PATH);}
    try{child.focus();}catch{}
    terminal=child;watch();
   }catch(reason){terminal=null;error(reason.message||'Could not open the FinTerminal window. Try again.');}
