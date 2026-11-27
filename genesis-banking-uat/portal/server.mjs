@@ -11,7 +11,7 @@ import {FxBankingServer} from './src/fx.mjs';
 import {TradingRobotCore,ROBOT_MESSAGES} from './src/trading-robot.mjs';
 import {TradingRuntime,engineStatus} from './src/trading/runtime.mjs';
 import {IndexServiceAuthenticator} from './src/index-service-auth.mjs';
-import {CheckoutPosAuthenticator,CheckoutIpHandlerAuthenticator} from './src/checkout-pos-auth.mjs';
+import {CheckoutPosAuthenticator,CheckoutIpHandlerAuthenticator,WorkstationAdmissionAuthenticator} from './src/checkout-pos-auth.mjs';
 import {registerHandlerDraft,handlerDraftPdf} from './src/ip-handler-drafts.mjs';
 import {IP_PROOF_MAX_BYTES} from './src/checkout-ip-processing.mjs';
 import {CheckoutPosControl} from './src/checkout-pos.mjs';
@@ -38,6 +38,7 @@ import {FinListener} from './src/fin-listener.mjs';
 
 import {isStaffHost, workstationFingerprint, contactIncubator} from './src/staff-workstation.mjs';
 import {isStaffAccessDocument,sendStaffAccessPage} from './src/staff-access-page.mjs';
+import {WorkstationAdmission,sendWorkstationCompletion} from './src/workstation-admission.mjs';
 const digest=v=>createHash('sha256').update(v).digest('hex');
 // A session-bound token stays valid across tabs and is renewed at every login.
 // The random HttpOnly session secret cannot be recovered from this digest.
@@ -169,6 +170,9 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
  const basket=new CryptoBasket(core,stripePos),storeWallet=new StoreWallet(basket);
  const posControl=new CheckoutPosControl(pool),ipControl=new CheckoutIpControl(pool),posAuth=new CheckoutPosAuthenticator(pool,{fetcher:transferOptions.posServiceFetcher||fetch});
  const ipHandlerAuth=new CheckoutIpHandlerAuthenticator(pool,{fetcher:transferOptions.ipHandlerServiceFetcher||transferOptions.posServiceFetcher||fetch});
+ const workstationFetcher=transferOptions.workstationFetcher||fetch;
+ const workstationAuth=new WorkstationAdmissionAuthenticator(pool,{fetcher:workstationFetcher});
+ const workstationAdmission=new WorkstationAdmission(pool,{fetcher:workstationFetcher});
  const nostroStatements=new NostroStatements(pool),finTerminal=new FinTerminal(pool),finPeers=new FinPeers(pool,transferOptions.transport);
  const finListener=new FinListener(pool,finPeers,transferOptions.finListener).watch();
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
@@ -181,9 +185,33 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    const url=new URL(req.url,'http://localhost'),path=url.pathname;
    if(req.method==='GET'&&path==='/healthz')return send(res,200,{status:'ok',release});
    const privateDesk=isStaffHost(req);
+   // Only this exact hostname owns the application-access bootstrap. These
+   // routes never alter ingress or the authentication of another bank hostname.
+   if(['/access/start','/access/complete','/api/services/workstations/handoff'].includes(path)){
+    if(!privateDesk)return send(res,404,{code:'NOT_FOUND'});
+    res.setHeader('Referrer-Policy','no-referrer');
+    if(path==='/access/start'){
+     if(req.method!=='GET')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
+     if(url.search)fault('BANK_WORKSTATION_REQUIRED',null,403);
+     const start=await workstationAdmission.start(req);
+     res.setHeader('Set-Cookie',start.cookie);res.writeHead(303,{location:start.location});return res.end();
+    }
+    if(path==='/access/complete'){
+     if(req.method!=='GET')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
+     const complete=await workstationAdmission.complete(req,url);
+     res.setHeader('Set-Cookie',complete.cookies);return sendWorkstationCompletion(res);
+    }
+    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
+    if(!req.headers['content-type']?.startsWith('application/json'))fault('INVALID_FIELD',null,415);
+    const parts=[];let length=0;for await(const chunk of req){length+=chunk.length;if(length>8192)fault('INVALID_FIELD',null,413);parts.push(chunk);}
+    const raw=Buffer.concat(parts),service=await workstationAuth.authenticate(req,raw);
+    let input;try{input=JSON.parse(raw.toString('utf8'));}catch{fault('INVALID_FIELD',null,400);}
+    return send(res,200,await workstationAdmission.handoff(service,input));
+   }
    const deskPolicy=privateDesk || process.env.BANK_DESK_ENFORCE==='1';
-   const fingerprint=privateDesk ? workstationFingerprint(req) : null;
-   if(privateDesk) {
+   const deviceAdmission=privateDesk ? await workstationAdmission.fromRequest(req) : null;
+   const fingerprint=privateDesk&&!deviceAdmission ? workstationFingerprint(req) : null;
+   if(privateDesk&&!deviceAdmission) {
     const admission=await contactIncubator('admit',{fp:fingerprint});
     if(admission.approved!==true)fault('BANK_WORKSTATION_REQUIRED',null,403);
    }
@@ -301,7 +329,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     if(!body||typeof body!=='object'||Array.isArray(body))fault('INVALID_FIELD',null,400);
    }
    if(path==='/api/login/mobile'&&req.method==='POST'){
-    if(!privateDesk)fault('BANK_WORKSTATION_REQUIRED',null,403);
+    if(!privateDesk||deviceAdmission)fault('BANK_WORKSTATION_REQUIRED',null,403);
     const ticket=/(?:^|;\s*)__Host-avis_staff_scan=([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{43})(?:;|$)/.exec(req.headers.cookie||'');
     if(!ticket)fault('BANK_WORKSTATION_REQUIRED',null,403);
     const grant=await contactIncubator('consume',{fp:fingerprint,id:ticket[1],poll:ticket[2]});
@@ -322,6 +350,15 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     attempts.set(bucket,previous&&now-previous.since<60000?{since:previous.since,count:previous.count+1}:{since:now,count:1});
     const actor=await authenticate(username,password);if(!actor?.id)fault('FORBIDDEN',null,403);
     if(privateDesk&&!actor.admin)fault('FORBIDDEN',null,403);
+    if(privateDesk&&deviceAdmission){
+     // Frontend admission proves an approved device, not a bank identity. Only
+     // the existing Fineract password/permission check above supplies this actor.
+     const token=randomBytes(32).toString('base64url'),csrf=sessionCsrf(token);
+     await pool.query('DELETE FROM avis_core_v2.operator_sessions WHERE expires_at<now()');
+     await pool.query("INSERT INTO avis_core_v2.operator_sessions(token_hash,csrf_hash,actor_id,username,is_admin,expires_at,workstation_admission_id) VALUES($1,$2,$3,$4,true,now()+interval '1 hour',$5)",[digest(token),digest(csrf),actor.id,actor.username,deviceAdmission.id]);
+     res.setHeader('Set-Cookie',`avis_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=3600`);
+     return send(res,200,{username:actor.username,csrf,admin:true,customerUserId:null,canSwitchWorkspace:true});
+    }
     if(actor.admin&&deskPolicy){
      if(!privateDesk)fault('BANK_WORKSTATION_REQUIRED',null,403);
      const start=await contactIncubator('start',{fp:fingerprint,actor:actor.id,username:actor.username});
@@ -344,7 +381,9 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     WHERE s.token_hash=$1 AND s.expires_at>now()`,[digest(token)])).rows[0];
    if(!session)fault('UNAUTHORIZED',null,401);
    if(privateDesk&&!session.is_admin)fault('FORBIDDEN',null,403);
-   if(session.is_admin&&(deskPolicy||session.workstation_sha256)){
+   if(session.workstation_admission_id){
+    if(!privateDesk||!session.is_admin||!await workstationAdmission.matchesSession(session.workstation_admission_id,deviceAdmission))fault('BANK_WORKSTATION_REQUIRED',null,403);
+   }else if(session.is_admin&&(deskPolicy||session.workstation_sha256)){
     if(!privateDesk||!session.workstation_approval||session.workstation_sha256!==fingerprint)fault('BANK_WORKSTATION_REQUIRED',null,403);
     const admission=await contactIncubator('admit',{fp:fingerprint,actor:session.actor_id,generation:session.workstation_approval});
     if(admission.approved!==true)fault('BANK_WORKSTATION_REQUIRED',null,403);

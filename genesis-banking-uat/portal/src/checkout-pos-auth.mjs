@@ -10,6 +10,11 @@ const POS={routes:new Set(['/api/services/checkout-pos/resolve','/api/services/c
 const IP_HANDLER={routes:new Set(['/api/services/checkout-ip/registerDraft','/api/services/checkout-ip/selectNostroAccount','/api/services/checkout-ip/selectReceivingAccount','/api/services/checkout-ip/receivingAccounts','/api/services/checkout-ip/context','/api/services/checkout-ip/processing','/api/services/checkout-ip/claim']),
  authorization:/^Ip-JWS ([A-Za-z0-9_.-]+)$/,type:'AVIS-IP-HANDLER-REQUEST+JWT',issuer:'https://avis.land/ip-handler',audience:'AVIS_BANK_IP_HANDLER_V1',
  code:'IP_HANDLER_SERVICE_AUTH',actor:{id:'service:avis-land-ip-handler',admin:false,ipHandlerService:true}};
+// Device admission has its own purpose and route. A checkout/INDEX signature
+// cannot admit a workstation, and admission never grants a bank operator role.
+const WORKSTATION={routes:new Set(['/api/services/workstations/handoff']),
+ authorization:/^Workstation-JWS ([A-Za-z0-9_.-]+)$/,type:'AVIS-WORKSTATION-REQUEST+JWT',issuer:'https://avis.land/bank/workstations',audience:'AVIS_BANK_WORKSTATION_V1',
+ code:'BANK_WORKSTATION_REQUIRED',actor:{id:'service:avis-land-workstations',admin:false,workstationService:true}};
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const decode=(value,deny)=>{
  if(typeof value!=='string'||!/^[A-Za-z0-9_-]+$/.test(value))deny();
@@ -60,4 +65,7 @@ export class CheckoutPosAuthenticator extends CheckoutServiceAuthenticator{
 }
 export class CheckoutIpHandlerAuthenticator extends CheckoutServiceAuthenticator{
  constructor(pool,options){super(pool,IP_HANDLER,options);}
+}
+export class WorkstationAdmissionAuthenticator extends CheckoutServiceAuthenticator{
+ constructor(pool,options){super(pool,WORKSTATION,options);}
 }

@@ -806,6 +806,74 @@ class PrivateDeskSettingsTests(unittest.TestCase):
             ingress['clientCertificateMode'] = mode
         return {'id': self.APP_ID, 'properties': {'provisioningState': state, 'configuration': {'ingress': ingress}}}
 
+    def test_protected_shared_host_keeps_its_entire_ingress_and_existing_secret_bindings(self):
+        application = self.application('ignore')
+        application['properties']['configuration']['ingress']['customDomains'] = [
+            {'name': 'bank.avispay.online', 'bindingType': 'SniEnabled', 'certificateId': '/existing/certificate'},
+            {'name': 'banking.avis.exchange', 'bindingType': 'Disabled'},
+        ]
+        before = json.dumps(application, sort_keys=True)
+        known = [{'name': 'bank-desk-channel-secret'}, {'name': 'avis-connector-listener'}]
+        with patch.object(deploy, 'az') as azure, patch.object(deploy.time, 'sleep') as sleep, \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            result, env = deploy.private_desk_settings(application, known)
+        azure.assert_not_called()
+        sleep.assert_not_called()
+        self.assertEqual(json.dumps(result, sort_keys=True), before)
+        self.assertEqual(env, ['BANK_DESK_MTLS_INGRESS=',
+                              'BANK_DESK_CHANNEL_SECRET=secretref:bank-desk-channel-secret',
+                              'AVIS_CONNECTOR_LISTENER=secretref:avis-connector-listener'])
+        self.assertIn('Preserved ingress shared with banking.avis.exchange', output.getvalue())
+
+    def test_existing_shared_certificate_ingress_is_preserved_without_downgrading_require(self):
+        for mode in ('accept', 'Accept', 'require'):
+            with self.subTest(mode=mode):
+                application = self.application(mode)
+                application['properties']['configuration']['ingress']['customDomains'] = [
+                    {'name': 'BANKING.AVIS.EXCHANGE.', 'bindingType': 'Disabled'},
+                ]
+                before = json.dumps(application, sort_keys=True)
+                with patch.object(deploy, 'az') as azure, contextlib.redirect_stdout(io.StringIO()):
+                    result, env = deploy.private_desk_settings(application)
+                azure.assert_not_called()
+                self.assertEqual(json.dumps(result, sort_keys=True), before)
+                self.assertEqual(env, ['BANK_DESK_MTLS_INGRESS=azure-container-apps'])
+
+    def test_unfinished_shared_certificate_change_is_observed_without_disabling_existing_admission(self):
+        application = self.application('accept', 'InProgress')
+        application['properties']['configuration']['ingress']['customDomains'] = [
+            {'name': 'banking.avis.exchange'},
+        ]
+        ready = json.loads(json.dumps(application))
+        ready['properties']['provisioningState'] = 'Succeeded'
+        with patch.object(deploy, 'az', side_effect=[application, ready]) as azure, \
+                patch.object(deploy.time, 'sleep') as sleep, contextlib.redirect_stdout(io.StringIO()):
+            result, env = deploy.private_desk_settings(application)
+        self.assertEqual([call.args[:2] for call in azure.call_args_list], [('containerapp', 'show')] * 2)
+        sleep.assert_called_once_with(5)
+        self.assertEqual(result['properties']['configuration']['ingress'], application['properties']['configuration']['ingress'])
+        self.assertEqual(env, ['BANK_DESK_MTLS_INGRESS=azure-container-apps'])
+
+    def test_unfinished_shared_application_cannot_release_a_disabled_certificate_path(self):
+        application = self.application('accept', 'InProgress')
+        application['properties']['configuration']['ingress']['customDomains'] = [{'name': 'banking.avis.exchange'}]
+        with patch.object(deploy, 'az', return_value=application) as azure, \
+                patch.object(deploy.time, 'sleep'), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, 'still provisioning'):
+                deploy.private_desk_settings(application)
+        self.assertEqual([call.args[:2] for call in azure.call_args_list], [('containerapp', 'show')] * 36)
+
+    def test_concurrently_changed_shared_ingress_is_not_adopted_as_release_authorization(self):
+        application = self.application('accept', 'InProgress')
+        application['properties']['configuration']['ingress']['customDomains'] = [{'name': 'banking.avis.exchange'}]
+        changed = json.loads(json.dumps(application))
+        changed['properties']['provisioningState'] = 'Succeeded'
+        changed['properties']['configuration']['ingress']['clientCertificateMode'] = 'require'
+        with patch.object(deploy, 'az', return_value=changed) as azure, contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, 'ingress changed'):
+                deploy.private_desk_settings(application)
+        self.assertEqual([call.args[:2] for call in azure.call_args_list], [('containerapp', 'show')])
+
     def test_ingress_asks_for_client_certificates_before_the_bank_may_read_them(self):
         calls, shown = [], iter([self.application('accept', 'InProgress'), self.application('accept')])
         def azure(*args):
