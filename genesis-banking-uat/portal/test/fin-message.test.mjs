@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
-import {FIELDS,PACS008,blankForm,buildFinMessage,readFinMessage,normalizeForm,detailPieces,fieldProblems,ibanValid,leiValid,messageParts,newMessageId} from '../public/fin-message.mjs';
+import {FIELDS,PACS008,blankForm,buildFinMessage,readFinMessage,normalizeForm,detailPieces,fieldProblems,ibanValid,leiValid,newMessageId} from '../public/fin-message.mjs';
 import {validateFinMessage} from '../src/fin-terminal.mjs';
 import {exampleForm} from './helpers/fin-example.mjs';
 
@@ -10,9 +10,9 @@ import {exampleForm} from './helpers/fin-example.mjs';
 const {DOMParser}=new JSDOM('').window;
 
 test('a complete message passes both official schemas: the header against head.001.001.02, the transfer against pacs.008.001.08',async()=>{
- const xml=buildFinMessage(exampleForm()),parts=messageParts(xml);
- assert.match(parts.AppHdr,/^<AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head\.001\.001\.02">/);
- assert.match(parts.Document,/^<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs\.008\.001\.08">/);
+ const xml=buildFinMessage(exampleForm());
+ assert.match(xml,/^<\?xml version="1\.0" encoding="UTF-8"\?>\n<Envelope>\n  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head\.001\.001\.02">/);
+ assert.match(xml,/\n  <\/AppHdr>\n  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs\.008\.001\.08">/);
  assert.deepEqual(await validateFinMessage(xml),{valid:true,errors:[]});
  // The schemas' order and the spec's parts: the transfer's UETR, the intermediary, the ultimate parties, regulatory reporting.
  for(const piece of ['<BizMsgIdr>FT20261127090000','<MsgDefIdr>pacs.008.001.08</MsgDefIdr>','<SttlmMtd>CLRG</SttlmMtd>','<Cd>TGT</Cd>',
@@ -67,7 +67,23 @@ test('a message the schemas refuse is answered with their own words, element by 
  assert.ok(result.errors.some(error=>/^Document: Element 'Nm':/.test(error)),result.errors.join('\n'));
  assert.ok(result.errors.every(error=>!error.includes('{urn:')));
  const missing=await validateFinMessage('<?xml version="1.0"?><Envelope></Envelope>');
- assert.deepEqual(missing,{valid:false,errors:['AppHdr: missing, with its namespace head.001.001.02.','Document: missing, with its namespace pacs.008.001.08.']});
+ assert.deepEqual(missing,{valid:false,errors:["XML: Element 'Envelope': Missing child element(s). Expected is ( AppHdr (head.001.001.02) )."]});
+});
+
+test('the message is checked whole: an envelope that does not read, or holds its parts out of place, is refused (review finding)',async()=>{
+ const xml=buildFinMessage(exampleForm()),[head,rest]=xml.split('  <Document');
+ // Both parts as the schemas want them, the envelope not closed.
+ const open=await validateFinMessage(xml.replace('</Envelope>',''));
+ assert.equal(open.valid,false);assert.match(open.errors[0],/^XML: Premature end of data in tag Envelope/);
+ assert.ok(open.errors.every(error=>/^XML: /.test(error)),open.errors.join('\n'));
+ for(const [wrong,finding] of [
+  ['<Envelope>\n  <Document'+rest.replace('</Envelope>','')+head.split('<Envelope>')[1]+'</Envelope>',"XML: Element 'Document (pacs.008.001.08)': This element is not expected. Expected is ( AppHdr (head.001.001.02) )."],
+  [xml.replace(' xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.02"',''),"XML: Element 'AppHdr': This element is not expected. Expected is ( AppHdr (head.001.001.02) )."],
+  [xml.replace('<Envelope>','<Message>').replace('</Envelope>','</Message>'),"XML: Element 'Message': No matching global declaration available for the validation root."],
+  [xml.replace('</Envelope>','  <Extra/>\n</Envelope>'),"XML: Element 'Extra': This element is not expected."]])
+  assert.deepEqual(await validateFinMessage(wrong),{valid:false,errors:[finding]});
+ // An XML comment is no part of the message: the parts are read from the message itself.
+ assert.deepEqual(await validateFinMessage(xml.replace('<Envelope>','<Envelope>\n<!-- '+head.split('<Envelope>')[1].replaceAll('--','')+' -->')),{valid:true,errors:[]});
 });
 
 test('what the schemas do not check: IBAN and LEI check digits, and an amount above zero',()=>{

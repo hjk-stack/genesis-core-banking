@@ -96,12 +96,6 @@ export function buildFinMessage(input){
  return '<?xml version="1.0" encoding="UTF-8"?>\n'+serialize(node('Envelope',[header,document]),0)+'\n';
 }
 
-// The two parts as the XML holds them, each with its own namespace, to be checked against its own schema.
-export function messageParts(xml){
- const take=name=>String(xml).match(new RegExp('<'+name+'\\b[^>]*\\bxmlns="[^"]+"[^>]*>[\\s\\S]*?</'+name+'>'))?.[0]||null;
- return {AppHdr:take('AppHdr'),Document:take('Document')};
-}
-
 // The XML read back into the form - in the window with its own DOMParser. Elements the form has no field for are not read.
 export function readFinMessage(xml,DOMParserImpl=globalThis.DOMParser){
  if(/<!DOCTYPE|<!ENTITY/i.test(xml))return {error:'A document type is not allowed.'};

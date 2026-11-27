@@ -35,7 +35,12 @@ async function composer(){
  const html=await readFile(new URL('../public/fin-terminal.html',import.meta.url),'utf8');
  const dom=new JSDOM(html,{url:base+'/fin-terminal'}),doc=dom.window.document;
  // The window's own requests, as the browser sends them: the bank's sign-in cookie, from its own address.
- const fetcher=(path,init={})=>{sent.push({path,method:init.method||'GET',headers:init.headers||{}});return fetch(base+path,{...init,headers:{...init.headers,cookie,origin:base}});};
+ let held=null;
+ const fetcher=async(path,init={})=>{
+  sent.push({path,method:init.method||'GET',headers:init.headers||{}});
+  if(held&&path==='/api/fin-terminal/validate')await held;
+  return fetch(base+path,{...init,headers:{...init.headers,cookie,origin:base}});
+ };
  const terminal=await startFinTerminal({root:doc,fetcher,windowApi:{BroadcastChannel:class{close(){}},addEventListener(){},close(){}}});
  const $=selector=>doc.querySelector(selector),field=name=>$('[data-fin-field="'+name+'"]');
  const idle=()=>![...doc.querySelectorAll('.fin-actions button')].some(button=>button.disabled);
@@ -45,6 +50,9 @@ async function composer(){
   fill(form){for(const [name,value] of Object.entries(form))if(name!=='uetr'&&field(name).value!==value)page.type(name,value);},
   async writeXml(text){page.xml.value=text;page.xml.dispatchEvent(new dom.window.Event('input',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,360));},
   async press(selector){await until(idle);$(selector).click();await new Promise(resolve=>setTimeout(resolve,0));await until(idle,selector);},
+  // The schema check waits until released: what happens while a check is under way.
+  holdChecks(){let release;held=new Promise(resolve=>{release=resolve});return ()=>{held=null;release();};},
+  idle:()=>until(idle),
   async choose(draftId){await until(idle);const list=$('[data-fin-drafts]');list.value=draftId;list.dispatchEvent(new dom.window.Event('change',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,0));await until(idle,'the draft');},
   close(){dom.window.close();}};
  await until(()=>!$('[data-fin-terminal]').hidden&&page.xml.value,'the terminal');
@@ -109,6 +117,19 @@ test('Validate XML: the official schemas\' findings, and a field\'s own finding 
   assert.equal(page.field('debtorIban').getAttribute('aria-invalid'),'true');assert.equal(page.field('creditorIban').hasAttribute('aria-invalid'),false);
   // Every change asks the window's own requests to carry the bank's CSRF token.
   assert.ok(sent.filter(request=>request.method==='POST').every(request=>request.headers['x-csrf-token']));
+ }finally{page.close();}
+});
+
+test('a check that answers after the message was changed is not shown as this message\'s (review finding)',async()=>{
+ const page=await composer();try{
+  page.fill(exampleForm());
+  const release=page.holdChecks();
+  page.$('[data-fin-validate]').click();await new Promise(resolve=>setTimeout(resolve,50));
+  // Written while the check is under way: the message shown is no longer the one checked.
+  page.type('amount','2.00');assert.equal(page.verdict(),'XSD: not checked');
+  release();await page.idle();
+  assert.equal(page.verdict(),'XSD: not checked');assert.equal(page.$('[data-fin-xsd]').dataset.state,'unchecked');
+  await page.press('[data-fin-validate]');assert.equal(page.verdict(),'XSD: PASSED');
  }finally{page.close();}
 });
 

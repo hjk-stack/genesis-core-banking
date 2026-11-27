@@ -52,6 +52,16 @@ test('a draft keeps the form as written and its message as built; saved again, i
  }
 });
 
+test('an IBAN written in groups of four is counted without its spaces: the longest, 34 characters, is kept (review finding)',async()=>{
+ const longest=exampleIban('MT','EXMP'+'0'.repeat(25)+'1'),grouped=longest.replace(/(.{4})/g,'$1 ').trim();
+ assert.equal(longest.length,34);assert.equal(grouped.length,42);
+ const saved=await fin.save(admin,{form:form({debtorIban:grouped})});
+ assert.equal(saved.form.debtorIban,longest);assert.equal(saved.schemaValid,true);
+ assert.deepEqual(await fin.validate(admin,{form:form({debtorIban:grouped}),xml:buildFinMessage(form({debtorIban:longest}))}),{valid:true,errors:[]});
+ // One character more than the schema's IBAN is refused, written in groups or not.
+ for(const iban of [longest+'0',grouped+'0'])await assert.rejects(fin.save(admin,{form:form({debtorIban:iban})}),e=>e.code==='INVALID_FIELD'&&e.field==='debtorIban');
+});
+
 test('an unfinished draft is kept, marked as not passing: an empty name, a missing amount, a wrong IBAN check digit',async()=>{
  const iban=exampleForm().debtorIban,wrong=iban.slice(0,-1)+((Number(iban.at(-1))+1)%10);
  for(const overrides of [{debtorName:''},{amount:''},{debtorIban:wrong}]){

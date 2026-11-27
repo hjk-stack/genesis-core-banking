@@ -83,8 +83,10 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   finally{busy=false;for(const control of controls)control.disabled=false;}
  }
  async function check(){
-  flush();
+  flush();const at=edits;
   const result=await request('POST','/api/fin-terminal/validate',{form,xml:xml.value,...(draft?{draftId:draft.draftId}:{})});
+  // Changed while it was checked, the message shown is not the one checked: its verdict is not shown (review finding).
+  if(edits!==at)return;
   show(result.valid?'passed':'failed',result.valid?'XSD: PASSED':'XSD: FAILED',Array.isArray(result.errors)?result.errors:[]);
  }
  // A draft keeps the form; saved again it carries the revision it was opened at. What is written while it saves stays.
