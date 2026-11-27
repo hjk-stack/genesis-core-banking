@@ -13,6 +13,7 @@ import {migrate} from '../src/migrate.mjs';
 import {AccountManagement} from '../src/account-management.mjs';
 import {FinPeers,buildSessionMessage,readPeerAnswer} from '../src/fin-peer.mjs';
 import {FinListener} from '../src/fin-listener.mjs';
+import {ABIQ_ISSUER} from '../src/avispay-core-accounts.mjs';
 import {connectorCredentials,frame} from '../src/payment-transport.mjs';
 import {buildFinMessage} from '../public/fin-message.mjs';
 import {createBankServer} from '../server.mjs';
@@ -269,30 +270,40 @@ test('a broken listening certificate keeps the port from opening, and a window o
 
 test('a peer\'s message to the bank\'s own ABIQ code is taken and answered from that code while the code takes part in the ABIQ network; one to another code is refused',async()=>{
  // The bank owner: "Yes, accept messages to our ABIQ code too" - AVIS Bank Intelligence, the bank's IBAN system. The connector
- // keeps its own BIC (EXMPDEFFXXX here); the ABIQ code is the bank's ABIQ issuer's.
- const abiq=(await pool.query('SELECT abiq_code FROM avis_core_v2.abiq_issuers')).rows[0].abiq_code;
+ // keeps its own BIC (EXMPDEFFXXX here); the ABIQ code is the bank's own ABIQ issuer's. An issuer the bank licensed (a fintech
+ // with its own IBAN range) is another institution: its code is not the bank's (review finding).
+ const abiq=ABIQ_ISSUER.abiqCode,licensed='EXMPTN12XXX';
+ await pool.query("INSERT INTO avis_core_v2.abiq_network_participants(participant_code,institution_name,abiq_bic,is_active) VALUES('EXMP','Example Fintech',$1,true)",[licensed]);
+ await pool.query("INSERT INTO avis_core_v2.abiq_issuers VALUES('EXMP',$1,'TN')",[licensed]);
  await peers.addAddress(admin,'EXAMPLE_PEER_A',{address:'127.0.0.1'});await listener.open(admin,{minutes:15});
  try{
-  const init=fromPeer('INIT',{to:abiq}),other=fromPeer('INIT',{to:'EXMPTN12XXX',id:'PEERMSGNOTOURS'});
-  const {answers}=await exchange([init,other]);
+  const init=fromPeer('INIT',{to:abiq}),other=fromPeer('INIT',{to:licensed,id:'PEERMSGNOTOURS'}),stranger=fromPeer('INIT',{from:'OTHRDEFFXXX',to:abiq,id:'PEERMSGSTRANGER'});
+  const {answers}=await exchange([init,other,stranger]);
   // Answered from the ABIQ code the peer named, as the peer reads it.
   assert.equal(value(answers[0],'BICFI'),abiq);
   const read=await readPeerAnswer(answers[0],{localBic:PEER_A,peerBic:abiq,event:'INIT',businessMessageId:value(init,'BizMsgIdr')});
   assert.deepEqual([read.status,read.code,read.parameters],['ACK','INIT',['READY']]);
-  // Another code is another bank's: refused, from the connector's BIC.
+  // The licensed issuer's code is another institution's: refused, from the connector's BIC.
   assert.equal(value(answers[1],'BICFI'),BANK);
   const refused=await readPeerAnswer(answers[1],{localBic:PEER_A,peerBic:BANK,event:'INIT',businessMessageId:'PEERMSGNOTOURS'});
   assert.deepEqual([refused.status,refused.code],['NAK','HEADER']);
+  // A message to the bank's ABIQ code with another bank as sender is refused by the bank as the message named it (review finding).
+  assert.equal(value(answers[2],'BICFI'),abiq);
+  assert.equal((await readPeerAnswer(answers[2],{localBic:PEER_A,peerBic:abiq,event:'INIT',businessMessageId:'PEERMSGSTRANGER'})).code,'HEADER');
   await delivered();
-  assert.deepEqual((await rows()).slice(-4).map(row=>[row.direction,row.status,row.error_code]),
-   [['IN','RECEIVED',null],['OUT','DELIVERED',null],['IN','UNREAD','HEADER'],['OUT','DELIVERED',null]]);
+  assert.deepEqual((await rows()).slice(-6).map(row=>[row.direction,row.status,row.error_code]),
+   [['IN','RECEIVED',null],['OUT','DELIVERED',null],['IN','UNREAD','HEADER'],['OUT','DELIVERED',null],['IN','UNREAD','HEADER'],['OUT','DELIVERED',null]]);
   // A code whose issuer no longer takes part in the ABIQ network is not the bank's.
   await pool.query('UPDATE avis_core_v2.abiq_network_participants SET is_active=false WHERE abiq_bic=$1',[abiq]);
   try{
    const {answers:[answer]}=await exchange([fromPeer('INIT',{to:abiq,id:'PEERMSGINACTIVE'})]);
    assert.equal((await readPeerAnswer(answer,{localBic:PEER_A,peerBic:BANK,event:'INIT',businessMessageId:'PEERMSGINACTIVE'})).code,'HEADER');
   }finally{await pool.query('UPDATE avis_core_v2.abiq_network_participants SET is_active=true WHERE abiq_bic=$1',[abiq]);}
- }finally{await delivered();await listener.close(admin);}
+ }finally{
+  await delivered();await listener.close(admin);
+  await pool.query("DELETE FROM avis_core_v2.abiq_issuers WHERE participant_code='EXMP'");
+  await pool.query("DELETE FROM avis_core_v2.abiq_network_participants WHERE participant_code='EXMP'");
+ }
  // The peer server's answer to the bank's own message, addressed to the bank's ABIQ code, is its acknowledgement too.
  answerTo=abiq;
  try{assert.equal((await peers.send(admin,'EXAMPLE_PEER_A',{event:'INIT',text:'HELLO'})).messages.at(-1).status,'ACK');}

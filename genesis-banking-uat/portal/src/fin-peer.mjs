@@ -6,6 +6,7 @@ import {XMLParser} from 'fast-xml-parser';
 import {fault} from './core.mjs';
 import {sendBankMessage,connectorCredentials} from './payment-transport.mjs';
 import {HEAD,newMessageId} from '../public/fin-message.mjs';
+import {ABIQ_ISSUER} from './avispay-core-accounts.mjs';
 
 // Screen A of the FinTerminal, "Peer Server Handshake & Direct IP Interaction" in the bank owner's specification (FinTerminal
 // Unified NOSTRO & Crypto System v3): the bank's welcome or session message to a peer bank's server - an ISO 20022 system event
@@ -101,8 +102,9 @@ export async function readPeerMessage(xml,{localBic,peerBic,own=[]}){
  if(!(await passes(xml,ADMI004)))return {status:'UNREAD',type:ADMI004,reason:'SCHEMA'};
  const parsed=parser.parse(xml),message=parsed.Envelope||parsed,header=message.AppHdr,notified=message.Document.SysEvtNtfctn.EvtInf;
  const bank=header?namedBank(header,localBic,own):null;
+ // A message to the bank refused for its header is refused by the bank as the message named it (review finding).
  if(header&&(!sameBank(header.Fr?.FIId?.FinInstnId?.BICFI,peerBic)||!bank||header.MsgDefIdr!==ADMI004))
-  return {status:'UNREAD',type:ADMI004,businessMessageId:header.BizMsgIdr||null,reason:'HEADER'};
+  return {status:'UNREAD',type:ADMI004,businessMessageId:header.BizMsgIdr||null,reason:'HEADER',to:bank};
  // The bank answers as the peer named it: by the connector's BIC or by its ABIQ code.
  const said={type:ADMI004,businessMessageId:header?.BizMsgIdr||null,code:notified.EvtCd,parameters:notified.EvtParam||[],text:notified.EvtDesc||null,to:bank},
   event=EVENT_OF[said.code];
@@ -136,9 +138,10 @@ const PEERS=`SELECT p.profile_id,c.display_name,c.endpoint_url,c.credential_refe
  JOIN avis_core_v2.external_cash_accounts a USING(cash_account_id)
  WHERE p.protocol='IP_TO_IP' AND c.is_enabled AND a.is_active`;
 const PROFILE=/^[A-Z0-9_]{1,35}$/;
-// The bank's own ABIQ code: its ABIQ issuer's, while that issuer takes part in the ABIQ network (src/abiq-interface.mjs).
+// The bank's own ABIQ code: its own ABIQ issuer's (ABIQ_ISSUER), while that issuer takes part in the ABIQ network
+// (src/abiq-interface.mjs) - never the code of an issuer the bank licensed (review finding).
 const OWN_ABIQ=`SELECT i.abiq_code FROM avis_core_v2.abiq_issuers i JOIN avis_core_v2.abiq_network_participants p USING(participant_code)
- WHERE p.abiq_bic=i.abiq_code AND p.is_active`;
+ WHERE i.participant_code=$1 AND p.abiq_bic=i.abiq_code AND p.is_active`;
 const peerOf=(row,addresses=[])=>{const url=new URL(row.endpoint_url);return {profileId:row.profile_id,name:row.display_name,address:url.hostname+':'+(url.port||'443'),
  transport:url.protocol==='tls:'?'TLS':'HTTPS',localBic:row.local_bic,peerBic:row.peer_bic,addresses};};
 // A message still being sent a minute on (the transport gives up after 15 seconds) was never finished: its result is unknown.
@@ -163,7 +166,7 @@ export const diagnostic=error=>{const code=error?.code||error?.message||'';retur
 export class FinPeers{
  constructor(pool,{send=sendBankMessage,credentials=connectorCredentials}={}){this.pool=pool;this.transmit=send;this.credentials=credentials;}
  #administrator(actor){if(!actor?.admin)fault('FORBIDDEN',null,403);}
- async #own(){return (await this.pool.query(OWN_ABIQ)).rows.map(row=>row.abiq_code);}
+ async #own(){return (await this.pool.query(OWN_ABIQ,[ABIQ_ISSUER.participantCode])).rows.map(row=>row.abiq_code);}
  async #peer(profileId){
   const row=typeof profileId==='string'&&PROFILE.test(profileId)?(await this.pool.query(PEERS+' AND p.profile_id=$1',[profileId])).rows[0]:null;
   if(!row)fault('CONNECTOR_NOT_FOUND','profileId',404);
