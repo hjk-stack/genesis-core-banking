@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FinTerminal ISO 20022</title><link rel="stylesheet" href="/fin-terminal.css"><script type="module" src="/fin-terminal.mjs"></script></head>
+<body><main class="fin-terminal" data-fin-terminal hidden>
+<header class="fin-terminal-bar"><h1>FinTerminal ISO 20022</h1>
+<div class="fin-terminal-screens" role="tablist" aria-label="FinTerminal screens">
+<button type="button" role="tab" id="fin-tab-fin" aria-controls="fin-screen-fin" aria-selected="true" data-fin-screen-tab="fin">1 · FIN – ISO 20022 Composer</button>
+<button type="button" role="tab" id="fin-tab-ip" aria-controls="fin-screen-ip" aria-selected="false" tabindex="-1" data-fin-screen-tab="ip">2 · Interbank Direct IP-to-IP Composer</button>
+</div></header>
+<section class="fin-terminal-screen" role="tabpanel" id="fin-screen-fin" aria-labelledby="fin-tab-fin" data-fin-screen="fin"></section>
+<section class="fin-terminal-screen" role="tabpanel" id="fin-screen-ip" aria-labelledby="fin-tab-ip" data-fin-screen="ip" hidden></section>
+</main></body></html>

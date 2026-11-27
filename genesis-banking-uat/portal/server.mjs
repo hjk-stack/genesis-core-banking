@@ -254,14 +254,14 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const script=await readFile(new URL('./node_modules/pdfjs-dist/build'+path,import.meta.url));
     res.writeHead(200,{'content-type':'text/javascript; charset=utf-8','cache-control':'private, max-age=3600'});return res.end(script);
    }
-   if(req.method==='GET'&&['/','/card-message','/app.mjs','/open-account-register.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/nostro-clearing.mjs','/checkout-ip.mjs','/nostro-clearing.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
-    const file=path==='/'?'index.html':path==='/card-message'?'public/card-message.html':'public'+path;
+   if(req.method==='GET'&&['/','/card-message','/fin-terminal','/fin-terminal.mjs','/fin-terminal.css','/fin-terminal-switch.mjs','/app.mjs','/open-account-register.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/nostro-clearing.mjs','/checkout-ip.mjs','/nostro-clearing.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
+    const page=['/','/card-message','/fin-terminal'].includes(path),file=path==='/'?'index.html':page?'public'+path+'.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     // Always present the deployed UAT revision's current application source after an update.
     // Wallet and trading screens must never be held on the previous revision by a cache.
     res.setHeader('cache-control','no-store, max-age=0');
     res.setHeader('x-avispay-release',process.env.RELEASE_SHA||'development');
-    res.setHeader('content-type',(path==='/'||path==='/card-message')?'text/html; charset=utf-8':path.endsWith('.jpg')?'image/jpeg':path.endsWith('.webp')?'image/webp':path.endsWith('.png')?'image/png':path.endsWith('css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8');return res.end(body);
+    res.setHeader('content-type',page?'text/html; charset=utf-8':path.endsWith('.jpg')?'image/jpeg':path.endsWith('.webp')?'image/webp':path.endsWith('.png')?'image/png':path.endsWith('css')?'text/css; charset=utf-8':'text/javascript; charset=utf-8');return res.end(body);
    }
    if(req.method==='GET'&&/^\/api\/exchange\/markets\/[A-Z0-9._-]{1,80}$/.test(path))return send(res,200,await core.publicExchangeMarket(path.split('/').at(-1)));
    if(!path.startsWith('/api/'))return send(res,404,{code:'NOT_FOUND'});
