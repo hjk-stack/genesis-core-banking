@@ -130,6 +130,12 @@ test('Validate XML: the official schemas\' findings, and a field\'s own finding 
   assert.ok(page.errors().includes('Debtor IBAN: The IBAN\'s check digits do not match.'),page.errors().join('\n'));
   assert.ok(page.errors().some(error=>/^AppHdr: Element 'BICFI': \[facet 'pattern'\] The value 'BAD'/.test(error)),page.errors().join('\n'));
   assert.equal(page.field('debtorIban').getAttribute('aria-invalid'),'true');assert.equal(page.field('creditorIban').hasAttribute('aria-invalid'),false);
+  // Only part of a message - the transfer without its header - is no message (reported directly: "XSD: PASSED" for a part).
+  page.type('senderBic','EXMPDEFFXXX');page.type('debtorIban',iban);const whole=page.xml.value;
+  await page.writeXml(whole.slice(whole.indexOf('<Document'),whole.indexOf('</Document>')+'</Document>'.length));
+  await page.press('[data-fin-validate]');
+  assert.equal(page.verdict(),'XSD: FAILED');
+  assert.deepEqual(page.errors(),["XML: Element 'Document': Not the message's envelope. Expected is ( Envelope ), with the AppHdr and the Document inside."]);
   // Every change asks the window's own requests to carry the bank's CSRF token.
   assert.ok(sent.filter(request=>request.method==='POST').every(request=>request.headers['x-csrf-token']));
  }finally{page.close();}

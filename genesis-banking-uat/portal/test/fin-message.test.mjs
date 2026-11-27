@@ -97,6 +97,13 @@ test('the message is checked whole: an envelope that does not read, or holds its
   assert.deepEqual(await validateFinMessage(wrong),{valid:false,errors:[finding]});
  // An XML comment is no part of the message: the parts are read from the message itself.
  assert.deepEqual(await validateFinMessage(xml.replace('<Envelope>','<Envelope>\n<!-- '+head.split('<Envelope>')[1].replaceAll('--','')+' -->')),{valid:true,errors:[]});
+ // A part alone passes its own schema as a whole message: the header alone or the transfer alone is no message (reported
+ // directly: "XSD: PASSED" for only part of a message). The envelope with both is.
+ const part=(open,close)=>xml.slice(xml.indexOf(open),xml.indexOf(close)+close.length);
+ for(const [alone,root] of [[part('<AppHdr','</AppHdr>'),'AppHdr'],[part('<Document','</Document>'),'Document'],
+  ['<?xml version="1.0" encoding="UTF-8"?>\n<!-- the transfer -->\n'+part('<Document','</Document>'),'Document']])
+  assert.deepEqual(await validateFinMessage(alone),{valid:false,errors:["XML: Element '"+root+"': Not the message's envelope. Expected is ( Envelope ), with the AppHdr and the Document inside."]});
+ assert.deepEqual(await validateFinMessage(xml),{valid:true,errors:[]});
 });
 
 test('what the schemas do not check: IBAN and LEI check digits, and an amount above zero',()=>{

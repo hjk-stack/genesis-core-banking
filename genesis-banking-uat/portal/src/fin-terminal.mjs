@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
+import {XMLParser} from 'fast-xml-parser';
 import {validateXML} from 'xmllint-wasm';
 import {fault} from './core.mjs';
 import {RECEIVING_OWNERS} from './checkout-ip-settlement.mjs';
@@ -32,10 +33,15 @@ function readable(error){
  return (part||'XML')+': '+text.replace(/\{urn:iso:std:iso:20022:tech:xsd:([^}]+)\}([A-Za-z0-9]+)/g,part?'$2':'$2 ($1)');
 }
 
+const parser=new XMLParser({ignoreAttributes:true,removeNSPrefix:true});
+const first=xml=>{try{return Object.keys(parser.parse(xml)).find(key=>!key.startsWith('?'))||null;}catch{return null;}};
+
 export async function validateFinMessage(xml){
  if(typeof xml!=='string'||!xml.trim()||Buffer.byteLength(xml)>65535||/<!DOCTYPE|<!ENTITY|<\?xml-stylesheet/i.test(xml))fault('FIN_MESSAGE_INVALID','xml');
  const result=await validateXML({xml:{fileName:'message.xml',contents:xml},schema:{fileName:'envelope.xsd',contents:ENVELOPE},preload:await officialSchemas(),maxMemoryPages:512});
- if(result.valid)return {valid:true,errors:[]};
+ // The schemas take any element they declare as a whole message: the header alone or the transfer alone passes too. Only the
+ // envelope with both is the message. Reported directly: "XSD: PASSED" for only part of a message.
+ if(result.valid){const root=first(xml);return root==='Envelope'?{valid:true,errors:[]}:{valid:false,errors:["XML: Element '"+(root||'?')+"': Not the message's envelope. Expected is ( Envelope ), with the AppHdr and the Document inside."]};}
  // A parser's finding comes with the line it is about and a pointer to it; the finding itself is kept.
  const errors=result.errors.filter(error=>/error : /.test(String(error.message||error.rawMessage||''))).map(readable);
  return {valid:false,errors:errors.length?errors:['XML: The message could not be checked.']};
