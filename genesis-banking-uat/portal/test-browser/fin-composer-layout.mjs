@@ -8,7 +8,8 @@ import {createBankServer} from '../server.mjs';
 import {exampleForm} from '../test/helpers/fin-example.mjs';
 
 // Requested by the bank owner with the FinTerminal ISO 20022 specification, screen 1 "FIN - ISO 20022 Composer", in the
-// dark blue and orange they approved; checked on a phone, an iPad and a computer against the real bank server.
+// dark blue and orange they approved; checked on a phone (also in the two-thirds window the Payments switch opens there),
+// an iPad and a computer against the real bank server.
 const admin={id:'fin-composer-browser',username:'fin-composer-browser',admin:true};
 let db,server,browser,base;
 before(async()=>{
@@ -26,7 +27,7 @@ before(async()=>{
 after(async()=>{await browser?.close();await new Promise(resolve=>server?.close(resolve));await db?.close();});
 
 const SELECTS=new Set(['messageType','priority','chargeBearer','settlement']);
-for(const width of [390,820,1440])test('the composer on '+(width<500?'a phone':width<1000?'an iPad':'a computer')+' ('+width+'px): form and XML in step, checked, saved, opened again, a used UETR refused',async()=>{
+for(const width of [260,390,820,1440])test('the composer on '+(width<500?'a phone':width<1000?'an iPad':'a computer')+' ('+width+'px): form and XML in step, checked, saved, opened again, a used UETR refused',async()=>{
  const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  try{

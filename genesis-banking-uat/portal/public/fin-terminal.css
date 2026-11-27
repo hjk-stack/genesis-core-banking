@@ -16,10 +16,10 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
 /* Screen 1, the composer: the form on the left, its XML on the right, the actions under both - the specification's picture. */
 .fin-composer{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr);grid-template-rows:minmax(0,1fr) auto;gap:12px;margin:12px;border:0;background:none;overflow:hidden}
 .fin-form{grid-column:1;grid-row:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:12px;padding-right:2px}
-.fin-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.fin-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:12px}
 .fin-panel{display:grid;gap:7px;align-content:start;min-width:0;margin:0;padding:8px 12px 12px;border:1px solid var(--fin-line);border-radius:8px;background:var(--fin-panel)}
 .fin-panel legend{padding:0 4px;font-size:13px;font-weight:650}
-.fin-panel-wide{grid-template-columns:repeat(auto-fit,minmax(280px,1fr));column-gap:16px}
+.fin-panel-wide{grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));column-gap:16px}
 .fin-panel label{display:grid;grid-template-columns:minmax(96px,38%) minmax(0,1fr);align-items:center;gap:8px;font-size:12.5px;color:var(--fin-muted)}
 .fin-composer input,.fin-composer select,.fin-composer textarea{width:100%;min-width:0;padding:6px 8px;border:1px solid var(--fin-line);border-radius:6px;background:var(--fin-ground);color:var(--fin-text);font:inherit;font-size:13px}
 .fin-composer input:focus,.fin-composer select:focus,.fin-composer textarea:focus{outline:none;border-color:var(--fin-orange);box-shadow:0 0 0 1px var(--fin-orange)}
