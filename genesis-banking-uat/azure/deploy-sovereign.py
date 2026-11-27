@@ -676,18 +676,24 @@ DESK_SECRETS = (('BANK_DESK_CHANNEL_SECRET', 'bank-desk-channel-secret'), ('AVIS
 CONTAINER_APPS_API = '2024-03-01'
 
 
+def desk_ingress_ready(application):
+    return (application['properties']['configuration']['ingress'].get('clientCertificateMode') == 'accept'
+            and application['properties'].get('provisioningState') == 'Succeeded')
+
+
 def private_desk_settings(application, known_secrets=()):
     """The application as it is once its ingress accepts client certificates, and the desk's environment bindings."""
-    if application['properties']['configuration']['ingress'].get('clientCertificateMode') != 'accept':
-        az('rest', '--method', 'PATCH', '--url',
-           'https://management.azure.com' + application['id'] + '?api-version=' + CONTAINER_APPS_API,
-           '--body', json.dumps({'properties': {'configuration': {'ingress': {'clientCertificateMode': 'accept'}}}}),
-           '--headers', 'Content-Type=application/json')
-        # Azure finishes the change after it answers; the release starts only once the application has it.
+    if not desk_ingress_ready(application):
+        if application['properties']['configuration']['ingress'].get('clientCertificateMode') != 'accept':
+            az('rest', '--method', 'PATCH', '--url',
+               'https://management.azure.com' + application['id'] + '?api-version=' + CONTAINER_APPS_API,
+               '--body', json.dumps({'properties': {'configuration': {'ingress': {'clientCertificateMode': 'accept'}}}}),
+               '--headers', 'Content-Type=application/json')
+        # Azure finishes the change after it answers - also one an interrupted release left running (review finding):
+        # the release starts only once the application has it.
         for attempt in range(36):
             application = app(APP)
-            if (application['properties']['configuration']['ingress'].get('clientCertificateMode') == 'accept'
-                    and application['properties'].get('provisioningState') == 'Succeeded'):
+            if desk_ingress_ready(application):
                 break
             time.sleep(5)
         else:

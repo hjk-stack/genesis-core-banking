@@ -838,6 +838,19 @@ class PrivateDeskSettingsTests(unittest.TestCase):
                 deploy.private_desk_settings(self.application(), [])
         self.assertEqual(len(shows), 36)
 
+    def test_an_accept_still_being_applied_is_awaited_without_patching_again(self):
+        # Review finding: a release interrupted after the change finds "accept" while Azure is still applying it.
+        calls, shown = [], iter([self.application('accept', 'InProgress'), self.application('accept')])
+        def azure(*args):
+            calls.append(args)
+            return next(shown) if args[:2] == ('containerapp', 'show') else None
+        with patch.object(deploy, 'az', side_effect=azure), patch.object(deploy.time, 'sleep'), \
+                contextlib.redirect_stdout(io.StringIO()):
+            application, env = deploy.private_desk_settings(self.application('accept', 'InProgress'), [])
+        self.assertEqual([call[:2] for call in calls], [('containerapp', 'show')] * 2)
+        self.assertEqual(application['properties']['provisioningState'], 'Succeeded')
+        self.assertEqual(env, ['BANK_DESK_MTLS_INGRESS=azure-container-apps'])
+
     def test_existing_desk_secrets_are_bound_by_name_without_reading_or_printing_them(self):
         known = [{'name': 'bank-desk-channel-secret'}, {'name': 'avis-connector-listener'}, {'name': 'avispay-db-password'}]
         with patch.object(deploy, 'az') as azure, contextlib.redirect_stdout(io.StringIO()) as output:
