@@ -4,17 +4,23 @@ name: GENESIS banking test server network (port 8443)
 # Peer banks reach the FinTerminal's listening port 8443 only once the test server runs in an Azure environment
 # with its own network (genesis-banking-uat/azure/move-uat-network.py). Started by hand only:
 #   plan  - reads the test server and reports what apply would do; changes nothing.
-#   apply - makes the network, its fixed outgoing address and the environment, moves the apps and opens 8443.
+#   apply - makes the network, its fixed outgoing address and the environment, moves the apps and opens 8443, and
+#           gives the DNS records ChatGPT sets for each custom domain (the bank owner: "ChatGPT does the DNS").
+#   bind  - binds a custom domain (hostname) to the moved bank app once its DNS points there.
 on:
   pull_request:
     paths: ['genesis-banking-uat/azure/move-uat-network.py', 'genesis-banking-uat/azure/test_move_uat_network.py', '.github/workflows/uat-network.yml']
   workflow_dispatch:
     inputs:
       mode:
-        description: 'plan = read and report only; apply = make the network and move the test server'
+        description: 'plan = read and report only; apply = make the network and move the test server; bind = bind a custom domain to the moved bank app'
         type: choice
-        options: [plan, apply]
+        options: [plan, apply, bind]
         default: plan
+      hostname:
+        description: 'bind only: the custom domain whose DNS points to the moved bank app'
+        required: false
+        default: ''
 permissions:
   contents: read
 # A run that changes the test server never runs together with its maintenance (uat-stack.yml, the same group;
@@ -51,4 +57,5 @@ jobs:
       - name: Test server network (${{ inputs.mode }})
         env:
           MODE: ${{ inputs.mode }}
-        run: python3 genesis-banking-uat/azure/move-uat-network.py "$MODE"
+          DOMAIN: ${{ inputs.hostname }}
+        run: python3 genesis-banking-uat/azure/move-uat-network.py "$MODE" "$DOMAIN"

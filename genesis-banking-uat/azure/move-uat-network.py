@@ -5,13 +5,17 @@ Requested by the bank owner: "Yes prepare port 8443 for azure", "we must be oper
 Azure Container Apps opens a TCP port to the outside only in an environment with its own virtual network, and an
 environment can't be given one later ("After you create an environment ... you can't change the network type").
 So a new environment is made on a new network, with one fixed outgoing address (a NAT gateway), and the apps and
-job of the test server move into it under their own names, with their settings and secrets. The database, DNS
-and the old environment stay as they are.
+job of the test server move into it under their own names, with their settings and secrets. The databases and
+the old environment stay as they are; the DNS of a custom domain is ChatGPT's (the bank owner: "ChatGPT does the
+DNS").
 
   plan   reads the test server and says what apply would do; changes nothing.
   apply  makes the network and the environment, moves the apps one by one and opens port 8443 on the bank's app.
          If an app does not come up in the new environment, or the bank does not answer there, everything moved
-         in that run is put back in the old environment as it was.
+         in that run is put back in the old environment as it was. It ends with the DNS records ChatGPT sets for
+         each custom domain.
+  bind   binds a custom domain to the bank's app in the new environment, with a certificate Azure manages, once its
+         DNS points there.
 
 Secret values are read only to carry them over, and are never printed.
 """
@@ -34,12 +38,21 @@ EGRESS_IP, NAT = 'genesis-banking-uat-egress', 'genesis-banking-uat-nat'
 PROFILE = 'Consumption'
 BANK = 'genesis-banking-uat'
 FIN_PORT = 8443
+# An app that pulls its images with an identity of its own gets a new one when it moves, without the old one's right
+# to pull (the plan's finding): it pulls with the test server's own pull identity (deploy-uat.sh) where that one may
+# pull from the registry, or else with the registry login the test server's other apps pull with (deploy-uat.sh's
+# fallback), kept as a secret of its own.
+PULL_IDENTITY = 'genesis-banking-uat-pull'
+PULL_SECRET = 'uat-registry-pull'
+# Azure's built-in roles that may pull from a registry: AcrPull, AcrPush, Contributor, Owner.
+PULL_ROLES = frozenset({'7f951dda-4ed3-4680-a7ca-43fe172d538d', '8311e382-0749-4cb8-b61a-304f252e45ec',
+                        'b24988ac-6180-42a0-ab88-20f7382dd24c', '8e3af657-a8ff-443c-a75c-2fe8c4bcb635'})
 # The test server as deploy-uat.sh and deploy-sovereign.py know it. Anything else in its environment is not moved
 # blind: the plan names it and apply stops.
 APPS = ('genesis-iso-sandbox-uat', 'genesis-fineract-uat', 'genesis-mifos-uat', BANK)
 JOBS = ('genesis-fineract-migrate',)
 ARM = 'https://management.azure.com'
-DATABASE_API, ROLES_API = '2022-12-01', '2022-04-01'
+DATABASE_API, ROLES_API, REGISTRY_API, IDENTITY_API = '2022-12-01', '2022-04-01', '2023-07-01', '2023-01-31'
 # What Azure reports about a resource but never takes back.
 READ_ONLY = ('provisioningState', 'runningStatus', 'runningState', 'deploymentErrors', 'latestRevisionName',
              'latestReadyRevisionName', 'latestRevisionFqdn', 'customDomainVerificationId', 'outboundIpAddresses',
@@ -133,10 +146,21 @@ def environment_of(resource):
     return (properties.get('environmentId') or properties.get('managedEnvironmentId') or '').lower()
 
 
-def body_for(resource, secrets, environment_id, profile, port=None):
+def own_identity(entry):
+    return str((entry or {}).get('identity') or '').lower() == 'system'
+
+
+def database_servers(text):
+    """The Azure PostgreSQL servers a setting names (only their names are ever kept or shown)."""
+    return set(re.findall(r'([a-z0-9][a-z0-9-]{1,62})\.postgres\.database\.azure\.com', str(text or '').lower()))
+
+
+def body_for(resource, secrets, environment_id, profile, port=None, access=None):
     """The resource as Azure takes it back: in the given environment, with its secrets, without what Azure only
     reports. A custom domain's certificate belongs to its environment, so the domain is left out and bound again;
-    the traffic goes to the latest revision, as the old revisions go with the old app."""
+    the traffic goes to the latest revision, as the old revisions go with the old app. With access (by registry
+    address), a registry the resource pulled from with its own identity is pulled from with the pull identity or
+    the registry login given there."""
     properties = {key: value for key, value in properties_of(resource).items() if key not in READ_ONLY}
     # The first revision gets a name of its own: the old app's revision names may still be taken.
     if properties.get('template'):
@@ -145,6 +169,22 @@ def body_for(resource, secrets, environment_id, profile, port=None):
     configuration['secrets'] = [{key: item[key] for key in ('name', 'keyVaultUrl', 'identity') if item.get(key)}
                                 if item.get('keyVaultUrl') else {'name': item['name'], 'value': item.get('value') or ''}
                                 for item in secrets]
+    pull = None
+    if access and configuration.get('registries'):
+        registries = []
+        for entry in configuration['registries']:
+            way = access.get(str(entry.get('server', '')).lower()) if own_identity(entry) else None
+            if way and way.get('identity'):
+                registries.append(dict(entry, identity=way['identity']))
+                pull = way['identity']
+            elif way:
+                registries.append(dict({key: value for key, value in entry.items() if key != 'identity'},
+                                       username=way['username'], passwordSecretRef=PULL_SECRET))
+                configuration['secrets'] = [item for item in configuration['secrets'] if item['name'] != PULL_SECRET] \
+                    + [{'name': PULL_SECRET, 'value': way['value']}]
+            else:
+                registries.append(entry)
+        configuration['registries'] = registries
     ingress = configuration.get('ingress')
     if ingress:
         ingress = {key: value for key, value in ingress.items() if key not in ('fqdn', 'customDomains')}
@@ -161,10 +201,15 @@ def body_for(resource, secrets, environment_id, profile, port=None):
         properties.pop('workloadProfileName', None)
     body = {key: resource[key] for key in ('location', 'tags', 'kind', 'extendedLocation') if resource.get(key)}
     identity = resource.get('identity') or {}
-    if identity.get('type') and identity['type'].lower() != 'none':
-        body['identity'] = {'type': identity['type']}
-        if identity.get('userAssignedIdentities'):
-            body['identity']['userAssignedIdentities'] = {key: {} for key in identity['userAssignedIdentities']}
+    kinds = [kind.strip() for kind in str(identity.get('type') or '').split(',') if kind.strip() and kind.strip().lower() != 'none']
+    users = list(identity.get('userAssignedIdentities') or {})
+    if pull:
+        users += [] if any(user.lower() == pull.lower() for user in users) else [pull]
+        kinds += [] if 'UserAssigned' in kinds else ['UserAssigned']
+    if kinds:
+        body['identity'] = {'type': ','.join(kinds)}
+        if users:
+            body['identity']['userAssignedIdentities'] = {key: {} for key in users}
     body['properties'] = properties
     return body
 
@@ -208,32 +253,67 @@ class Move:
                 return None
             raise
 
-    def rights(self, resource):
-        """What the app's own Azure identity is used for: secrets or a registry read with it, roles it holds."""
+    def roles(self, principal):
+        """The roles an identity holds, as (role, scope) - or None when they can't be read."""
+        try:
+            found = arm('get', '/subscriptions/' + self.subscription + '/providers/Microsoft.Authorization/roleAssignments'
+                        '?$filter=principalId%20eq%20%27' + principal + '%27', ROLES_API).get('value') or []
+        except AzureError:
+            return None
+        return [(str(item['properties'].get('roleDefinitionId', '')).rsplit('/', 1)[-1].lower(),
+                 str(item['properties'].get('scope', '')).lower().rstrip('/')) for item in found]
+
+    def registries(self):
+        """The resource group's registries by their address."""
+        return {str(properties_of(item).get('loginServer', '')).lower(): item['id'].lower()
+                for item in listing(self.group + '/providers/Microsoft.ContainerRegistry/registries', REGISTRY_API)}
+
+    def pull_identity(self, registries):
+        """The test server's pull identity and the registries it may pull from; None when it does not exist."""
+        try:
+            identity = arm('get', self.group + '/providers/Microsoft.ManagedIdentity/userAssignedIdentities/' + PULL_IDENTITY, IDENTITY_API)
+        except AzureError as error:
+            if missing(error):
+                return None
+            raise
+        roles = self.roles(properties_of(identity).get('principalId', '')) or []
+        may = {registry for registry in registries.values()
+               if any(role in PULL_ROLES and (registry == scope or registry.startswith(scope + '/')) for role, scope in roles)}
+        return {'id': identity['id'], 'registries': may}
+
+    def rights(self, resource, registries):
+        """What the app's own Azure identity is used for, apart from pulling its images (that moves to the pull
+        identity): secrets read with it, roles it holds anywhere but on a registry."""
         identity = resource.get('identity') or {}
         if 'systemassigned' not in str(identity.get('type') or '').lower().replace(',', '').replace(' ', ''):
             return []
-        uses = [item['name'] for item in configuration_of(resource).get('secrets') or [] if str(item.get('identity') or '').lower() == 'system']
-        uses += ['registry ' + str(item.get('server')) for item in configuration_of(resource).get('registries') or []
-                 if str(item.get('identity') or '').lower() == 'system']
+        uses = [item['name'] for item in configuration_of(resource).get('secrets') or [] if own_identity(item)]
         if identity.get('principalId'):
-            try:
-                roles = arm('get', '/subscriptions/' + self.subscription + '/providers/Microsoft.Authorization/roleAssignments'
-                            '?$filter=principalId%20eq%20%27' + identity['principalId'] + '%27', ROLES_API).get('value') or []
-            except AzureError as error:
-                return uses + ['its rights could not be read: ' + ', '.join(error.codes)]
-            uses += ['role at ' + str(item['properties'].get('scope', '')).rsplit('/', 1)[-1] for item in roles]
+            roles = self.roles(identity['principalId'])
+            if roles is None:
+                return uses + ['its rights could not be read']
+            uses += ['role at ' + scope.rsplit('/', 1)[-1] for _, scope in roles if scope not in registries.values()]
         return uses
 
     def databases(self):
-        """The database stays as it is: it must let Azure's own addresses in, the new outgoing one among them."""
-        found = []
+        """The resource group's database servers, each with whether it lets Azure's own addresses in."""
+        found = {}
         for server in listing(self.group + '/providers/Microsoft.DBforPostgreSQL/flexibleServers', DATABASE_API):
             rules = listing(server['id'] + '/firewallRules', DATABASE_API)
-            azure = any(properties_of(rule).get('startIpAddress') == '0.0.0.0' and properties_of(rule).get('endIpAddress') == '0.0.0.0'
-                        for rule in rules)
-            found.append((server['name'], azure))
+            found[server['name'].lower()] = any(properties_of(rule).get('startIpAddress') == '0.0.0.0'
+                                                and properties_of(rule).get('endIpAddress') == '0.0.0.0' for rule in rules)
         return found
+
+    def used_databases(self, kind, resource):
+        """The database servers an app's settings name; apply also reads its secrets for them (names only)."""
+        servers = set()
+        for container in (properties_of(resource).get('template') or {}).get('containers') or []:
+            for item in container.get('env') or []:
+                servers |= database_servers(item.get('value'))
+        if self.mode == 'apply':
+            for item in (arm('post', self.path(kind, resource['name']) + '/listSecrets', self.version(kind), {}) or {}).get('value') or []:
+                servers |= database_servers(item.get('value'))
+        return servers
 
     def survey(self):
         """The test server as it is: its environment, what runs in it, and whatever the move can't carry over."""
@@ -247,7 +327,7 @@ class Move:
         here = [(kind, item) for kind, item in resources if environment_of(item) == old_id]
         moved = [(kind, item) for kind, item in resources if new_id and environment_of(item) == new_id]
         known = {('job', name) for name in JOBS} | {('app', name) for name in APPS}
-        problems = []
+        problems, pulls, uses = [], {}, {}
         if (properties_of(old).get('vnetConfiguration') or {}).get('infrastructureSubnetId'):
             problems.append('The test server environment has its own network already: the port can be opened there.')
         strangers = sorted(kind + ' ' + item['name'] for kind, item in here + moved if (kind, item['name']) not in known)
@@ -255,6 +335,15 @@ class Move:
             problems.append('Not known as part of the test server, so not moved blind: ' + ', '.join(strangers) + '.')
         if BANK not in {item['name'] for kind, item in here + moved if kind == 'app'}:
             problems.append('The bank app ' + BANK + ' is not in the test server environment.')
+        registries = self.registries()
+        pull = self.pull_identity(registries)
+        # The registry logins the test server's other apps pull with, by registry address.
+        logins = {}
+        for kind, item in here:
+            for entry in configuration_of(item).get('registries') or []:
+                if entry.get('username') and entry.get('passwordSecretRef') and not own_identity(entry):
+                    logins.setdefault(str(entry.get('server', '')).lower(),
+                                      {'username': entry['username'], 'secret': entry['passwordSecretRef'], 'kind': kind, 'name': item['name']})
         for kind, item in here:
             profile = properties_of(item).get('workloadProfileName')
             if profile not in (None, PROFILE):
@@ -262,25 +351,44 @@ class Move:
             for volume in (properties_of(item).get('template') or {}).get('volumes') or []:
                 if volume.get('storageName'):
                     problems.append(item['name'] + ' uses the environment storage ' + str(volume['storageName']) + ', which is not carried over.')
-            uses = self.rights(item)
-            if uses:
-                problems.append(item['name'] + ' has its own Azure identity in use (' + ', '.join(uses)
+            # An app that pulls its images with its own identity pulls them with the pull identity, or else with the
+            # registry login of the test server's other apps (the plan's finding: a moved app's new identity could
+            # not pull, nor could one put back).
+            for entry in configuration_of(item).get('registries') or []:
+                if not own_identity(entry):
+                    continue
+                server = str(entry.get('server', '')).lower()
+                if pull and registries.get(server) in pull['registries']:
+                    pulls.setdefault((kind, item['name']), {})[server] = {'identity': pull['id']}
+                elif server in logins:
+                    pulls.setdefault((kind, item['name']), {})[server] = dict(logins[server])
+                else:
+                    problems.append(item['name'] + ' pulls its images from ' + str(entry.get('server')) + ' with its own identity, and neither '
+                                    + PULL_IDENTITY + ' nor a registry login of the test server may pull from there in its place.')
+            rights = self.rights(item, registries)
+            if rights:
+                problems.append(item['name'] + ' has its own Azure identity in use (' + ', '.join(rights)
                                 + '); a moved app gets a new identity without those rights.')
             if item['name'] == BANK and not ingress_of(item).get('external'):
                 problems.append('The bank app is not reachable from outside, so its port ' + str(FIN_PORT) + ' can not be either.')
+            for server in self.used_databases(kind, item):
+                uses.setdefault(server, []).append(item['name'])
         components = listing(self.environments + OLD_ENV + '/daprComponents', self.api['managedEnvironments'])
         if components:
             problems.append('The environment has ' + str(len(components)) + ' Dapr component(s), which are not carried over.')
         if new and not (properties_of(new).get('vnetConfiguration') or {}).get('infrastructureSubnetId'):
             problems.append('An environment ' + NEW_ENV + ' exists already, without its own network.')
+        # Only a database the apps use must let the new outgoing address in (review of the plan).
         databases = self.databases()
-        for name, azure in databases:
-            if not azure:
-                problems.append('The database ' + name + ' does not let Azure services in: the new outgoing address must be allowed first.')
+        for server in sorted(uses):
+            if server in databases and not databases[server]:
+                problems.append('The database ' + server + ' (used by ' + ', '.join(uses[server])
+                                + ') does not let Azure services in: the new outgoing address must be allowed first.')
         # The job first (nothing runs then), the bank's own app last: what it calls is in place when it comes up.
         order = sorted(here, key=lambda pair: (pair[0] != 'job', pair[1]['name'] == BANK, bool(ingress_of(pair[1]).get('external')), pair[1]['name']))
         absent = [name for name in JOBS + APPS if name not in {item['name'] for _, item in here + moved}]
-        return {'old': old, 'new': new, 'here': order, 'moved': moved, 'problems': problems, 'databases': databases, 'absent': absent}
+        return {'old': old, 'new': new, 'here': order, 'moved': moved, 'problems': problems, 'databases': databases,
+                'uses': uses, 'pulls': pulls, 'absent': absent}
 
     def plan(self, state):
         old = properties_of(state['old'])
@@ -290,16 +398,20 @@ class Move:
                  + ', subnet ' + SUBNET_PREFIX + ', one fixed outgoing address (NAT gateway ' + NAT + ')')
         for kind, item in state['here']:
             self.say('Moves: ' + describe(kind, item) + ('; opens port ' + str(FIN_PORT) + ' to the outside' if item['name'] == BANK else ''))
+            for server, way in sorted(state['pulls'].get((kind, item['name']), {}).items()):
+                self.say(item['name'] + ' pulls from ' + server + ' with ' + (PULL_IDENTITY if way.get('identity')
+                         else 'the registry login ' + way['name'] + ' pulls with') + ' instead of its own identity.')
             for domain in ingress_of(item).get('customDomains') or []:
-                self.say('Custom domain ' + str(domain.get('name')) + ' on ' + item['name'] + ': bound again after the move.')
+                self.say('Custom domain ' + str(domain.get('name')) + ' on ' + item['name'] + ': after the move ChatGPT points its DNS to the new'
+                         ' address apply gives, then it is bound again (bind).')
         for kind, item in state['moved']:
             self.say('Moved already: ' + kind + ' ' + item['name'])
         for name in state['absent']:
             self.say('Not found: ' + name)
-        for name, azure in state['databases']:
-            self.say('Database ' + name + ': stays as it is' + (' and lets Azure services in.' if azure else '.'))
-        if not state['databases']:
-            self.say('No database server in ' + RG + '.')
+        for server, azure in sorted(state['databases'].items()):
+            users = state['uses'].get(server)
+            self.say('Database ' + server + ': stays as it is; ' + ('used by ' + ', '.join(users) if users else "not used by the test server's apps")
+                     + (' and lets Azure services in.' if azure else '.'))
         for problem in state['problems']:
             self.say('STOP: ' + problem)
         if self.mode == 'plan':
@@ -356,21 +468,20 @@ class Move:
                 and properties.get('runningStatus') not in ('Stopped', 'Suspended')
         return ready
 
-    def carry(self, kind, resource, environment, done):
+    def carry(self, kind, resource, environment, done, access=None):
         """One app or job into the new environment under its own name. Its body for there - and the one to put it
-        back with, kept in done - is made before anything is deleted."""
+        back with, kept in done - is made before anything is deleted. Both pull as access says where the app
+        pulled with its own identity: the old identity goes with the old app."""
         name, path, version = resource['name'], self.path(kind, resource['name']), self.version(kind)
         secrets = (arm('post', path + '/listSecrets', version, {}) or {}).get('value') or []
-        target = body_for(resource, secrets, environment['id'], PROFILE, FIN_PORT if kind == 'app' and name == BANK else None)
+        target = body_for(resource, secrets, environment['id'], PROFILE, FIN_PORT if kind == 'app' and name == BANK else None, access)
         back = body_for(resource, secrets, properties_of(resource).get('environmentId') or properties_of(resource).get('managedEnvironmentId'),
-                        properties_of(resource).get('workloadProfileName'))
+                        properties_of(resource).get('workloadProfileName'), None, access)
         done.append((kind, name, back))
         az(*self.delete(kind, name))
         arm('put', path, version, target)
         moved = self.settled(path, version, self.running(kind))
         self.say('Moved: ' + kind + ' ' + name + (' at ' + str(ingress_of(moved).get('fqdn')) if ingress_of(moved).get('fqdn') else ''))
-        for domain in ingress_of(resource).get('customDomains') or []:
-            self.say('Custom domain ' + str(domain.get('name')) + ' on ' + name + ': to be bound again on the new environment.')
         return moved
 
     @staticmethod
@@ -425,18 +536,35 @@ class Move:
                 raise RuntimeError('The bank app did not answer ready at its new address.')
             time.sleep(10)
 
+    def logins(self, state):
+        """The password of each registry login an app pulls with in place of its own identity, read from the app
+        that pulls with it now - before anything changes."""
+        found = {}
+        for ways in state['pulls'].values():
+            for way in ways.values():
+                if not way.get('secret'):
+                    continue
+                if (way['kind'], way['name']) not in found:
+                    secrets = (arm('post', self.path(way['kind'], way['name']) + '/listSecrets', self.version(way['kind']), {}) or {}).get('value') or []
+                    found[(way['kind'], way['name'])] = {item['name']: item.get('value') for item in secrets}
+                way['value'] = found[(way['kind'], way['name'])].get(way['secret'])
+                if not way['value']:
+                    raise Refused('The registry login ' + way['name'] + ' pulls with has no password to carry over.')
+
     def apply(self, state):
         if state['problems']:
             raise Refused('Stopped before any change. ' + ' '.join(state['problems']))
+        self.logins(state)
         environment, egress = self.network(state['old']['location'].lower().replace(' ', ''))
         properties = properties_of(environment)
         self.say('Environment ' + NEW_ENV + ' ready: addresses *.' + str(properties.get('defaultDomain'))
                  + ', incoming address ' + str(properties.get('staticIp')) + ', outgoing address ' + str(egress) + '.')
         bank = next((item for kind, item in state['moved'] if kind == 'app' and item['name'] == BANK), None)
-        done = []
+        domains = {item['name']: [str(domain.get('name')) for domain in ingress_of(item).get('customDomains') or []] for _, item in state['here']}
+        done, landed = [], {}
         try:
             for kind, item in state['here']:
-                moved = self.carry(kind, item, environment, done)
+                landed[item['name']] = moved = self.carry(kind, item, environment, done, state['pulls'].get((kind, item['name'])))
                 if kind == 'app' and item['name'] == BANK:
                     bank = moved
             bank = self.open_port(bank)
@@ -448,18 +576,42 @@ class Move:
             self.say('Not moved (' + str(error) + '): what moved in this run goes back as it was.')
             self.restore(done)
             raise
+        # The bank owner: "ChatGPT does the DNS". What it sets for each custom domain, then bind.
+        for name, hostnames in domains.items():
+            for hostname in hostnames:
+                app = bank if name == BANK else landed[name]
+                self.say('DNS for ChatGPT: ' + hostname + ' CNAME ' + str(ingress_of(app).get('fqdn')) + '; asuid.' + hostname + ' TXT '
+                         + str(properties_of(app).get('customDomainVerificationId')) + '. Then: bind ' + hostname + '.')
         self.say('The old environment ' + OLD_ENV + ' stays, empty, until the owner says to delete it.')
 
+    def bind(self, hostname):
+        """A custom domain bound to the bank's app in the new environment, with a certificate Azure manages - once
+        its DNS points to the app's new address (Azure checks it)."""
+        if not re.fullmatch(r'(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}', hostname or ''):
+            raise Refused('Not a domain name: ' + str(hostname)[:80])
+        app = arm('get', self.path('app', BANK), self.version('app'))
+        new = self.environment(NEW_ENV)
+        if not new or environment_of(app) != new['id'].lower():
+            raise Refused('The bank app is not in the new environment yet: run apply first.')
+        if hostname not in [str(domain.get('name')) for domain in ingress_of(app).get('customDomains') or []]:
+            az('containerapp', 'hostname', 'add', '-g', RG, '-n', BANK, '--hostname', hostname)
+        az('containerapp', 'hostname', 'bind', '-g', RG, '-n', BANK, '--hostname', hostname, '--environment', NEW_ENV,
+           '--validation-method', 'CNAME')
+        self.say('Bound: https://' + hostname + ' on ' + BANK + ', with a certificate Azure manages.')
 
-def main(mode):
-    if mode not in ('plan', 'apply'):
-        raise SystemExit('mode must be plan or apply')
+
+def main(mode, hostname=''):
+    if mode not in ('plan', 'apply', 'bind'):
+        raise SystemExit('mode must be plan, apply or bind')
     move = Move(mode)
     try:
-        state = move.survey()
-        move.plan(state)
-        if mode == 'apply':
-            move.apply(state)
+        if mode == 'bind':
+            move.bind(hostname.strip().lower())
+        else:
+            state = move.survey()
+            move.plan(state)
+            if mode == 'apply':
+                move.apply(state)
     except (Refused, AzureError, RuntimeError) as error:
         move.say('FAILED: ' + str(error))
         raise SystemExit(1)
@@ -471,4 +623,4 @@ def main(mode):
 
 
 if __name__ == '__main__':
-    main(sys.argv[1] if len(sys.argv) > 1 else 'plan')
+    main(sys.argv[1] if len(sys.argv) > 1 else 'plan', sys.argv[2] if len(sys.argv) > 2 else '')
