@@ -28,7 +28,7 @@ import {exampleForm} from './helpers/fin-example.mjs';
 // then nothing will arrive at the NOSTRO instead will be the wallet loaded"); by hand, with a "+" wallet chosen in the composer.
 const admin={id:'fin-convert-admin',username:'fin-convert',admin:true},guest={id:'guest',admin:false};
 const BANK='EXMPDEFFXXX',PEER='SMPLFRPPXXX',BTC_EUR='54900';
-let pool,db,dir,certs,peers,listener,fin,suspense,nostro,account,eurc,btc,usdt,holder,server,base,cookie,csrf,priced=true;
+let pool,db,dir,certs,peers,listener,fin,suspense,nostro,account,eurc,btc,eth,usdt,holder,server,base,cookie,csrf,priced=true;
 // The live market price (MetaMask) as the converter reads it: BTC at EUR 54,900 here.
 const pricing={spot:async(descriptor,fiat)=>{
  if(!priced||descriptor?.network!=='BITCOIN'||fiat!=='EUR')throw Object.assign(new Error('quote service'),{code:'METAMASK_PRICE'});
@@ -82,7 +82,14 @@ before(async()=>{
  holder=(await bank.openCustomer(admin,{fullName:'Example Treasury Holder',accountType:'PERSONAL',currencies:['EUR']},randomUUID())).userId;
  eurc=await cryptoLedgerAccount(pool,{userId:holder,currency:'EURC',network:'SOLANA'});btc=await cryptoLedgerAccount(pool,{userId:holder,currency:'BTC',network:'BITCOIN'});
  usdt=await cryptoLedgerAccount(pool,{userId:holder,currency:'USDT',network:'ETHEREUM'});
- await pool.query("INSERT INTO avis_core_v2.user_deposit_addresses(user_id,network,public_address) VALUES($1,'SOLANA','ExampleSolanaTreasuryAddress1111111111111')",[holder]);
+ // ETH on Ethereum with no receiving address there: not a wallet the converter loads.
+ eth=await cryptoLedgerAccount(pool,{userId:holder,currency:'ETH',network:'ETHEREUM'});
+ // The holder's receiving addresses: the primary ones on Solana and Bitcoin, and on Solana a second one routed for EURC.
+ const address=async(network,text,primary=true)=>(await pool.query('INSERT INTO avis_core_v2.user_deposit_addresses(user_id,network,public_address,is_primary) VALUES($1,$2,$3,$4) RETURNING address_id',
+  [holder,network,text,primary])).rows[0].address_id;
+ await address('SOLANA','ExampleSolanaTreasuryAddress1111111111111');await address('BITCOIN','bc1qexampletreasuryaddress000000000000000');
+ await pool.query("INSERT INTO avis_core_v2.crypto_asset_wallet_routes(user_id,asset_id,network,address_id) VALUES($1,'euro-coin','SOLANA',$2)",
+  [holder,await address('SOLANA','ExampleSolanaEurcAddress2222222222222222',false)]);
  fin=new FinTerminal(pool,{pricing});account=(await fin.accounts(admin)).bookingAccounts.find(item=>item.accountId===suspense.id);
  peers=new FinPeers(pool,{credentials:reference=>connectorCredentials(reference,env),terminal:fin});
  listener=new FinListener(pool,peers,{env,port:0,host:'127.0.0.1'});
@@ -107,6 +114,8 @@ test('a bank administrator routes an account\'s credits into a wallet in one of 
  await assert.rejects(fin.route(guest,{bookingAccountId:suspense.id,tokenWalletId:eurc}),e=>e.code==='FORBIDDEN');
  await assert.rejects(fin.converter(guest),e=>e.code==='FORBIDDEN');
  await assert.rejects(fin.route(admin,{bookingAccountId:suspense.id,tokenWalletId:usdt}),e=>e.code==='FIN_TOKEN_WALLET');
+ // A wallet with no receiving address on its chain is not one to load (review finding).
+ await assert.rejects(fin.route(admin,{bookingAccountId:suspense.id,tokenWalletId:eth}),e=>e.code==='FIN_WALLET_ADDRESS');
  await assert.rejects(fin.route(admin,{bookingAccountId:eurc,tokenWalletId:eurc}),e=>e.code==='FIN_BOOKING_ACCOUNT');
  const routed=await fin.route(admin,{bookingAccountId:suspense.id,tokenWalletId:eurc});
  assert.deepEqual(routed.assets,['EURC','USDC','BTC','ETH','SOL']);
@@ -136,7 +145,7 @@ test('over IP with ROBOTIC STP active, a transfer to a routed account is loaded 
   ['ROBOTIC','EURC','SOLANA',1,'MiCA 1:1','249875.0000',hash,'listener:EXAMPLE_PEER']);
  assert.deepEqual([kept101.ivms101.verified,kept101.ivms101.originator.accountNumber,kept101.ivms101.beneficiary.accountNumber,
   kept101.ivms101.beneficiary.beneficiaryPersons[0].legalPerson.name.nameIdentifier[0].legalPersonName],
-  [true,[form.debtorIban],['ExampleSolanaTreasuryAddress1111111111111'],'Example Treasury Holder']);
+  [true,[form.debtorIban],['ExampleSolanaEurcAddress2222222222222222'],'Example Treasury Holder']);
  const journal=(await pool.query("SELECT event_type FROM avis_core_v2.ledger_journals WHERE idempotency_key=$1",['fin-incoming:'+form.uetr])).rows[0];
  assert.equal(journal.event_type,'FIN_INCOMING_CONVERTED');
  const draft=(await fin.drafts(admin)).find(item=>item.uetr===form.uetr);
@@ -173,6 +182,10 @@ test('registered by hand with a "+" wallet chosen, an incoming transfer is conve
  assert.deepEqual([await balance(nostro.ledger),await balance(btc),await custody('BTC','BITCOIN')],[nostroBefore,quantity,quantity]);
  const kept=(await pool.query('SELECT mode,rate_source,created_by FROM avis_core_v2.fin_terminal_conversions WHERE uetr=$1',[form.uetr])).rows[0];
  assert.deepEqual(kept,{mode:'MANUAL',rate_source:'MetaMask',created_by:admin.id});
+ // A wallet with no receiving address: refused, nothing kept (review finding).
+ const unaddressed=transfer();
+ await assert.rejects(fin.register(admin,{form:unaddressed,selection:{bookingAccountId:suspense.id,nostroAccountId:nostro.id,tokenWalletId:eth}}),e=>e.code==='FIN_WALLET_ADDRESS'&&e.status===409);
+ assert.equal((await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.fin_terminal_drafts WHERE uetr=$1',[unaddressed.uetr])).rows[0].n,0);
  // No live price: the registration is refused and nothing is kept.
  priced=false;
  try{
@@ -209,4 +222,23 @@ test('Screen B\'s Fiat-to-Crypto/Stablecoin Selector: each account\'s choice, th
   body:JSON.stringify({bookingAccountId:suspense.id,tokenWalletId:null})});
  assert.equal((await post(null)).status,403);
  const kept=await (await post(csrf)).json();assert.equal(kept.accounts.find(item=>item.accountId===suspense.id).tokenWalletId,null);
+});
+
+test('a quote read before the transaction for another route, or for none, is read again; a route that changed again is refused (review finding)',async()=>{
+ await fin.route(admin,{bookingAccountId:suspense.id,tokenWalletId:eurc});await robotic(true);
+ try{
+  for(const first of [{wallet:{account_id:btc}},null]){
+   let calls=0;
+   const racing=new FinPeers(pool,{terminal:{quoteIncoming:async input=>++calls===1?first:fin.quoteIncoming(input),receiveIncoming:(...args)=>fin.receiveIncoming(...args)}});
+   const form=transfer(),before=[await balance(eurc),await balance(btc)];
+   const {answer,delivered:done}=await racing.receive('EXAMPLE_PEER',buildFinMessage(form));await done(null);
+   assert.deepEqual([value(answer,'TxSts'),calls],['ACSC',2]);
+   assert.deepEqual([Number(await balance(eurc))-Number(before[0]),await balance(btc)],[249875,before[1]]);
+  }
+  // Changed again on the second read: refused, nothing booked.
+  const always=new FinPeers(pool,{terminal:{quoteIncoming:async()=>({wallet:{account_id:btc}}),receiveIncoming:(...args)=>fin.receiveIncoming(...args)}});
+  const form=transfer(),before=await balance(eurc),{answer,delivered:done}=await always.receive('EXAMPLE_PEER',buildFinMessage(form));await done(null);
+  assert.deepEqual([value(answer,'TxSts'),value(answer,'Cd')],['RJCT','NARR']);assert.equal(await balance(eurc),before);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.fin_terminal_drafts WHERE uetr=$1',[form.uetr])).rows[0].n,0);
+ }finally{await robotic(false);await fin.route(admin,{bookingAccountId:suspense.id,tokenWalletId:null});}
 });

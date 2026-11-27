@@ -283,28 +283,35 @@ export class FinPeers{
   const peer=await this.#peer(profileId),received=String(xml).replaceAll('\0','');
   const read=await readPeerMessage(received,{localBic:peer.local_bic,peerBic:peer.peer_bic,own:await this.#own()});
   const at=new Date(),head={localBic:read.to||peer.local_bic,peerBic:peer.peer_bic,businessMessageId:newMessageId(at),at};
-  const transfer=read.status==='RECEIVED'&&read.type===PACS008?read.transfer:null,quote=transfer&&await this.terminal.quoteIncoming(transfer);
-  const messageId=randomUUID(),answerId=randomUUID(),client=await this.pool.connect();
+  const transfer=read.status==='RECEIVED'&&read.type===PACS008?read.transfer:null;
+  const messageId=randomUUID(),answerId=randomUUID();
   let answer;
-  try{
-   await client.query('BEGIN');
-   const settled=transfer&&await this.terminal.receiveIncoming(client,peer,transfer,quote);
-   answer=settled?{type:PACS002,code:settled.status,parameters:[transfer.uetr,...(settled.reason?[settled.reason]:[])],text:settled.text,
-     xml:buildPaymentStatus({...head,original:read.original,endToEndId:transfer.endToEndId,uetr:transfer.uetr,status:settled.status,reason:settled.reason,description:settled.text})}
-    :read.status==='RECEIVED'
-    ?{type:ADMI004,code:SESSION_EVENTS[read.event].code,parameters:SESSION_EVENTS[read.event].parameters,text:ANSWERS[read.event],xml:buildSessionMessage({...head,event:read.event,text:ANSWERS[read.event]})}
-    :{type:ADMI002,code:read.reason,parameters:[read.businessMessageId||'NONE'],text:REFUSALS[read.reason],
-     xml:buildReject({...head,reference:read.businessMessageId||'NONE',reason:read.reason,description:REFUSALS[read.reason]})};
-   if(!(await passes(answer.xml,answer.type)))fault('FIN_MESSAGE_INVALID');
-   // As the specification's stream writes it: "RECEIVED <amount> -> <settlement>".
-   const text=settled?read.text+' -> '+(settled.status==='RJCT'?'RJCT '+settled.reason:settled.text):read.text;
-   await client.query(`INSERT INTO avis_core_v2.fin_terminal_peer_messages(message_id,profile_id,direction,message_type,business_message_id,event_code,event_parameters,event_text,status,error_code,content)
-    VALUES($1,$2,'IN',$3,$4,$5,$6,$7,$8,$9,$10)`,[messageId,peer.profile_id,read.type||null,read.businessMessageId||null,read.code||null,read.parameters||[],text||null,read.status,read.reason||null,received]);
-   await client.query(`INSERT INTO avis_core_v2.fin_terminal_peer_messages(message_id,profile_id,direction,answer_to,message_type,business_message_id,event_code,event_parameters,event_text,status,content,created_by)
-    VALUES($1,$2,'OUT',$3,$4,$5,$6,$7,$8,'SENDING',$9,'listener')`,[answerId,peer.profile_id,messageId,answer.type,head.businessMessageId,answer.code,answer.parameters,answer.text,answer.xml]);
-   await client.query('COMMIT');
-  }catch(failure){await client.query('ROLLBACK').catch(()=>{});throw failure;}
-  finally{client.release?.();}
+  // A transfer's live rate is read before its transaction; read again once when its account's route changed meanwhile (review
+  // finding), and refused if it changed again.
+  for(let attempt=1;;attempt++){
+   const quote=transfer&&await this.terminal.quoteIncoming(transfer),client=await this.pool.connect();
+   try{
+    await client.query('BEGIN');
+    const settled=transfer&&await this.terminal.receiveIncoming(client,peer,transfer,quote);
+    if(settled?.stale&&attempt<2){await client.query('ROLLBACK');continue;}
+    answer=settled?{type:PACS002,code:settled.status,parameters:[transfer.uetr,...(settled.reason?[settled.reason]:[])],text:settled.text,
+      xml:buildPaymentStatus({...head,original:read.original,endToEndId:transfer.endToEndId,uetr:transfer.uetr,status:settled.status,reason:settled.reason,description:settled.text})}
+     :read.status==='RECEIVED'
+     ?{type:ADMI004,code:SESSION_EVENTS[read.event].code,parameters:SESSION_EVENTS[read.event].parameters,text:ANSWERS[read.event],xml:buildSessionMessage({...head,event:read.event,text:ANSWERS[read.event]})}
+     :{type:ADMI002,code:read.reason,parameters:[read.businessMessageId||'NONE'],text:REFUSALS[read.reason],
+      xml:buildReject({...head,reference:read.businessMessageId||'NONE',reason:read.reason,description:REFUSALS[read.reason]})};
+    if(!(await passes(answer.xml,answer.type)))fault('FIN_MESSAGE_INVALID');
+    // As the specification's stream writes it: "RECEIVED <amount> -> <settlement>".
+    const text=settled?read.text+' -> '+(settled.status==='RJCT'?'RJCT '+settled.reason:settled.text):read.text;
+    await client.query(`INSERT INTO avis_core_v2.fin_terminal_peer_messages(message_id,profile_id,direction,message_type,business_message_id,event_code,event_parameters,event_text,status,error_code,content)
+     VALUES($1,$2,'IN',$3,$4,$5,$6,$7,$8,$9,$10)`,[messageId,peer.profile_id,read.type||null,read.businessMessageId||null,read.code||null,read.parameters||[],text||null,read.status,read.reason||null,received]);
+    await client.query(`INSERT INTO avis_core_v2.fin_terminal_peer_messages(message_id,profile_id,direction,answer_to,message_type,business_message_id,event_code,event_parameters,event_text,status,content,created_by)
+     VALUES($1,$2,'OUT',$3,$4,$5,$6,$7,$8,'SENDING',$9,'listener')`,[answerId,peer.profile_id,messageId,answer.type,head.businessMessageId,answer.code,answer.parameters,answer.text,answer.xml]);
+    await client.query('COMMIT');
+    break;
+   }catch(failure){await client.query('ROLLBACK').catch(()=>{});throw failure;}
+   finally{client.release?.();}
+  }
   return {answer:answer.xml,delivered:error=>this.pool.query('UPDATE avis_core_v2.fin_terminal_peer_messages SET status=$2,error_code=$3,updated_at=now() WHERE message_id=$1',
    [answerId,error?'FAILED':'DELIVERED',error?diagnostic(error):null])};
  }

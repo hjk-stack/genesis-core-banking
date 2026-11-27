@@ -94,7 +94,9 @@ const REJECTED={
  FIN_CONVERT_RATE:{reason:'NARR',text:'No live rate for converting into the account\'s wallet now.'},
  FIN_CONVERT_QUANTITY:{reason:'NARR',text:'The amount converts to no token at four decimals.'},
  FIN_TOKEN_WALLET:{reason:'NARR',text:'The account\'s conversion wallet is not open.'},
- FIN_IVMS101:{reason:'NARR',text:'The IVMS101 travel-rule data is not complete.'}};
+ FIN_IVMS101:{reason:'NARR',text:'The IVMS101 travel-rule data is not complete.'},
+ FIN_WALLET_ADDRESS:{reason:'NARR',text:'The account\'s conversion wallet has no receiving address on its chain.'},
+ FIN_CONVERT_ROUTE:{reason:'NARR',text:'The account\'s conversion route changed while the transfer was taken; send it again.'}};
 // The bank's answer to a peer's transfer taken: booked on the NOSTRO and the core banking account, or converted into crypto (ACSC),
 // or held for the operator under MANUAL INTERVENTION, technically accepted (ACTC). A transfer is the same payment when every field
 // but its message's own id and creation time is the same.
@@ -119,10 +121,19 @@ const four=value=>{const [whole,fraction='']=String(value).split('.');return who
 // are loaded into and which wallet - verified when each is named.
 const legal=name=>({legalPerson:{name:{nameIdentifier:[{legalPersonName:name,legalPersonNameIdentifierType:'LEGL'}]}}});
 function ivms101(form,wallet){
- const account=wallet.public_address||wallet.account_id;
+ const account=wallet.public_address;
  return {originator:{originatorPersons:[legal(form.debtorName)],accountNumber:[form.debtorIban]},
   beneficiary:{beneficiaryPersons:[legal(wallet.full_name)],accountNumber:[account]},verified:[form.debtorName,form.debtorIban,wallet.full_name,account].every(Boolean)};
 }
+// A wallet's receiving address on its chain: the holder's own route for that asset (crypto_asset_wallet_routes), else the holder's
+// primary deposit address on that chain.
+const WALLET_ADDRESS=`SELECT d.public_address FROM avis_core_v2.user_deposit_addresses d
+ LEFT JOIN avis_core_v2.crypto_asset_wallet_routes r ON r.address_id=d.address_id AND r.user_id=d.user_id AND r.network=d.network
+  AND r.asset_id=(SELECT asset_id FROM avis_core_v2.crypto_assets WHERE currency_code=$2)
+ WHERE d.user_id=$1 AND d.network=$3 AND (r.address_id IS NOT NULL OR d.is_primary) ORDER BY r.address_id IS NULL,d.address_id LIMIT 1`;
+const HAS_ADDRESS=` AND EXISTS(SELECT 1 FROM avis_core_v2.user_deposit_addresses d LEFT JOIN avis_core_v2.crypto_asset_wallet_routes r
+ ON r.address_id=d.address_id AND r.user_id=d.user_id AND r.network=d.network AND r.asset_id=a.asset_id
+ WHERE d.user_id=l.user_id AND d.network=l.network AND (r.address_id IS NOT NULL OR d.is_primary))`;
 const DRAFT_ROWS=`SELECT d.*,c.asset AS converted_asset,c.quantity::text AS converted_quantity,c.tx_hash AS converted_hash
  FROM avis_core_v2.fin_terminal_drafts d LEFT JOIN avis_core_v2.fin_terminal_conversions c ON c.draft_id=d.draft_id`;
 
@@ -305,12 +316,14 @@ export class FinTerminal{
   }
   return this.#transaction(async client=>draftOf(await this.#book(client,actor,{form,xml,selection,draftId,revision:body.revision})));
  }
- // A wallet the converter loads: a "+" wallet in one of its assets, with the address its holder's deposits come to on its chain.
+ // A wallet the converter loads: a "+" wallet in one of its assets, with the address its tokens are received at on its chain - none,
+ // no conversion (review finding).
  async #wallet(db,accountId){
   const wallet=(await db.query(WALLETS+' AND l.account_id=$1 AND l.currency_code=ANY($2::text[])',[accountId,CONVERT_ASSETS])).rows[0];
   if(!wallet)fault('FIN_TOKEN_WALLET','tokenWalletId',409);
-  const address=(await db.query('SELECT public_address FROM avis_core_v2.user_deposit_addresses WHERE user_id=$1 AND network=$2 ORDER BY is_primary DESC,address_id LIMIT 1',[wallet.user_id,wallet.network])).rows[0];
-  return {...wallet,public_address:address?.public_address||null};
+  const address=(await db.query(WALLET_ADDRESS,[wallet.user_id,wallet.currency_code,wallet.network])).rows[0]?.public_address;
+  if(!address)fault('FIN_WALLET_ADDRESS','tokenWalletId',409);
+  return {...wallet,public_address:address};
  }
  // The live rate: the tokens for one unit of the transfer's currency - EURC 1:1 for euros (MiCA), any other at its market price on
  // the wallet's chain (MetaMask).
@@ -392,7 +405,12 @@ export class FinTerminal{
   if(fieldProblems(form).length||!(await validateFinMessage(xml)).valid)return {status:'RJCT',...REJECTED.FIN_INCOMING_INVALID};
   const account=(await client.query(BOOKING+' AND b.abiq_iban=$2 AND a.currency_code=$3 ORDER BY a.account_id LIMIT 1',[RECEIVING_OWNERS,form.creditorIban,form.currency])).rows[0];
   if(!account)return {status:'RJCT',...REJECTED.FIN_BOOKING_ACCOUNT};
-  const robotic=(await client.query('SELECT robotic_stp FROM avis_core_v2.fin_terminal_mode WHERE mode_id=1')).rows[0]?.robotic_stp===true;
+  // The mode and the account's route as they are now, held until the transfer is taken: a quote read before the transaction for
+  // another route - or none - is read again (review finding).
+  const robotic=(await client.query('SELECT robotic_stp FROM avis_core_v2.fin_terminal_mode WHERE mode_id=1 FOR SHARE')).rows[0]?.robotic_stp===true;
+  const route=robotic?(await client.query('SELECT token_wallet_account_id FROM avis_core_v2.fin_terminal_crypto_routes WHERE booking_account_id=$1 FOR SHARE',
+   [account.account_id])).rows[0]?.token_wallet_account_id??null:null;
+  if(robotic&&route!==(quote?.wallet?.account_id??quote?.walletId??null))return {stale:true,status:'RJCT',...REJECTED.FIN_CONVERT_ROUTE};
   if(robotic&&quote?.failed)return {status:'RJCT',...REJECTED[quote.failed]};
   await client.query('SAVEPOINT fin_incoming');
   try{
@@ -420,7 +438,7 @@ export class FinTerminal{
    WHERE b.abiq_iban=$1 AND a.currency_code=$2`,[form.creditorIban,form.currency])).rows[0];
   if(!route)return null;
   try{const wallet=await this.#wallet(this.pool,route.token_wallet_account_id);return {wallet,...await this.#rate(form.currency,wallet)};}
-  catch(error){return {failed:Object.hasOwn(REJECTED,error.code)?error.code:'FIN_CONVERT_RATE'};}
+  catch(error){return {failed:Object.hasOwn(REJECTED,error.code)?error.code:'FIN_CONVERT_RATE',walletId:route.token_wallet_account_id};}
  }
  // Screen B's Fiat-to-Crypto/Stablecoin Selector (the specification v3): each of AVISPay PLC's accounts with the wallet its credits
  // are converted into while ROBOTIC STP is active, the wallets offered and their live rates, and the transfers converted with their
@@ -430,7 +448,7 @@ export class FinTerminal{
   const accounts=(await this.pool.query(BOOKING+' ORDER BY a.currency_code,a.owner_type,b.abiq_iban',[RECEIVING_OWNERS])).rows;
   const routes=new Map((await this.pool.query('SELECT booking_account_id,token_wallet_account_id FROM avis_core_v2.fin_terminal_crypto_routes')).rows
    .map(row=>[row.booking_account_id,row.token_wallet_account_id]));
-  const wallets=(await this.pool.query(WALLETS+' AND l.currency_code=ANY($1::text[]) ORDER BY l.currency_code,l.network,u.full_name',[CONVERT_ASSETS])).rows;
+  const wallets=(await this.pool.query(WALLETS+' AND l.currency_code=ANY($1::text[])'+HAS_ADDRESS+' ORDER BY l.currency_code,l.network,u.full_name',[CONVERT_ASSETS])).rows;
   const pairs=[...new Set(accounts.map(row=>row.currency_code))].flatMap(currency=>[...new Map(wallets.map(row=>[row.currency_code+'|'+row.network,row])).values()]
    .map(wallet=>({currency,wallet})));
   const rates=await Promise.all(pairs.map(async({currency,wallet})=>{
