@@ -213,10 +213,22 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    }
    const deskPolicy=privateDesk || process.env.BANK_DESK_ENFORCE==='1';
    const deviceAdmission=privateDesk ? await workstationAdmission.fromRequest(req) : null;
-   const fingerprint=privateDesk&&!deviceAdmission ? workstationFingerprint(req) : null;
    if(privateDesk&&!deviceAdmission) {
-    const admission=await contactIncubator('admit',{fp:fingerprint});
-    if(admission.approved!==true)fault('BANK_WORKSTATION_REQUIRED',null,403);
+    // An approved bank session may open the FinTerminal in a new browser window
+    // without the original browser workstation admission (for example after
+    // the domain migration). Start the existing one-time device handoff rather
+    // than show the generic denial inside that terminal. The handoff itself
+    // validates the administrator and device on AVIS.Land.
+    try {
+     const admission=await contactIncubator('admit',{fp:workstationFingerprint(req)});
+     if(admission.approved!==true)fault('BANK_WORKSTATION_REQUIRED',null,403);
+    } catch(error) {
+     if(req.method==='GET'&&path==='/fin-terminal'&&isStaffAccessDocument(req)&&error?.code==='BANK_WORKSTATION_REQUIRED') {
+      res.writeHead(303,{'location':'/access/start','cache-control':'private, no-store','referrer-policy':'no-referrer'});
+      return res.end();
+     }
+     throw error;
+    }
    }
    if(req.method==='GET'&&path==='/api/crypto/trading/index-receipt')return send(res,200,engineStatus.indexReceipt||{producer:'AVIS_W_EFFECT_ROBOT',source:'AVIS_PRESS_ROBOT',sequence:null,receivedAt:null});
    if(path==='/api/services/press-index/policy'||path==='/api/services/press-index/candidates'){

@@ -73,6 +73,15 @@ test('HTML negotiation supports document clients and keeps fetch, asset, and non
  ])jsonDenied(await fixture.request('/',{headers}));
 });
 
+test('FinTerminal navigation without an admitted workstation initiates the existing secure device handoff',async()=>{
+ const response=await fixture.request('/fin-terminal',{headers:navigation});
+ assert.equal(response.status,303);
+ assert.equal(response.headers.location,'/access/start');
+ assert.equal(response.headers['cache-control'],'private, no-store');
+ jsonDenied(await fixture.request('/fin-terminal.mjs',{headers:navigation}));
+ jsonDenied(await fixture.request('/api/fin-terminal/accounts',{headers:navigation}));
+});
+
 test('API routes and POST errors stay JSON even when the client asks for HTML',async()=>{
  for(const path of ['/api','/api/session','/api/login','/api/views/accounts'])jsonDenied(await fixture.request(path,{headers:navigation}));
  jsonDenied(await fixture.request('/',{method:'POST',headers:navigation}));

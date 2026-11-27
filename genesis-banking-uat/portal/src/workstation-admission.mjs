@@ -141,7 +141,7 @@ export class WorkstationAdmission {
  }
 }
 
-const completionScript="location.replace('/');";
+const completionScript="const key='avisFinTerminalAfterAdmission';const next=sessionStorage.getItem(key);sessionStorage.removeItem(key);location.replace(next==='/fin-terminal'?next:'/');";
 const completionHash=createHash('sha256').update(completionScript).digest('base64');
 export function sendWorkstationCompletion(res){
  res.setHeader('Cache-Control','private, no-store');res.setHeader('Referrer-Policy','no-referrer');
