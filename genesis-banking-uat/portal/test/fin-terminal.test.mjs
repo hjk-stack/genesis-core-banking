@@ -93,8 +93,10 @@ async function terminalPage(session){
  return {dom,doc:dom.window.document,asked,terminal,state,hidden:()=>dom.window.document.querySelector('[data-fin-terminal]').hidden,close(){letChannelsGo();dom.window.close();}};
 }
 
-test('the terminal shows itself to a signed-in bank administrator only',async()=>{
- for(const [session,shown] of [[{admin:true,username:'operator'},true],[{admin:false,username:'customer'},false],[null,false]]){
+// The bank owner: "Only authorised user gets access and these must be named" - an administrator without FinTerminal access sees nothing.
+test('the terminal shows itself to a signed-in bank administrator with FinTerminal access only',async()=>{
+ for(const [session,shown] of [[{admin:true,finTerminal:true,username:'operator'},true],[{admin:true,finTerminal:false,username:'operator without access'},false],[{admin:true,username:'operator'},false],
+  [{admin:false,finTerminal:true,username:'customer'},false],[null,false]]){
   const t=await terminalPage(session);try{
    assert.equal(t.asked[0][0],'/api/session');assert.equal(t.asked[0][1].credentials,'same-origin');
    assert.equal(t.hidden(),!shown);
@@ -105,7 +107,7 @@ test('the terminal shows itself to a signed-in bank administrator only',async()=
 });
 
 test('a terminal the bank page lost its handle on with a reload closes when the bank signs out (Codex review finding, P2)',async()=>{
- const t=await terminalPage({admin:true});try{
+ const t=await terminalPage({admin:true,finTerminal:true});try{
   // The bank page reloaded: a new switch with no handle on the open terminal.
   const page=new JSDOM('<!doctype html><body><div id="view">'+finTerminalControls()+'</div></body>',{url:'https://bank.example/#payments'});
   const controller=createFinTerminalSwitch({root:page.window.document,windowApi:{BroadcastChannel:Channel,screen,open:assert.fail,setInterval:assert.fail,clearInterval(){}}});
@@ -121,8 +123,8 @@ test('a terminal the bank page lost its handle on with a reload closes when the 
 });
 
 test('a workspace changed to a customer, or a sign-in ended while the terminal was in the background, closes the terminal when it comes forward',async()=>{
- for(const session of [{admin:false,username:'customer workspace'},null]){
-  const t=await terminalPage({admin:true});try{
+ for(const session of [{admin:false,username:'customer workspace'},{admin:true,finTerminal:false,username:'FinTerminal access taken away'},null]){
+  const t=await terminalPage({admin:true,finTerminal:true});try{
    t.state.session=session;t.dom.window.dispatchEvent(new t.dom.window.Event('focus'));await settle();
    assert.equal(t.hidden(),true);assert.equal(t.state.closed,1);
   }finally{t.close();}
@@ -130,7 +132,7 @@ test('a workspace changed to a customer, or a sign-in ended while the terminal w
 });
 
 test('the terminal has its two screens, the FIN composer first, chosen by a click or the arrow keys',async()=>{
- const t=await terminalPage({admin:true});try{
+ const t=await terminalPage({admin:true,finTerminal:true});try{
   const tabs=[...t.doc.querySelectorAll('[role=tab]')],screens=[...t.doc.querySelectorAll('[role=tabpanel]')];
   assert.deepEqual(tabs.map(tab=>tab.textContent),['1 · FIN – ISO 20022 Composer','2 · Interbank Direct IP-to-IP Composer']);
   assert.deepEqual(screens.map(screen=>screen.hidden),[false,true]);assert.deepEqual(tabs.map(tab=>tab.getAttribute('aria-selected')),['true','false']);

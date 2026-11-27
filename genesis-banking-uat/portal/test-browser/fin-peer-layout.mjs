@@ -13,6 +13,7 @@ import {migrate} from '../src/migrate.mjs';
 import {AccountManagement} from '../src/account-management.mjs';
 import {connectorCredentials,frame} from '../src/payment-transport.mjs';
 import {createBankServer} from '../server.mjs';
+import {finTerminalOwner} from '../test/helpers/fin-example.mjs';
 
 // Requested by the bank owner with the FinTerminal specification (v3), screen A "Peer Server Handshake & Direct IP Interaction",
 // in the dark blue and orange they approved; checked on a phone (also in the two-thirds window the Payments switch opens there),
@@ -43,7 +44,7 @@ before(async()=>{
  const nostro=await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example NOSTRO',bic:'SMPLFRPPXXX',accountNumber:'NOSTRO-EXAMPLE-1',currency:'EUR'},randomUUID());
  await bank.registerBankConnector(admin,{profileId:'EXAMPLE_TLS_PEER',name:'EXAMPLE-FRANKFURT-GW01',cashAccountId:nostro.id,protocol:'IP_TO_IP',localBic:'EXMPDEFFXXX',peerBic:'SMPLFRPPXXX',
   endpoint:'tls://localhost:'+peer.address().port,credentialReference:'AVIS_CONNECTOR_EXAMPLE_PEER'},randomUUID());
- server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false,
+ server=createBankServer({pool,authenticate:async()=>admin,finTerminalAccess:async()=>finTerminalOwner,secureCookies:false,
   transferOptions:{transport:{credentials:reference=>connectorCredentials(reference,env)},finListener:{env,port,host:'127.0.0.1'}}});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base='http://127.0.0.1:'+server.address().port;
  browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});

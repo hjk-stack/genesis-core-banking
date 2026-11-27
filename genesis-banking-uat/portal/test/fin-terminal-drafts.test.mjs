@@ -9,6 +9,7 @@ import {cryptoLedgerAccount} from '../src/crypto/rolling-ledger.mjs';
 import {FinTerminal} from '../src/fin-terminal.mjs';
 import {buildFinMessage,normalizeForm,newUetr,ibanValid} from '../public/fin-message.mjs';
 import {createBankServer} from '../server.mjs';
+import {finTerminalOwner} from './helpers/fin-example.mjs';
 import {exampleForm,exampleIban} from './helpers/fin-example.mjs';
 
 // Requested by the bank owner with the FinTerminal ISO 20022 specification: screen 1 keeps drafts, checks a message against
@@ -198,7 +199,7 @@ test('fields are checked before anything is kept: length, kind, control characte
 });
 
 test('over HTTP: a signed-in bank administrator with the session\'s CSRF token saves, lists, opens and checks drafts',async()=>{
- const server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false});
+ const server=createBankServer({pool,authenticate:async()=>admin,finTerminalAccess:async()=>finTerminalOwner,secureCookies:false});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base='http://127.0.0.1:'+server.address().port;
  try{
   assert.equal((await fetch(base+'/api/fin-terminal/drafts')).status,401);

@@ -15,6 +15,7 @@ import {cryptoLedgerAccount} from '../src/crypto/rolling-ledger.mjs';
 import {FinTerminal} from '../src/fin-terminal.mjs';
 import {FinPeers} from '../src/fin-peer.mjs';
 import {createBankServer} from '../server.mjs';
+import {finTerminalOwner} from './helpers/fin-example.mjs';
 import {startFinTerminal} from '../public/fin-terminal.mjs';
 import {uptime,balance} from '../public/fin-settlement.mjs';
 import {newUetr} from '../public/fin-message.mjs';
@@ -53,7 +54,7 @@ before(async()=>{
  await bank.registerBankConnector(admin,{profileId:'EXAMPLE_PEER',name:'EXAMPLE-GW',cashAccountId:nostro.id,protocol:'IP_TO_IP',localBic:'EXMPGB2LXXX',peerBic:'EXMPDEFFXXX',
   endpoint:'tls://localhost:1',credentialReference:'AVIS_CONNECTOR_PEER'},randomUUID());
  await new FinPeers(pool).addAddress(admin,'EXAMPLE_PEER',{address:'127.0.0.1'});
- server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false,
+ server=createBankServer({pool,authenticate:async()=>admin,finTerminalAccess:async()=>finTerminalOwner,secureCookies:false,
   transferOptions:{finListener:{env:{AVIS_CONNECTOR_LISTENER:JSON.stringify(own)},port:0,host:'127.0.0.1',poll:3600000}}});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base='http://127.0.0.1:'+server.address().port;
  const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:admin.username,password:'fixture'})});

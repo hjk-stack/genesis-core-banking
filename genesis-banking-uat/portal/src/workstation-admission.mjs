@@ -18,6 +18,16 @@ const object=value=>value&&typeof value==='object'&&!Array.isArray(value);
 const identifier=(value,max)=>typeof value==='string'&&value.length>0&&value.length<=max&&!/[\x00-\x20\x7f]/.test(value);
 const bindFields=['principal','deviceId','approvalId','generation'];
 const sameBinding=(a,b)=>object(a)&&object(b)&&bindFields.every(key=>a[key]===b[key]);
+// The person avis.land knows behind an admission, for the FinTerminal (src/fin-access.mjs): their name, whether they are the owner,
+// whether the owner gave them FinTerminal access in avis.land's User access management, and everyone who has it, by name.
+// A name is a name only with something in it besides spaces (review finding).
+const nameOf=value=>{const name=typeof value==='string'?value.trim():'';return name&&[...name].length<=80&&!/[\x00-\x1f\x7f]/.test(name)?name:'';};
+function person(current,grant){
+ const administrators=(Array.isArray(current.finTerminalAdministrators)?current.finTerminalAdministrators:[])
+  .filter(entry=>object(entry)&&nameOf(entry.name)).slice(0,40).map(entry=>({name:nameOf(entry.name),owner:entry.owner===true}));
+ const name=nameOf(current.name);
+ return {principal:grant.principal,name,owner:current.owner===true,finTerminal:current.finTerminal===true&&Boolean(name),administrators};
+}
 
 // Reject duplicate cookies instead of allowing parser order to select authority.
 function cookie(req,name){
@@ -91,7 +101,7 @@ export class WorkstationAdmission {
    for await(const part of response.body){size+=part.length;if(size>8192)deny();chunks.push(Buffer.from(part));}
    const current=JSON.parse(Buffer.concat(chunks).toString('utf8'));
    if(!object(current)||current.active!==true||!sameBinding(current,grant)||Date.parse(current.expiresAt)!==Date.parse(grant.expiresAt)||Date.parse(current.expiresAt)<=this.now())deny();
-   return true;
+   return person(current,grant);
   }catch{deny();}
  }
 
@@ -127,8 +137,8 @@ export class WorkstationAdmission {
   if(!row)deny();
   // No positive-status cache: owner revocation, lost-device locking, sign-out,
   // and recognition eviction are checked by the existing front authority.
-  await this.active(row.admission_grant);
-  return {id:row.admission_id,grant:row.admission_grant};
+  const who=await this.active(row.admission_grant);
+  return {id:row.admission_id,grant:row.admission_grant,person:who};
  }
 
  async matchesSession(id,current){

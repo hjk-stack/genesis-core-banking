@@ -3,11 +3,13 @@ import {createFinComposer} from './fin-composer.mjs';
 import {createFinPeer} from './fin-peer.mjs';
 import {createFinSettlement} from './fin-settlement.mjs';
 import {createFinConverter} from './fin-converter.mjs';
+import {createFinAccess} from './fin-access.mjs';
 
 // The FinTerminal window opened by its switch on the Payments page (fin-terminal-switch.mjs). It shares the bank's sign-in
-// and shows itself to a signed-in bank administrator only; its address opened by anyone else stays empty.
+// and shows itself only to a signed-in bank administrator the bank owner gave FinTerminal access (src/fin-access.mjs); its address
+// opened by anyone else stays empty.
 export async function administratorSession(fetcher=fetch){
- try{const response=await fetcher('/api/session',{credentials:'same-origin',cache:'no-store'});if(!response.ok)return null;const session=await response.json();return session?.admin===true?session:null;}
+ try{const response=await fetcher('/api/session',{credentials:'same-origin',cache:'no-store'});if(!response.ok)return null;const session=await response.json();return session?.admin===true&&session.finTerminal===true?session:null;}
  catch{return null;}
 }
 export const administrator=async(fetcher=fetch)=>(await administratorSession(fetcher))!==null;
@@ -34,7 +36,7 @@ export async function startFinTerminal({root=document,fetcher=fetch,windowApi=ro
   terminal.hidden=!session;csrf=session?.csrf||'';
   if(session){
    shown=true;
-   if(!composer){composer=createFinComposer({root,request});composer?.start();peer=createFinPeer({root,request});void peer?.start();settlement=createFinSettlement({root,request});settlement?.start();createFinConverter({root,request})?.start();}
+   if(!composer){composer=createFinComposer({root,request});composer?.start();peer=createFinPeer({root,request});void peer?.start();settlement=createFinSettlement({root,request});settlement?.start();createFinConverter({root,request})?.start();createFinAccess({root,request})?.start();}
    return;
   }
   // Closed once: the terminal's other requests that find the sign-in ended do not close it again.

@@ -15,7 +15,7 @@ before(async()=>{
   if(path==='/admin'){res.setHeader('content-type','text/html');return res.end(appHtml);}
   if(path==='/fin-terminal'){res.setHeader('content-type','text/html');return res.end(await readFile(new URL('../public/fin-terminal.html',import.meta.url)));}
   res.setHeader('content-type','application/json');
-  if(path==='/api/session'){if(!signedIn){res.statusCode=401;return res.end(JSON.stringify({code:'UNAUTHORIZED'}));}return res.end(JSON.stringify({admin:true,canSwitchWorkspace:false,username:'Fixture operator',csrf:'fixture-csrf'}));}
+  if(path==='/api/session'){if(!signedIn){res.statusCode=401;return res.end(JSON.stringify({code:'UNAUTHORIZED'}));}return res.end(JSON.stringify({admin:true,finTerminal:true,canSwitchWorkspace:false,username:'Fixture operator',csrf:'fixture-csrf'}));}
   if(path==='/api/logout'){signedIn=false;return res.end('{}');}
   if(path.startsWith('/api/views/'))return res.end(JSON.stringify({rows:[]}));
   res.removeHeader('content-type');
