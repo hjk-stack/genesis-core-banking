@@ -158,6 +158,16 @@ test('a refusal, an answer that cannot be read and a peer that does not answer e
   assert.equal((await rows('EXAMPLE_TLS_PEER')).at(-1).content,answer);
   assert.equal(result.link.state,'NO_SESSION');assert.equal(result.link.since,null);
  }
+ // Said by the peer, but not of the message sent (Codex review finding): another event, INIT_SESSION without READY, or a refusal
+ // naming another message. Kept as it came, shown as it is, and the session ends.
+ for(const [event,answer,reason,code] of [['INIT',peerEvent({code:'END',parameters:[],text:'SESSION CLOSED'}),'OTHER_EVENT','END'],
+  ['INIT',peerEvent({code:'HBT',parameters:[],text:null}),'OTHER_EVENT','HBT'],['INIT',peerEvent({parameters:[]}),'OTHER_EVENT','INIT'],
+  ['HEARTBEAT',peerEvent(),'OTHER_EVENT','INIT'],['END',peerEvent(),'OTHER_EVENT','INIT'],['HEARTBEAT',peerReject('FT20261127000000ABCD'),'OTHER_MESSAGE','SESSION_CLOSED']]){
+  assert.equal((await send('INIT',peerEvent())).link.state,'READY');
+  const result=await send(event,answer),last=result.messages.at(-1);
+  assert.deepEqual([last.direction,last.status,last.error,last.event,last.answerTo],['IN','UNREAD',reason,code,result.messages.at(-2).messageId]);
+  assert.deepEqual([result.link.state,result.link.since],['NO_SESSION',null]);
+ }
  // A peer that takes the message and closes without an answer: not delivered, not connected.
  const cut=await send('INIT',null),last=cut.messages.at(-1);
  assert.deepEqual([last.direction,last.status,last.error,last.answered],['OUT','FAILED','INCOMPLETE_BANK_RESPONSE',false]);

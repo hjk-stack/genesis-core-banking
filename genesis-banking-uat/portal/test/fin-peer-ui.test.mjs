@@ -106,12 +106,18 @@ test('screen A offers the registered peers; INIT_SESSION goes to the peer, its a
 
 test('a refusal, an unreachable peer and a connector without its certificate are shown as they are; nothing is made up',async()=>{
  const page=await terminal();try{
-  await until(()=>page.lines().length>0,'the stream');
   reply=xml=>peerReject(/<BizMsgIdr>([^<]+)<\/BizMsgIdr>/.exec(xml)[1]);page.pick('[data-fin-peer-event]','HEARTBEAT');
-  const before=page.lines().length;await page.send(before+2);
+  await page.send();
   assert.match(page.lines().at(-2),new RegExp('^>>> '+STAMP+' HEARTBEAT SENT \\(Seq #\\d{6}\\) · HEARTBEAT EXMPDEFFXXX -> SMPLFRPPXXX$'));
   assert.match(page.lines().at(-1),new RegExp('^<<< '+STAMP+' PEER_NAK: admi\\.002\\.001\\.01 SESSION_CLOSED · No session is open for this sender \\(ref FT\\d{14}[A-Z0-9]{4}\\)$'));
   assert.match(page.link(),new RegExp('^Peer link: REFUSED · last answer '));
+  // Said by the peer but not of the message sent: shown as it is, and it does not count (Codex review finding).
+  reply=()=>peerEvent('END','SESSION CLOSED');page.pick('[data-fin-peer-event]','INIT');
+  await page.send();
+  assert.match(page.lines().at(-2),/ INIT_SESSION SENT \(Seq #\d{6}\) · HELLO EXAMPLE-GW01 /);
+  assert.match(page.lines().at(-1),new RegExp('^<<< '+STAMP+' PEER_OTHER: admi\\.004\\.001\\.02 END · SESSION CLOSED · not an answer to the message sent$'));
+  assert.match(page.link(),/^Peer link: NO SESSION · last answer /);
+  page.pick('[data-fin-peer-event]','HEARTBEAT');
   // Another peer: its own stream, its own link.
   page.pick('[data-fin-peer-server]','EXAMPLE_CLOSED_PEER');assert.deepEqual(page.lines(),[]);assert.equal(page.link(),'Peer link: NOT CONNECTED');
   await new Promise(resolve=>setTimeout(resolve,200));
@@ -130,10 +136,11 @@ test('a refusal, an unreachable peer and a connector without its certificate are
 
 test('what another operator sends to the peer shows in the stream within seconds',async()=>{
  const page=await terminal();try{
-  await until(()=>page.lines().length>0,'the stream');const before=page.lines().length;
+  // The window has looked at the stream once; what is sent afterwards comes with a later look.
+  await until(()=>page.asked.some(request=>request.path.endsWith('/messages')),'the first look');await new Promise(resolve=>setTimeout(resolve,300));
   reply=()=>peerEvent();
   await new FinPeers(pool,{credentials:reference=>connectorCredentials(reference,env)}).send({id:'second-operator',admin:true},'EXAMPLE_TLS_PEER',{event:'INIT',text:'HELLO FROM THE SECOND OPERATOR'});
-  await until(()=>page.lines().length===before+2,'the second operator\'s message',8000);
+  await until(()=>page.lines().some(line=>line.endsWith('· HELLO FROM THE SECOND OPERATOR')),'the second operator\'s message',8000);
   assert.match(page.lines().at(-2),/INIT_SESSION SENT .* · HELLO FROM THE SECOND OPERATOR$/);assert.match(page.link(),/^Peer link: READY · /);
  }finally{page.close();}
 });

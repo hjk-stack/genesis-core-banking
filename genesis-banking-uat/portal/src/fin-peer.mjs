@@ -54,21 +54,26 @@ export function buildSessionMessage({localBic,peerBic,businessMessageId,event,te
   '        <EvtTm>'+time+'</EvtTm>','      </EvtInf>','    </SysEvtNtfctn>','  </Document>','</Envelope>',''].join('\n');
 }
 
-// The peer's answer, read only as far as it is an ISO 20022 message from that peer to this bank: its own system event
-// notification is its acknowledgement, a message reject (admi.002.001.01) its refusal. Anything else is kept as it came and
-// shown as not read, with the reason.
+// The peer's answer, read only as far as it is an ISO 20022 message from that peer to this bank and answers the message sent: its
+// own system event notification of the same event (INIT_SESSION with READY) is its acknowledgement, a message reject
+// (admi.002.001.01) naming the message sent its refusal (review finding: another event, or a refusal of another message, is
+// neither). Anything else is kept as it came and shown with the reason.
 const sameBank=(one,two)=>typeof one==='string'&&typeof two==='string'&&(one.length===8?one+'XXX':one)===(two.length===8?two+'XXX':two);
-export async function readPeerAnswer(xml,{localBic,peerBic}){
+export async function readPeerAnswer(xml,{localBic,peerBic,event,businessMessageId}){
  if(/<!DOCTYPE|<!ENTITY|<\?xml-stylesheet/i.test(xml))return {status:'UNREAD',reason:'NOT_ISO20022'};
  const type=[ADMI004,ADMI002].find(type=>xml.includes(NAMESPACE+type));
  if(!type)return {status:'UNREAD',reason:'NOT_ISO20022'};
  if(!(await passes(xml,type)))return {status:'UNREAD',type,reason:'SCHEMA'};
  const parsed=parser.parse(xml),message=parsed.Envelope||parsed,header=message.AppHdr,document=message.Document;
  if(header&&(!sameBank(header.Fr?.FIId?.FinInstnId?.BICFI,peerBic)||!sameBank(header.To?.FIId?.FinInstnId?.BICFI,localBic)||header.MsgDefIdr!==type))return {status:'UNREAD',type,reason:'HEADER'};
- const businessMessageId=header?.BizMsgIdr||null;
- if(type===ADMI004){const event=document.SysEvtNtfctn.EvtInf;return {status:'ACK',type,businessMessageId,code:event.EvtCd,parameters:event.EvtParam||[],text:event.EvtDesc||null};}
- const reject=document[ADMI002];
- return {status:'NAK',type,businessMessageId,code:reject.Rsn.RjctgPtyRsn,parameters:[reject.RltdRef.Ref],text:reject.Rsn.RsnDesc||reject.Rsn.ErrLctn||null};
+ const said={type,businessMessageId:header?.BizMsgIdr||null};
+ if(type===ADMI004){
+  const notified=document.SysEvtNtfctn.EvtInf,sent=SESSION_EVENTS[event],answer={...said,code:notified.EvtCd,parameters:notified.EvtParam||[],text:notified.EvtDesc||null};
+  const acknowledged=answer.code===sent.code&&sent.parameters.every(parameter=>answer.parameters.includes(parameter));
+  return {...answer,status:acknowledged?'ACK':'UNREAD',reason:acknowledged?null:'OTHER_EVENT'};
+ }
+ const reject=document[ADMI002],answer={...said,code:reject.Rsn.RjctgPtyRsn,parameters:[reject.RltdRef.Ref],text:reject.Rsn.RsnDesc||reject.Rsn.ErrLctn||null};
+ return {...answer,status:reject.RltdRef.Ref===businessMessageId?'NAK':'UNREAD',reason:reject.RltdRef.Ref===businessMessageId?null:'OTHER_MESSAGE'};
 }
 
 // The bank's IP-to-IP connectors to peer banks (Administration, "Add bank connector"), enabled and on an active clearing account.
@@ -144,7 +149,7 @@ export class FinPeers{
   try{answer=await this.transmit(peer,xml,credentials);}catch(failure){error=diagnostic(failure);}
   // An answer is kept as it came; text cannot hold a zero byte.
   const received=typeof answer==='string'&&answer.length?answer.replaceAll('\0',''):null;
-  const read=received&&await readPeerAnswer(received,{localBic:peer.local_bic,peerBic:peer.peer_bic});
+  const read=received&&await readPeerAnswer(received,{localBic:peer.local_bic,peerBic:peer.peer_bic,event:body.event,businessMessageId});
   const client=await this.pool.connect();
   try{
    await client.query('BEGIN');

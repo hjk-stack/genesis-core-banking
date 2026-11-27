@@ -8,7 +8,8 @@ const LINKS={READY:'READY',NOT_CONNECTED:'NOT CONNECTED',REFUSED:'REFUSED',CLOSE
 const ERRORS={BANK_TIMEOUT:'no answer within 15 seconds',ECONNREFUSED:'connection refused',ECONNRESET:'connection reset',ENOTFOUND:'address not found',
  EHOSTUNREACH:'host unreachable',ETIMEDOUT:'connection timed out',INCOMPLETE_BANK_RESPONSE:'answer cut off',RESPONSE_TOO_LARGE:'answer too large',
  INVALID_FRAME:'answer not framed',NO_RESULT:'no result recorded'};
-const REASONS={NOT_ISO20022:'not an admi.004 or admi.002 message',SCHEMA:'it does not pass its official schema',HEADER:'its header names other banks or another message'};
+const REASONS={NOT_ISO20022:'not an admi.004 or admi.002 message',SCHEMA:'it does not pass its official schema',HEADER:'its header names other banks or another message',
+ OTHER_EVENT:'not an answer to the message sent',OTHER_MESSAGE:'it refers to another message'};
 // The stream is looked at again every few seconds while it is shown: another operator's messages come in too.
 const LOOK=5;
 
@@ -19,8 +20,12 @@ export function streamLine(message){
  const when='['+clock(message.at)+']',text=message.text?['·',message.text]:[];
  if(message.direction==='OUT')return ['>>>',when,EVENTS[message.event]||message.event,SENT[message.status]||message.status,'(Seq #'+String(message.sequence).padStart(6,'0')+')',
   ...(message.status==='FAILED'?['·',failure(message.error)]:[]),...(message.status==='DELIVERED'&&!message.answered?['· no answer message']:[]),...text].join(' ');
- if(message.status==='ACK')return ['<<<',when,'PEER_ACK:',message.type,[message.event,...message.parameters].join(' '),...text].join(' ');
- if(message.status==='NAK')return ['<<<',when,'PEER_NAK:',message.type,message.event,...text,...(message.parameters[0]?['(ref '+message.parameters[0]+')']:[])].join(' ');
+ // What the peer said: its event, or its refusal with the message it names. Said, but not of the message sent, it does not count.
+ const said=message.type==='admi.002.001.01'?[message.type,message.event,...text,...(message.parameters[0]?['(ref '+message.parameters[0]+')']:[])]
+  :[message.type,[message.event,...message.parameters].join(' '),...text];
+ if(message.status==='ACK')return ['<<<',when,'PEER_ACK:',...said].join(' ');
+ if(message.status==='NAK')return ['<<<',when,'PEER_NAK:',...said].join(' ');
+ if(message.event)return ['<<<',when,'PEER_OTHER:',...said,'·',REASONS[message.error]||message.error||''].join(' ');
  return ['<<<',when,'PEER ANSWER NOT READ:',REASONS[message.error]||message.error||''].join(' ');
 }
 // The message each event starts with, for the chosen peer, as the specification writes it; changed by hand, it stays as written.
