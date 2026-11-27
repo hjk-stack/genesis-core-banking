@@ -6,6 +6,7 @@ import {XMLParser} from 'fast-xml-parser';
 import {fault} from './core.mjs';
 import {sendBankMessage,connectorCredentials} from './payment-transport.mjs';
 import {HEAD,newMessageId} from '../public/fin-message.mjs';
+import {ABIQ_ISSUER} from './avispay-core-accounts.mjs';
 
 // Screen A of the FinTerminal, "Peer Server Handshake & Direct IP Interaction" in the bank owner's specification (FinTerminal
 // Unified NOSTRO & Crypto System v3): the bank's welcome or session message to a peer bank's server - an ISO 20022 system event
@@ -67,13 +68,17 @@ export function buildReject({reference,reason,description,...head}){
 // (admi.002.001.01) naming the message sent its refusal (review finding: another event, or a refusal of another message, is
 // neither). Anything else is kept as it came and shown with the reason.
 const sameBank=(one,two)=>typeof one==='string'&&typeof two==='string'&&(one.length===8?one+'XXX':one)===(two.length===8?two+'XXX':two);
-export async function readPeerAnswer(xml,{localBic,peerBic,event,businessMessageId}){
+// A message is to this bank when it names the connector's own BIC, or the bank's own ABIQ code - AVIS Bank Intelligence, the
+// bank's IBAN system, which a peer may know the bank by (the bank owner: "Yes, accept messages to our ABIQ code too"). The bank
+// as the message names it, or null.
+const namedBank=(header,localBic,own)=>{const to=header.To?.FIId?.FinInstnId?.BICFI;return sameBank(to,localBic)?localBic:own.find(code=>sameBank(to,code))||null;};
+export async function readPeerAnswer(xml,{localBic,peerBic,event,businessMessageId,own=[]}){
  if(/<!DOCTYPE|<!ENTITY|<\?xml-stylesheet/i.test(xml))return {status:'UNREAD',reason:'NOT_ISO20022'};
  const type=[ADMI004,ADMI002].find(type=>xml.includes(NAMESPACE+type));
  if(!type)return {status:'UNREAD',reason:'NOT_ISO20022'};
  if(!(await passes(xml,type)))return {status:'UNREAD',type,reason:'SCHEMA'};
  const parsed=parser.parse(xml),message=parsed.Envelope||parsed,header=message.AppHdr,document=message.Document;
- if(header&&(!sameBank(header.Fr?.FIId?.FinInstnId?.BICFI,peerBic)||!sameBank(header.To?.FIId?.FinInstnId?.BICFI,localBic)||header.MsgDefIdr!==type))return {status:'UNREAD',type,reason:'HEADER'};
+ if(header&&(!sameBank(header.Fr?.FIId?.FinInstnId?.BICFI,peerBic)||!namedBank(header,localBic,own)||header.MsgDefIdr!==type))return {status:'UNREAD',type,reason:'HEADER'};
  const said={type,businessMessageId:header?.BizMsgIdr||null};
  if(type===ADMI004){
   const notified=document.SysEvtNtfctn.EvtInf,sent=SESSION_EVENTS[event],answer={...said,code:notified.EvtCd,parameters:notified.EvtParam||[],text:notified.EvtDesc||null};
@@ -88,7 +93,7 @@ export async function readPeerAnswer(xml,{localBic,peerBic,event,businessMessage
 // bank - INIT_SESSION, HEARTBEAT or END_SESSION; anything else is refused with the reason (another ISO 20022 message is not taken
 // on this connection).
 const EVENT_OF=Object.fromEntries(Object.entries(SESSION_EVENTS).map(([event,{code}])=>[code,event]));
-export async function readPeerMessage(xml,{localBic,peerBic}){
+export async function readPeerMessage(xml,{localBic,peerBic,own=[]}){
  if(/<!DOCTYPE|<!ENTITY|<\?xml-stylesheet/i.test(xml))return {status:'UNREAD',reason:'NOT_ISO20022'};
  if(!xml.includes(NAMESPACE+ADMI004)){
   const other=[...xml.matchAll(/urn:iso:std:iso:20022:tech:xsd:([a-z]{4}\.\d{3}\.\d{3}\.\d{2})/g)].map(match=>match[1]).find(type=>type!==HEAD);
@@ -96,9 +101,13 @@ export async function readPeerMessage(xml,{localBic,peerBic}){
  }
  if(!(await passes(xml,ADMI004)))return {status:'UNREAD',type:ADMI004,reason:'SCHEMA'};
  const parsed=parser.parse(xml),message=parsed.Envelope||parsed,header=message.AppHdr,notified=message.Document.SysEvtNtfctn.EvtInf;
- if(header&&(!sameBank(header.Fr?.FIId?.FinInstnId?.BICFI,peerBic)||!sameBank(header.To?.FIId?.FinInstnId?.BICFI,localBic)||header.MsgDefIdr!==ADMI004))
-  return {status:'UNREAD',type:ADMI004,businessMessageId:header.BizMsgIdr||null,reason:'HEADER'};
- const said={type:ADMI004,businessMessageId:header?.BizMsgIdr||null,code:notified.EvtCd,parameters:notified.EvtParam||[],text:notified.EvtDesc||null},event=EVENT_OF[said.code];
+ const bank=header?namedBank(header,localBic,own):null;
+ // A message to the bank refused for its header is refused by the bank as the message named it (review finding).
+ if(header&&(!sameBank(header.Fr?.FIId?.FinInstnId?.BICFI,peerBic)||!bank||header.MsgDefIdr!==ADMI004))
+  return {status:'UNREAD',type:ADMI004,businessMessageId:header.BizMsgIdr||null,reason:'HEADER',to:bank};
+ // The bank answers as the peer named it: by the connector's BIC or by its ABIQ code.
+ const said={type:ADMI004,businessMessageId:header?.BizMsgIdr||null,code:notified.EvtCd,parameters:notified.EvtParam||[],text:notified.EvtDesc||null,to:bank},
+  event=EVENT_OF[said.code];
  return event?{...said,status:'RECEIVED',event}:{...said,status:'UNREAD',reason:'OTHER_EVENT'};
 }
 // The bank's answer to a peer's message: the same session event (INIT_SESSION with READY), or its refusal.
@@ -129,6 +138,10 @@ const PEERS=`SELECT p.profile_id,c.display_name,c.endpoint_url,c.credential_refe
  JOIN avis_core_v2.external_cash_accounts a USING(cash_account_id)
  WHERE p.protocol='IP_TO_IP' AND c.is_enabled AND a.is_active`;
 const PROFILE=/^[A-Z0-9_]{1,35}$/;
+// The bank's own ABIQ code: its own ABIQ issuer's (ABIQ_ISSUER), while that issuer takes part in the ABIQ network
+// (src/abiq-interface.mjs) - never the code of an issuer the bank licensed (review finding).
+const OWN_ABIQ=`SELECT i.abiq_code FROM avis_core_v2.abiq_issuers i JOIN avis_core_v2.abiq_network_participants p USING(participant_code)
+ WHERE i.participant_code=$1 AND p.abiq_bic=i.abiq_code AND p.is_active`;
 const peerOf=(row,addresses=[])=>{const url=new URL(row.endpoint_url);return {profileId:row.profile_id,name:row.display_name,address:url.hostname+':'+(url.port||'443'),
  transport:url.protocol==='tls:'?'TLS':'HTTPS',localBic:row.local_bic,peerBic:row.peer_bic,addresses};};
 // A message still being sent a minute on (the transport gives up after 15 seconds) was never finished: its result is unknown.
@@ -153,6 +166,7 @@ export const diagnostic=error=>{const code=error?.code||error?.message||'';retur
 export class FinPeers{
  constructor(pool,{send=sendBankMessage,credentials=connectorCredentials}={}){this.pool=pool;this.transmit=send;this.credentials=credentials;}
  #administrator(actor){if(!actor?.admin)fault('FORBIDDEN',null,403);}
+ async #own(){return (await this.pool.query(OWN_ABIQ,[ABIQ_ISSUER.participantCode])).rows.map(row=>row.abiq_code);}
  async #peer(profileId){
   const row=typeof profileId==='string'&&PROFILE.test(profileId)?(await this.pool.query(PEERS+' AND p.profile_id=$1',[profileId])).rows[0]:null;
   if(!row)fault('CONNECTOR_NOT_FOUND','profileId',404);
@@ -225,7 +239,7 @@ export class FinPeers{
   try{answer=await this.transmit(peer,xml,credentials,{minVersion:'TLSv1.3'});}catch(failure){error=diagnostic(failure);}
   // An answer is kept as it came; text cannot hold a zero byte.
   const received=typeof answer==='string'&&answer.length?answer.replaceAll('\0',''):null;
-  const read=received&&await readPeerAnswer(received,{localBic:peer.local_bic,peerBic:peer.peer_bic,event:body.event,businessMessageId});
+  const read=received&&await readPeerAnswer(received,{localBic:peer.local_bic,peerBic:peer.peer_bic,event:body.event,businessMessageId,own:await this.#own()});
   const client=await this.pool.connect();
   try{
    await client.query('BEGIN');
@@ -241,8 +255,8 @@ export class FinPeers{
  // kept as it came, with the bank's answer as it leaves; the listener tells what became of the answer.
  async receive(profileId,xml){
   const peer=await this.#peer(profileId),received=String(xml).replaceAll('\0','');
-  const read=await readPeerMessage(received,{localBic:peer.local_bic,peerBic:peer.peer_bic});
-  const at=new Date(),head={localBic:peer.local_bic,peerBic:peer.peer_bic,businessMessageId:newMessageId(at),at};
+  const read=await readPeerMessage(received,{localBic:peer.local_bic,peerBic:peer.peer_bic,own:await this.#own()});
+  const at=new Date(),head={localBic:read.to||peer.local_bic,peerBic:peer.peer_bic,businessMessageId:newMessageId(at),at};
   const answer=read.status==='RECEIVED'
    ?{type:ADMI004,code:SESSION_EVENTS[read.event].code,parameters:SESSION_EVENTS[read.event].parameters,text:ANSWERS[read.event],xml:buildSessionMessage({...head,event:read.event,text:ANSWERS[read.event]})}
    :{type:ADMI002,code:read.reason,parameters:[read.businessMessageId||'NONE'],text:REFUSALS[read.reason],
