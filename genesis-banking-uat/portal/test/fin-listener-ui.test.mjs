@@ -15,6 +15,7 @@ import {AccountManagement} from '../src/account-management.mjs';
 import {buildSessionMessage} from '../src/fin-peer.mjs';
 import {connectorCredentials,frame} from '../src/payment-transport.mjs';
 import {createBankServer} from '../server.mjs';
+import {finTerminalOwner} from './helpers/fin-example.mjs';
 import {startFinTerminal} from '../public/fin-terminal.mjs';
 
 // Requested by the bank owner (FinTerminal step 5): "listening with an time selector keeping port open for white listed IPs", "not
@@ -44,7 +45,7 @@ before(async()=>{
  const nostro=await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example NOSTRO',bic:PEER,accountNumber:'NOSTRO-EXAMPLE-1',currency:'EUR'},randomUUID());
  await bank.registerBankConnector(admin,{profileId:'EXAMPLE_PEER',name:'EXAMPLE-GW01',cashAccountId:nostro.id,protocol:'IP_TO_IP',localBic:BANK,peerBic:PEER,
   endpoint:'tls://localhost:1',credentialReference:'AVIS_CONNECTOR_PEER'},randomUUID());
- server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false,
+ server=createBankServer({pool,authenticate:async()=>admin,finTerminalAccess:async()=>finTerminalOwner,secureCookies:false,
   transferOptions:{transport:{credentials:reference=>connectorCredentials(reference,env)},finListener:{env,port,host:'127.0.0.1'}}});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base='http://127.0.0.1:'+server.address().port;
  const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:admin.username,password:'fixture'})});

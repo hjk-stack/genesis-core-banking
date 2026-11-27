@@ -12,3 +12,6 @@ export const exampleForm=()=>({...blankForm(new Date('2026-11-27T09:00:00Z')),ue
  ultimateCreditorName:'Example Supplier Group',ultimateCreditorLei:exampleLei('EXAMPLEULTCREDIT01'),structuredReference:'RF18539007547034',
  unstructuredRemittance:'Invoice EX-2026-0001',regulatoryCountry:'DE',regulatoryCode:'INF',
  regulatoryDetails:'Goods payment for industrial equipment, non-military use, licence EX-2201'});
+// An administrator the bank owner gave FinTerminal access in avis.land's User access management, as avis.land's admission answer
+// names them (src/workstation-admission.mjs) - fictional.
+export const finTerminalOwner={principal:'admin:owner@example.test',name:'Example Owner',owner:true,finTerminal:true,administrators:[{name:'Example Owner',owner:true}]};

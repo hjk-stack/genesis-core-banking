@@ -113,3 +113,19 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
 .fin-routes select:focus{outline:none;border-color:var(--fin-orange);box-shadow:0 0 0 1px var(--fin-orange)}
 .fin-rates li,.fin-conversions li{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--fin-text);overflow-wrap:anywhere}
 .fin-convert-problem{margin:0;font-size:12px;color:var(--fin-wrong)}
+/* "Access & 4-Eyes" (fin-access.mjs): the authorised administrators by name, the 4-Eyes switch with its name, and its two PINs. */
+.fin-access{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:12px 16px 0;padding:10px 12px;border:1px solid var(--fin-line);border-radius:8px;background:var(--fin-panel)}
+.fin-access h2{margin:0;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--fin-orange)}
+.fin-access-names{display:flex;flex-wrap:wrap;gap:2px 8px;margin:0;min-width:0;font-size:12px;overflow-wrap:anywhere}
+.fin-access-names span:first-child{color:var(--fin-muted)}
+.fin-four-eyes{flex:0 0 auto;padding:6px 12px;border:1px solid var(--fin-orange);border-radius:7px;background:rgba(245,159,11,.12);color:var(--fin-orange);font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;cursor:pointer;white-space:nowrap}
+.fin-four-eyes[data-state=ON]{border-color:var(--fin-right);background:rgba(52,211,153,.12);color:var(--fin-right)}
+.fin-four-eyes:disabled{cursor:default}
+.fin-four-eyes:focus-visible,.fin-pin button:focus-visible,.fin-pin input:focus-visible{outline:2px solid var(--fin-orange);outline-offset:2px}
+.fin-pins{display:flex;flex-wrap:wrap;gap:8px 20px;width:100%}
+.fin-pin{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}
+.fin-pin-holder{font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--fin-muted);overflow-wrap:anywhere}
+.fin-pin input{width:9.5em;max-width:100%;padding:6px 8px;border:1px solid var(--fin-line);border-radius:6px;background:var(--fin-ground);color:var(--fin-text);font:inherit}
+.fin-pin button{padding:6px 10px;border:1px solid var(--fin-orange);border-radius:6px;background:transparent;color:var(--fin-orange);font:inherit;font-size:12px;cursor:pointer}
+.fin-pin button:disabled{opacity:.5;cursor:default}
+.fin-access-problem{width:100%;margin:0;font-size:12px;color:var(--fin-wrong)}

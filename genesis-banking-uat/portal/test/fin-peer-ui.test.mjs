@@ -14,6 +14,7 @@ import {AccountManagement} from '../src/account-management.mjs';
 import {FinPeers} from '../src/fin-peer.mjs';
 import {connectorCredentials,frame} from '../src/payment-transport.mjs';
 import {createBankServer} from '../server.mjs';
+import {finTerminalOwner} from './helpers/fin-example.mjs';
 import {startFinTerminal} from '../public/fin-terminal.mjs';
 
 // Requested by the bank owner with the FinTerminal specification (v3), screen A: "Peer Server Handshake & Direct IP Interaction"
@@ -53,7 +54,7 @@ before(async()=>{
  await connector('EXAMPLE_TLS_PEER','EXAMPLE-GW01','tls://localhost:'+peerServer.address().port);
  await connector('EXAMPLE_CLOSED_PEER','EXAMPLE-GW02','tls://localhost:'+closedPort);
  await connector('EXAMPLE_NO_CERT','EXAMPLE-GW03','tls://localhost:'+peerServer.address().port,'AVIS_CONNECTOR_EXAMPLE_MISSING');
- server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false,transferOptions:{transport:{credentials:reference=>connectorCredentials(reference,env)}}});
+ server=createBankServer({pool,authenticate:async()=>admin,finTerminalAccess:async()=>finTerminalOwner,secureCookies:false,transferOptions:{transport:{credentials:reference=>connectorCredentials(reference,env)}}});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base='http://127.0.0.1:'+server.address().port;
  const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:admin.username,password:'fixture'})});
  assert.equal(login.status,200);cookie=login.headers.get('set-cookie').split(';')[0];

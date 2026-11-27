@@ -15,6 +15,7 @@ import {AccountManagement} from '../src/account-management.mjs';
 import {FinPeers} from '../src/fin-peer.mjs';
 import {connectorCredentials,frame,signRequest} from '../src/payment-transport.mjs';
 import {createBankServer} from '../server.mjs';
+import {finTerminalOwner} from './helpers/fin-example.mjs';
 
 // Requested by the bank owner with the FinTerminal specification (v3), screen A "Peer Server Handshake & Direct IP Interaction":
 // the welcome/session message to a peer bank's server and its answers - "No simulators only active live software ready to connect
@@ -228,7 +229,7 @@ test('a message whose sending never finished shows that its result is unknown; o
 });
 
 test('the bank serves the peers and their streams to its administrators, and sends only with the CSRF token',async()=>{
- const server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false,transferOptions:{transport:{credentials:reference=>connectorCredentials(reference,env)}}});
+ const server=createBankServer({pool,authenticate:async()=>admin,finTerminalAccess:async()=>finTerminalOwner,secureCookies:false,transferOptions:{transport:{credentials:reference=>connectorCredentials(reference,env)}}});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base='http://127.0.0.1:'+server.address().port;
  try{
   const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:admin.username,password:'fixture'})});

@@ -33,6 +33,7 @@ import {StripeWebPos} from './src/stripe-pos.mjs';
 import {authenticateMessage,connectorCredentials,dispatchPayment,recoverPaymentDeliveries} from './src/payment-transport.mjs';
 import {buildPacs002,readIso20022} from './src/iso20022.mjs';
 import {FinTerminal} from './src/fin-terminal.mjs';
+import {FinAccess} from './src/fin-access.mjs';
 import {FinPeers} from './src/fin-peer.mjs';
 import {FinListener} from './src/fin-listener.mjs';
 
@@ -167,9 +168,14 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  FIN_CONVERT_QUANTITY:'The amount converts to no token at four decimals.',FIN_WALLET_ADDRESS:'The chosen wallet has no receiving address on its chain.',FIN_IVMS101:'The IVMS101 travel-rule data is not complete: debtor name and IBAN, wallet holder.',
 FIN_DRAFT_REGISTERED:'This incoming transfer is registered and is not changed any more.',
  FIN_LISTENING:'The listening port is open: close it to connect out.',FIN_SENDING:'A session message is on its way: open the port once it has its answer.',FIN_LISTENER_NO_PEER:'Whitelist a peer bank\'s IP address before opening the port.',
- LISTENER_CONFIGURATION:'The listening certificate (AVIS_CONNECTOR_LISTENER) is not in place in Azure.'
+ LISTENER_CONFIGURATION:'The listening certificate (AVIS_CONNECTOR_LISTENER) is not in place in Azure.',
+ FIN_TERMINAL_ACCESS:'You are not authorized to access this platform.',FIN_PIN:'Enter a PIN of 6 to 12 digits.',
+ FIN_PIN_WRONG:'The current PIN is not correct.',FIN_PIN_LOCKED:'This PIN is locked for 15 minutes after five wrong entries.',
+ FIN_FOUR_EYES:'Only the super administrator switches 4-Eyes on or off.'
 };
-export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={}}) {
+// finTerminalAccess: who avis.land says is behind this request's workstation admission (src/workstation-admission.mjs), and whether
+// the owner gave them FinTerminal access; tests give their own.
+export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={},finTerminalAccess=(_req,admission)=>admission?.person??null}) {
  const core=new TradingRobotCore(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map(),indexService=new IndexServiceAuthenticator(pool,{env:core.secretEnv,fetcher:transferOptions.indexServiceFetcher||core.cryptoFetch});
  const stripePos=transferOptions.stripePos||new StripeWebPos(pool,{env:transferOptions.secretEnv||process.env,fetcher:transferOptions.stripeFetch||fetch});
  const basket=new CryptoBasket(core,stripePos),storeWallet=new StoreWallet(basket);
@@ -178,7 +184,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
  const workstationFetcher=transferOptions.workstationFetcher||fetch;
  const workstationAuth=new WorkstationAdmissionAuthenticator(pool,{fetcher:workstationFetcher});
  const workstationAdmission=new WorkstationAdmission(pool,{fetcher:workstationFetcher});
- const nostroStatements=new NostroStatements(pool),finTerminal=new FinTerminal(pool,{pricing:transferOptions.finPricing}),finPeers=new FinPeers(pool,{...transferOptions.transport,terminal:finTerminal});
+ const nostroStatements=new NostroStatements(pool),finAccess=new FinAccess(pool),finTerminal=new FinTerminal(pool,{pricing:transferOptions.finPricing}),finPeers=new FinPeers(pool,{...transferOptions.transport,terminal:finTerminal});
  const finListener=new FinListener(pool,finPeers,transferOptions.finListener).watch();
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  const server=http.createServer(async(req,res)=>{
@@ -215,6 +221,8 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    }
    const deskPolicy=privateDesk || process.env.BANK_DESK_ENFORCE==='1';
    const deviceAdmission=privateDesk ? await workstationAdmission.fromRequest(req) : null;
+   // A sign-in's answer says at once whether its administrator has FinTerminal access, as /api/session does (src/fin-access.mjs).
+   const finTerminalOf=async admin=>admin===true&&(await finTerminalAccess(req,deviceAdmission))?.finTerminal===true;
    // Read inside the try below, so a missing certificate still reaches the FinTerminal handoff; the mobile
    // login, the phone approval and the session check further down use the same value.
    let fingerprint=null;
@@ -326,7 +334,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const script=await readFile(new URL('./node_modules/pdfjs-dist/build'+path,import.meta.url));
     res.writeHead(200,{'content-type':'text/javascript; charset=utf-8','cache-control':'private, max-age=3600'});return res.end(script);
    }
-   if(req.method==='GET'&&['/','/card-message','/fin-terminal','/fin-terminal.mjs','/fin-terminal.css','/fin-terminal-switch.mjs','/fin-message.mjs','/fin-composer.mjs','/fin-peer.mjs','/fin-settlement.mjs','/fin-converter.mjs','/app.mjs','/open-account-register.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/nostro-clearing.mjs','/checkout-ip.mjs','/nostro-clearing.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
+   if(req.method==='GET'&&['/','/card-message','/fin-terminal','/fin-terminal.mjs','/fin-terminal.css','/fin-terminal-switch.mjs','/fin-message.mjs','/fin-composer.mjs','/fin-peer.mjs','/fin-settlement.mjs','/fin-converter.mjs','/fin-access.mjs','/app.mjs','/open-account-register.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/nostro-clearing.mjs','/checkout-ip.mjs','/nostro-clearing.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
     const page=['/','/card-message','/fin-terminal'].includes(path),file=path==='/'?'index.html':page?'public'+path+'.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     // Always present the deployed UAT revision's current application source after an update.
@@ -359,7 +367,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const token=randomBytes(32).toString('base64url'),csrf=sessionCsrf(token);
     await pool.query("INSERT INTO avis_core_v2.operator_sessions(token_hash,csrf_hash,actor_id,username,is_admin,expires_at,workstation_sha256,workstation_approval) VALUES($1,$2,$3,$4,true,now()+interval '1 hour',$5,$6)",[digest(token),digest(csrf),grant.actor,grant.username,fingerprint,grant.generation]);
     res.setHeader('Set-Cookie',[`avis_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=3600`,'__Host-avis_staff_scan=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0']);
-    return send(res,200,{username:grant.username,csrf,admin:true,customerUserId:null,canSwitchWorkspace:true});
+    return send(res,200,{username:grant.username,csrf,admin:true,customerUserId:null,canSwitchWorkspace:true,finTerminal:await finTerminalOf(true)});
    }
    if(path==='/api/login'&&req.method==='POST'){
     const username=text(body.username,'username',100);text(body.password,'password',256);const password=body.password;
@@ -378,7 +386,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
      await pool.query('DELETE FROM avis_core_v2.operator_sessions WHERE expires_at<now()');
      await pool.query("INSERT INTO avis_core_v2.operator_sessions(token_hash,csrf_hash,actor_id,username,is_admin,expires_at,workstation_admission_id) VALUES($1,$2,$3,$4,true,now()+interval '1 hour',$5)",[digest(token),digest(csrf),actor.id,actor.username,deviceAdmission.id]);
      res.setHeader('Set-Cookie',`avis_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=3600`);
-     return send(res,200,{username:actor.username,csrf,admin:true,customerUserId:null,canSwitchWorkspace:true});
+     return send(res,200,{username:actor.username,csrf,admin:true,customerUserId:null,canSwitchWorkspace:true,finTerminal:await finTerminalOf(true)});
     }
     if(actor.admin&&deskPolicy){
      if(!privateDesk)fault('BANK_WORKSTATION_REQUIRED',null,403);
@@ -393,7 +401,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     await pool.query('DELETE FROM avis_core_v2.operator_sessions WHERE expires_at<now()');
     await pool.query("INSERT INTO avis_core_v2.operator_sessions(token_hash,csrf_hash,actor_id,username,is_admin,customer_user_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,now()+interval '1 hour')",[digest(token),digest(csrf),actor.id,actor.username,actor.admin===true,binding?.user_id||null]);
     res.setHeader('Set-Cookie',`avis_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600${secureCookies?'; Secure':''}`);
-    return send(res,200,{username:actor.username,csrf,admin:actor.admin===true,customerUserId:binding?String(binding.identity_user_id):null,canSwitchWorkspace:actor.admin===true});
+    return send(res,200,{username:actor.username,csrf,admin:actor.admin===true,customerUserId:binding?String(binding.identity_user_id):null,canSwitchWorkspace:actor.admin===true,finTerminal:await finTerminalOf(actor.admin)});
    }
    const token=/(?:^|;\s*)avis_session=([A-Za-z0-9_-]+)/.exec(req.headers.cookie||'')?.[1];
    if(!token)fault('UNAUTHORIZED',null,401);
@@ -412,7 +420,8 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    const holder=session.is_admin?session.workspace_user_id:session.customer_user_id;
    if(!session.is_admin){const binding=(await pool.query('SELECT user_id FROM avis_core_v2.customer_logins WHERE principal_id=$1',[session.actor_id])).rows[0];if(!binding||String(binding.user_id)!==String(holder))fault('FORBIDDEN',null,403);}
    const actor={id:session.actor_id+(session.is_admin&&holder?':customer:'+holder:''),username:session.username,admin:session.is_admin&&!holder,customerUserId:holder?String(holder):null,identityUserId:holder?String(session.identity_user_id):null};
-   const sessionData=()=>({username:actor.username,csrf:sessionCsrf(token),admin:actor.admin,customerUserId:actor.identityUserId,canSwitchWorkspace:session.is_admin});
+   const finPerson=actor.admin?await finTerminalAccess(req,deviceAdmission):null;
+   const sessionData=()=>({username:actor.username,csrf:sessionCsrf(token),admin:actor.admin,customerUserId:actor.identityUserId,canSwitchWorkspace:session.is_admin,finTerminal:finPerson?.finTerminal===true});
    const invoke=(method,input,key,...extra)=>actor.admin?core[method](actor,input,key,...extra):customerAccess.invoke(actor,method,input,key,...extra);
    const nostroStatement=/^\/api\/nostro\/([^/]+)\/statements(?:\/([^/]+))?$/.exec(path);
    if(nostroStatement){
@@ -483,6 +492,10 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     if(path==='/api/views/stripepayments')return send(res,200,{rows:await stripePos.list(actor)});
     return send(res,200,{rows:await (actor.admin?core:customerAccess).list(actor,path.split('/').at(-1))});
    }
+   // The bank owner: "Only authorised user gets access and these must be named" - the FinTerminal answers only an administrator the
+   // owner gave FinTerminal access in avis.land's User access management; it shows them by name, with its 4-Eyes PINs and switch.
+   if(path.startsWith('/api/fin-terminal/')&&finPerson?.finTerminal!==true)fault('FIN_TERMINAL_ACCESS',null,403);
+   if(req.method==='GET'&&path==='/api/fin-terminal/access')return send(res,200,await finAccess.state(finPerson));
    // The FinTerminal composer's drafts and its schema check (src/fin-terminal.mjs), for bank administrators.
    const finDraft=/^\/api\/fin-terminal\/drafts(?:\/([0-9a-f-]{36}))?$/.exec(path);
    if(req.method==='GET'&&finDraft)return send(res,200,finDraft[1]?{draft:await finTerminal.draft(actor,finDraft[1])}:{rows:await finTerminal.drafts(actor)});
@@ -502,6 +515,8 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(path==='/api/fin-terminal/validate')return send(res,200,await finTerminal.validate(actor,body));
    if(path==='/api/fin-terminal/incoming')return send(res,200,{draft:await finTerminal.register(actor,body)});
    if(path==='/api/fin-terminal/mode')return send(res,200,await finTerminal.mode(actor,body));
+   if(path==='/api/fin-terminal/pins')return send(res,200,await finAccess.setPin(actor,finPerson,body));
+   if(path==='/api/fin-terminal/four-eyes')return send(res,200,await finAccess.fourEyes(actor,finPerson,body));
    if(path==='/api/fin-terminal/converter')return send(res,200,await finTerminal.route(actor,body));
    if(finPeer?.[1])return send(res,200,await finPeers.send(actor,finPeer[1],body));
    if(path==='/api/fin-terminal/listener'){

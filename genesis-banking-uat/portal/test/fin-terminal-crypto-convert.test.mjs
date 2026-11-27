@@ -17,6 +17,7 @@ import {FinPeers} from '../src/fin-peer.mjs';
 import {FinListener} from '../src/fin-listener.mjs';
 import {connectorCredentials,frame} from '../src/payment-transport.mjs';
 import {createBankServer} from '../server.mjs';
+import {finTerminalOwner} from './helpers/fin-example.mjs';
 import {startFinTerminal} from '../public/fin-terminal.mjs';
 import {buildFinMessage,normalizeForm,newUetr,newMessageId} from '../public/fin-message.mjs';
 import {exampleForm} from './helpers/fin-example.mjs';
@@ -94,7 +95,7 @@ before(async()=>{
  peers=new FinPeers(pool,{credentials:reference=>connectorCredentials(reference,env),terminal:fin});
  listener=new FinListener(pool,peers,{env,port:0,host:'127.0.0.1'});
  await peers.addAddress(admin,'EXAMPLE_PEER',{address:'127.0.0.1'});await listener.open(admin,{minutes:15});
- server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false,transferOptions:{finPricing:pricing}});
+ server=createBankServer({pool,authenticate:async()=>admin,finTerminalAccess:async()=>finTerminalOwner,secureCookies:false,transferOptions:{finPricing:pricing}});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base='http://127.0.0.1:'+server.address().port;
  const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:admin.username,password:'fixture'})});
  assert.equal(login.status,200);cookie=login.headers.get('set-cookie').split(';')[0];csrf=(await login.json()).csrf;

@@ -8,6 +8,7 @@ import {AccountManagement} from '../src/account-management.mjs';
 import {FinTerminal} from '../src/fin-terminal.mjs';
 import {buildFinMessage,normalizeForm,newUetr} from '../public/fin-message.mjs';
 import {createBankServer} from '../server.mjs';
+import {finTerminalOwner} from './helpers/fin-example.mjs';
 import {exampleForm} from './helpers/fin-example.mjs';
 
 // Requested by the bank owner: "We now register an incoming transfer so AVISPay PLC is the receiver" - AVISPay PLC's chosen
@@ -110,7 +111,7 @@ test('nothing is booked or kept for an incoming transfer that does not name its 
 });
 
 test('over HTTP: a signed-in bank administrator with the session\'s CSRF token registers an incoming transfer',async()=>{
- const server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false});
+ const server=createBankServer({pool,authenticate:async()=>admin,finTerminalAccess:async()=>finTerminalOwner,secureCookies:false});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base='http://127.0.0.1:'+server.address().port;
  try{
   const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:admin.username,password:'fixture'})});

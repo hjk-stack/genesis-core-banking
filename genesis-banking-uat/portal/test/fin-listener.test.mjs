@@ -17,6 +17,7 @@ import {ABIQ_ISSUER} from '../src/avispay-core-accounts.mjs';
 import {connectorCredentials,frame} from '../src/payment-transport.mjs';
 import {buildFinMessage} from '../public/fin-message.mjs';
 import {createBankServer} from '../server.mjs';
+import {finTerminalOwner} from './helpers/fin-example.mjs';
 import {exampleForm} from './helpers/fin-example.mjs';
 
 // Requested by the bank owner (FinTerminal step 5): "listening with an time selector keeping port open for white listed IPs or I can
@@ -211,7 +212,7 @@ test('an address taken off the whitelist ends its connection at once; an address
 });
 
 test('the bank serves the port\'s state, opens and closes it and keeps the whitelist with the CSRF token, for administrators',async()=>{
- const server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false,transferOptions:{transport:{credentials:reference=>connectorCredentials(reference,env)},finListener:{env,port:0,host:'127.0.0.1'}}});
+ const server=createBankServer({pool,authenticate:async()=>admin,finTerminalAccess:async()=>finTerminalOwner,secureCookies:false,transferOptions:{transport:{credentials:reference=>connectorCredentials(reference,env)},finListener:{env,port:0,host:'127.0.0.1'}}});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base='http://127.0.0.1:'+server.address().port;
  try{
   const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:admin.username,password:'fixture'})});

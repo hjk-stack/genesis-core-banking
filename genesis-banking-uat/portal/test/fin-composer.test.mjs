@@ -10,6 +10,7 @@ import {AccountManagement} from '../src/account-management.mjs';
 import {cryptoLedgerAccount} from '../src/crypto/rolling-ledger.mjs';
 import {FinTerminal} from '../src/fin-terminal.mjs';
 import {createBankServer} from '../server.mjs';
+import {finTerminalOwner} from './helpers/fin-example.mjs';
 import {startFinTerminal} from '../public/fin-terminal.mjs';
 import {buildFinMessage,normalizeForm} from '../public/fin-message.mjs';
 import {exampleForm} from './helpers/fin-example.mjs';
@@ -35,7 +36,7 @@ before(async()=>{
  const holder=(await bank.openCustomer(admin,{fullName:'Example Holder',accountType:'PERSONAL',currencies:['EUR']},randomUUID())).userId;
  walletUsdc=await cryptoLedgerAccount(pool,{userId:holder,currency:'USDC',network:'ETHEREUM'});
  await cryptoLedgerAccount(pool,{userId:holder,currency:'AG',network:'ETHEREUM'});
- server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false});
+ server=createBankServer({pool,authenticate:async()=>admin,finTerminalAccess:async()=>finTerminalOwner,secureCookies:false});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base='http://127.0.0.1:'+server.address().port;
  const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:admin.username,password:'fixture'})});
  assert.equal(login.status,200);cookie=login.headers.get('set-cookie').split(';')[0];
@@ -85,10 +86,10 @@ test('a new message: its own UETR and message ID, the spec\'s defaults, and its 
   // One press makes a new UETR, in the form and in the XML.
   page.$('[data-fin-new-uetr]').click();
   assert.notEqual(page.field('uetr').value,uetr);assert.equal(uetrOf(page.xml.value),page.field('uetr').value);
-  // Only what is real: with no peer bank registered here, no connection or session is shown (screen A, step 4), and no 4-eyes
-  // state before its step.
+  // Only what is real: with no peer bank registered here, no connection or session is shown (screen A, step 4), and no dispatch
+  // before its step (3b); the 4-Eyes switch has its own (3a, fin-terminal-access.test.mjs).
   assert.equal(page.$('[data-fin-peer-link]').textContent,'Peer link: NOT CONNECTED');
-  assert.doesNotMatch(page.doc.body.textContent,/(?<!NOT )CONNECTED|mTLS|PEER_ACK|UNLOCKED|4-Eyes|Dispatch/i);
+  assert.doesNotMatch(page.doc.body.textContent,/(?<!NOT )CONNECTED|mTLS|PEER_ACK|UNLOCKED|Dispatch/i);
  }finally{page.close();}
 });
 
