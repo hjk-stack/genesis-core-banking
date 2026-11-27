@@ -116,7 +116,7 @@ test('completion commits the bank origin with only a hashed script before Strict
  assert.equal(response.headers['referrer-policy'],'no-referrer');assert.match(response.headers['cache-control'],/no-store/);
  assert.ok(response.headers['set-cookie'].some(value=>/^__Host-avis_bank_admission=[A-Za-z0-9_-]{43}; HttpOnly; Secure; Path=\/; SameSite=Strict; Max-Age=/.test(value)));
  assert.ok(response.headers['set-cookie'].some(value=>value.startsWith('__Host-avis_bank_pending=;')&&value.endsWith('Max-Age=0')));
- const script=response.body.match(/<script>([^<]+)<\/script>/)?.[1];assert.equal(script,"location.replace('/');");
+ const script=response.body.match(/<script>([^<]+)<\/script>/)?.[1];assert.match(script,/avisFinTerminalAfterAdmission/);assert.match(script,/location\.replace\(next===\'\/fin-terminal\'\?next:\'\/\'\)/);
  const digest=createHash('sha256').update(script).digest('base64');
  assert.match(response.headers['content-security-policy'],new RegExp("script-src 'sha256-"+digest.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+"'"));
  assert.ok(!response.body.includes(admission.issued.value.statusCapability));
