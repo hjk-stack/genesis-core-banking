@@ -16,7 +16,10 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  const $=selector=>screen.querySelector(selector),inputs=[...screen.querySelectorAll('[data-fin-field]')];
  const xml=$('[data-fin-xml]'),verdict=$('[data-fin-xsd]'),problems=$('[data-fin-errors]'),state=$('[data-fin-draft-state]'),list=$('[data-fin-drafts]');
  const controls=[...screen.querySelectorAll('.fin-actions button,.fin-actions select,[data-fin-new-uetr]')],choices=[...screen.querySelectorAll('[data-fin-choice]')];
+ const turn=$('[data-fin-direction]'),register=$('[data-fin-register]'),keep=$('[data-fin-save]');
  let form=blankForm(),draft=null,dirty=false,edits=0,broken=null,pause=null,busy=false,refused=null,selection=noChoice();
+ // The bank owner: "We now register an incoming transfer so AVISPay PLC is the receiver".
+ let direction='OUTGOING',registered=false;
  let accounts={bookingAccounts:[],nostroAccounts:[],tokenWallets:[]};
 
  // A choice the XML holds that the list does not offer is shown as a choice of its own: the form shows what the XML says.
@@ -40,9 +43,12 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   for(const input of inputs)if(named.has(input.dataset.finField))input.setAttribute('aria-invalid','true');else input.removeAttribute('aria-invalid');
  }
  function paintState(){
-  state.textContent=draft?(dirty?'Draft · changes not saved':'Draft saved · revision '+draft.revision):(dirty?'New message · not saved':'New message');
+  state.textContent=registered?'Incoming registered · awaiting NOSTRO statement':
+   draft?(dirty?'Draft · changes not saved':'Draft saved · revision '+draft.revision):(dirty?'New message · not saved':'New message');
   list.value=draft?.draftId||'';
  }
+ // Registered, an incoming transfer is not saved or registered again.
+ function paintDirection(){turn.value=direction;turn.disabled=registered;register.hidden=direction!=='INCOMING'||registered;keep.hidden=registered;}
  function changed(){edits++;dirty=true;refused=null;show('unchecked','XSD: not checked');paintState();}
 
  // The Common and Suspense accounts and the NOSTRO accounts in the message's currency; the "+" wallets, never AG or AGi
@@ -60,18 +66,34 @@ export function createFinComposer({root=document,request,view=root.defaultView||
    select.value=selection[name];
   }
  }
- // A chosen account writes the message's fields it stands for: the Common or Suspense account is the debtor's account at the
- // bank; the NOSTRO account is the receiver's bank and the account the transfer settles through there (INDA, SttlmAcct).
+ // A chosen account writes the message's fields it stands for. Outgoing, the Common or Suspense account is the debtor's account
+ // at the bank and the NOSTRO account is the receiver's bank and the account the transfer settles through there (INDA, SttlmAcct).
+ // Incoming, the Common or Suspense account is the creditor's, AVISPay PLC's, and its bank the receiver; the NOSTRO account is
+ // the sender's bank, where the money arrives (INGA, SttlmAcct).
  const fills={
-  bookingAccountId:id=>{const account=accounts.bookingAccounts.find(item=>item.accountId===id);return account&&{debtorName:account.institution,debtorIban:account.iban,debtorAgentBic:account.bic};},
-  nostroAccountId:id=>{const account=accounts.nostroAccounts.find(item=>item.accountId===id);return account&&{...(account.bic?{receiverBic:account.bic}:{}),settlement:'INDA',settlementAccount:account.account};},
+  bookingAccountId:id=>{const account=accounts.bookingAccounts.find(item=>item.accountId===id);return account&&(direction==='INCOMING'
+   ?{creditorName:account.institution,creditorIban:account.iban,creditorAgentBic:account.bic,receiverBic:account.bic}
+   :{debtorName:account.institution,debtorIban:account.iban,debtorAgentBic:account.bic});},
+  nostroAccountId:id=>{const account=accounts.nostroAccounts.find(item=>item.accountId===id);return account&&(direction==='INCOMING'
+   ?{...(account.bic?{senderBic:account.bic}:{}),settlement:'INGA',settlementAccount:account.account}
+   :{...(account.bic?{receiverBic:account.bic}:{}),settlement:'INDA',settlementAccount:account.account});},
   tokenWalletId:()=>null};
  // The fields that name a chosen account: written otherwise, the message no longer goes with that account (review finding).
- const binds={bookingAccountId:['debtorIban','debtorAgentBic'],nostroAccountId:['receiverBic','settlement','settlementAccount']};
+ const binds={OUTGOING:{bookingAccountId:['debtorIban','debtorAgentBic'],nostroAccountId:['receiverBic','settlement','settlementAccount']},
+  INCOMING:{bookingAccountId:['creditorIban','creditorAgentBic','receiverBic'],nostroAccountId:['senderBic','settlement','settlementAccount']}};
+ // The fields a chosen account wrote that are let go with it: all but the settlement method.
+ const wrote={OUTGOING:{bookingAccountId:['debtorName','debtorIban','debtorAgentBic'],nostroAccountId:['receiverBic','settlementAccount']},
+  INCOMING:{bookingAccountId:['creditorName','creditorIban','creditorAgentBic','receiverBic'],nostroAccountId:['senderBic','settlementAccount']}};
  const bound=(name,now=normalizeForm(form))=>{
   const fill=selection[name]&&fills[name](selection[name]);if(!fill)return null;
-  const wrote=normalizeForm({...form,...fill});
-  return binds[name].filter(field=>field in fill).every(field=>wrote[field]===now[field])?fill:false;
+  const filled=normalizeForm({...form,...fill});
+  return binds[direction][name].filter(field=>field in fill).every(field=>filled[field]===now[field])?fill:false;
+ };
+ // The fields a chosen account wrote that still say so, emptied.
+ const unwritten=(name,now)=>{
+  const fill=bound(name,now),clear={};
+  if(fill)for(const field of wrote[direction][name])if(field in fill&&normalizeForm({...form,...fill})[field]===now[field])clear[field]='';
+  return clear;
  };
  for(const select of choices)select.addEventListener('change',()=>{
   const name=select.dataset.finChoice;if(selection[name]===select.value)return;
@@ -83,18 +105,22 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  // After the form changed: in another currency, the accounts chosen in the former one are let go, and the fields they wrote
  // that still say so are emptied (review finding); a chosen account whose fields were written otherwise is let go.
  function rebind(before){
-  const now=normalizeForm(form),clear={},was=JSON.stringify(selection),moved=now.currency!==normalizeForm(before).currency;
-  if(moved){
-   for(const [name,fields] of [['bookingAccountId',['debtorName','debtorIban','debtorAgentBic']],['nostroAccountId',['receiverBic','settlementAccount']]]){
-    const fill=bound(name,now);
-    if(fill)for(const field of fields)if(field in fill&&normalizeForm({...form,...fill})[field]===now[field])clear[field]='';
-    selection={...selection,[name]:''};
-   }
-  }
-  for(const name of Object.keys(binds))if(bound(name,now)===false)selection={...selection,[name]:''};
+  let clear={};const now=normalizeForm(form),was=JSON.stringify(selection),moved=now.currency!==normalizeForm(before).currency;
+  if(moved)for(const name of ['bookingAccountId','nostroAccountId']){clear={...clear,...unwritten(name,now)};selection={...selection,[name]:''};}
+  for(const name of Object.keys(binds[direction]))if(bound(name,now)===false)selection={...selection,[name]:''};
   if(Object.keys(clear).length){form={...form,...clear};paint();write();}
   if(moved||JSON.stringify(selection)!==was)paintChoices();
  }
+ // Turned to the other direction, the chosen accounts go to the other side: what they wrote on the side they leave is emptied
+ // where it still says so, and they write the side they take; one whose fields were written otherwise is let go.
+ turn.addEventListener('change',()=>{
+  const next=turn.value==='INCOMING'?'INCOMING':'OUTGOING';if(next===direction)return;
+  const now=normalizeForm(form);let clear={};
+  for(const name of ['bookingAccountId','nostroAccountId']){if(bound(name,now)===false)selection={...selection,[name]:''};else clear={...clear,...unwritten(name,now)};}
+  direction=next;
+  for(const name of ['bookingAccountId','nostroAccountId'])if(selection[name])clear={...clear,...fills[name](selection[name])};
+  form={...form,...clear};broken=null;paint();paintChoices();write();paintDirection();changed();
+ });
  // The form writes the XML.
  const take=event=>{
   const field=event.target?.dataset?.finField;if(!field||form[field]===event.target.value)return;
@@ -123,7 +149,10 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  async function listDrafts(){
   let rows;try{rows=(await request('GET','/api/fin-terminal/drafts'))?.rows;}catch{return;}
   if(!Array.isArray(rows))rows=[];
-  list.replaceChildren(choice('','New message'),...rows.map(row=>choice(row.draftId,[row.schemaValid?'XSD ✓':'XSD ✗','·',row.amount||'—',row.currency,'·',row.creditorName||'—','·',when(row.updatedAt)].join(' '))));
+  // An incoming transfer is listed with its sender, an outgoing one with its creditor.
+  const incoming=row=>row.direction==='INCOMING';
+  list.replaceChildren(choice('','New message'),...rows.map(row=>choice(row.draftId,[row.schemaValid?'XSD ✓':'XSD ✗',...(incoming(row)?['·',row.registered?'Incoming registered':'Incoming']:[]),
+   '·',row.amount||'—',row.currency,'·',(incoming(row)?row.debtorName:row.creditorName)||'—','·',when(row.updatedAt)].join(' '))));
   list.value=draft?.draftId||'';
  }
  // One action at a time; a refusal is shown with its reason and its field.
@@ -148,28 +177,42 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  async function save(){
   flush();
   if(broken)throw Object.assign(new Error('XML: '+broken),{code:'FIN_MESSAGE_INVALID'});
-  const at=edits,{draft:saved}=await request('POST','/api/fin-terminal/drafts',{form,selection,...(draft?{draftId:draft.draftId,revision:draft.revision}:{})});
+  const at=edits,{draft:saved}=await request('POST','/api/fin-terminal/drafts',{form,selection,direction,...(draft?{draftId:draft.draftId,revision:draft.revision}:{})});
   draft={draftId:saved.draftId,revision:saved.revision};
   if(edits===at){form=whole(saved.form);selection=chosen(saved.selection);dirty=false;paint();paintChoices();xml.value=saved.xml;}
   await listDrafts();paintState();
   return saved;
  }
+ // Registered, the incoming transfer is kept as the server has it; what was written meanwhile is shown, not kept.
+ async function registerIncoming(){
+  flush();
+  if(broken)throw Object.assign(new Error('XML: '+broken),{code:'FIN_MESSAGE_INVALID'});
+  const at=edits,{draft:kept}=await request('POST','/api/fin-terminal/incoming',{form,selection,...(draft?{draftId:draft.draftId,revision:draft.revision}:{})});
+  draft={draftId:kept.draftId,revision:kept.revision};registered=kept.registered===true;
+  if(edits===at){form=whole(kept.form);selection=chosen(kept.selection);dirty=false;paint();paintChoices();xml.value=kept.xml;show('passed','XSD: PASSED');}
+  await listDrafts();paintState();paintDirection();
+ }
  const chosen=kept=>Object.fromEntries(CHOICES.map(name=>[name,typeof kept?.[name]==='string'?kept[name]:'']));
- function start(){form=blankForm(new Date());selection=noChoice();draft=null;dirty=false;broken=null;refused=null;paint();paintChoices();write();show('unchecked','XSD: not checked');paintState();}
+ function start(){
+  form=blankForm(new Date());selection=noChoice();draft=null;dirty=false;broken=null;refused=null;direction='OUTGOING';registered=false;
+  paint();paintChoices();write();show('unchecked','XSD: not checked');paintState();paintDirection();
+ }
  async function open(draftId){
   const {draft:loaded}=await request('GET','/api/fin-terminal/drafts/'+encodeURIComponent(draftId));
   form=whole(loaded.form);selection=chosen(loaded.selection);draft={draftId:loaded.draftId,revision:loaded.revision};dirty=false;broken=null;refused=null;
-  paint();paintChoices();xml.value=loaded.xml;paintState();await check();
+  direction=loaded.direction==='INCOMING'?'INCOMING':'OUTGOING';registered=loaded.registered===true;
+  paint();paintChoices();xml.value=loaded.xml;paintState();paintDirection();await check();
  }
  async function listAccounts(){
   let listed;try{listed=(await request('GET','/api/fin-terminal/accounts'))?.accounts;}catch{return;}
   accounts={bookingAccounts:[],nostroAccounts:[],tokenWallets:[],...Object.fromEntries(Object.entries(listed||{}).filter(([,rows])=>Array.isArray(rows)))};
   paintChoices();
  }
- // Another message replaces this one only once this one is kept: it is saved as a draft first. Refused, it stays with the
- // reason shown; asked for the same again without a change in between, the other message is opened as asked.
+ // Another message replaces this one only once this one is kept: it is saved as a draft first - a registered incoming transfer
+ // is kept already. Refused, it stays with the reason shown; asked for the same again without a change in between, the other
+ // message is opened as asked.
  async function go(target){
-  if(dirty&&refused!==target){try{await save();}catch(error){refused=target;throw error;}}
+  if(dirty&&!registered&&refused!==target){try{await save();}catch(error){refused=target;throw error;}}
   if(target)await open(target);else start();
  }
  list.addEventListener('change',()=>{const target=list.value;list.value=draft?.draftId||'';void act(()=>go(target));});
@@ -177,6 +220,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  $('[data-fin-new-uetr]').addEventListener('click',()=>{form={...form,uetr:newUetr()};paint();broken=null;write();changed();});
  $('[data-fin-save]').addEventListener('click',()=>void act(async()=>{await save();await check();}));
  $('[data-fin-validate]').addEventListener('click',()=>void act(check));
+ register.addEventListener('click',()=>void act(registerIncoming));
 
  return {start(){start();void listDrafts();void listAccounts();},listDrafts};
 }

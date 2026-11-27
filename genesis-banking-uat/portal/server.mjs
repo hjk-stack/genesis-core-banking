@@ -161,6 +161,9 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  FIN_TOKEN_WALLET:'Select a "+" wallet; AG and AGi are not booked here.',
  FIN_BOOKING_MISMATCH:'The debtor\'s IBAN and BIC are not those of the chosen Common or Suspense account.',
  FIN_NOSTRO_MISMATCH:'The receiver, INDA and the settlement account are not those of the chosen NOSTRO account.',
+ FIN_CREDITOR_MISMATCH:'The creditor\'s IBAN and BIC and the receiver are not those of the chosen Common or Suspense account.',
+ FIN_NOSTRO_SENDER_MISMATCH:'The sender, INGA and the settlement account are not those of the chosen NOSTRO account.',
+ FIN_INCOMING_INVALID:'Register a message that passes Validate XML.',FIN_DRAFT_REGISTERED:'This incoming transfer is registered and is not changed any more.',
  FIN_LISTENING:'The listening port is open: close it to connect out.',FIN_SENDING:'A session message is on its way: open the port once it has its answer.',FIN_LISTENER_NO_PEER:'Whitelist a peer bank\'s IP address before opening the port.',
  LISTENER_CONFIGURATION:'The listening certificate (AVIS_CONNECTOR_LISTENER) is not in place in Azure.'
 };
@@ -475,6 +478,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
    if(path==='/api/fin-terminal/drafts')return send(res,200,{draft:await finTerminal.save(actor,body)});
    if(path==='/api/fin-terminal/validate')return send(res,200,await finTerminal.validate(actor,body));
+   if(path==='/api/fin-terminal/incoming')return send(res,200,{draft:await finTerminal.register(actor,body)});
    if(finPeer?.[1])return send(res,200,await finPeers.send(actor,finPeer[1],body));
    if(path==='/api/fin-terminal/listener'){
     if(typeof body?.open!=='boolean')fault('INVALID_FIELD','open');
