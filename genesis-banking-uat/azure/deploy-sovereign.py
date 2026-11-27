@@ -665,6 +665,46 @@ def existing_stripe_settings(current_env, known_secrets=()):
     return result
 
 
+# Requested by the bank owner: "Now activate now the ISO20022 under the new domain". The FinTerminal is a window of the staff
+# desk at bank.avispay.online, which admits only approved workstations by their client certificate (staff-workstation.mjs).
+# Azure's ingress hands that certificate to the bank only once it asks for one - "accept": a caller without one still reaches
+# the public bank - and only then may the bank read the forwarded header (BANK_DESK_MTLS_INGRESS); before, it could be forged.
+# The desk's channel secret and the FinTerminal's own certificate on port 8443 stay in Azure as the application's secrets
+# (a value or a Key Vault reference): bound here when they are there, never read or printed.
+DESK_INGRESS = 'azure-container-apps'
+DESK_SECRETS = (('BANK_DESK_CHANNEL_SECRET', 'bank-desk-channel-secret'), ('AVIS_CONNECTOR_LISTENER', 'avis-connector-listener'))
+CONTAINER_APPS_API = '2024-03-01'
+
+
+def desk_ingress_ready(application):
+    return (application['properties']['configuration']['ingress'].get('clientCertificateMode') == 'accept'
+            and application['properties'].get('provisioningState') == 'Succeeded')
+
+
+def private_desk_settings(application, known_secrets=()):
+    """The application as it is once its ingress accepts client certificates, and the desk's environment bindings."""
+    if not desk_ingress_ready(application):
+        if application['properties']['configuration']['ingress'].get('clientCertificateMode') != 'accept':
+            az('rest', '--method', 'PATCH', '--url',
+               'https://management.azure.com' + application['id'] + '?api-version=' + CONTAINER_APPS_API,
+               '--body', json.dumps({'properties': {'configuration': {'ingress': {'clientCertificateMode': 'accept'}}}}),
+               '--headers', 'Content-Type=application/json')
+        # Azure finishes the change after it answers - also one an interrupted release left running (review finding):
+        # the release starts only once the application has it.
+        for attempt in range(36):
+            application = app(APP)
+            if desk_ingress_ready(application):
+                break
+            time.sleep(5)
+        else:
+            raise RuntimeError('Bank ingress did not take client certificates')
+        print('Bank ingress now accepts workstation client certificates')
+    known = {item['name'] for item in known_secrets}
+    bound = [setting + '=secretref:' + name for setting, name in DESK_SECRETS if name in known]
+    print('Private desk secret bindings: ' + str(len(bound)) + ' of ' + str(len(DESK_SECRETS)))
+    return application, ['BANK_DESK_MTLS_INGRESS=' + DESK_INGRESS, *bound]
+
+
 def main():
     sha = os.environ['GITHUB_SHA']
     image = os.environ['AVISPAY_IMAGE']
@@ -703,6 +743,9 @@ def main():
            'AVIS_OFFLINE_SIGNING_KEY=secretref:avispay-offline-key', f'PORT={port}', f'RELEASE_SHA={sha}']
     env += existing_crypto_settings(containers[0].get('env', []), known_secrets)
     env += existing_stripe_settings(containers[0].get('env', []), known_secrets)
+    # The ingress may change here, before the release; what the release must then preserve is the application after it.
+    before, desk = private_desk_settings(before, known_secrets)
+    env += desk
     public_fqdn = before['properties']['configuration']['ingress'].get('fqdn')
     if not isinstance(public_fqdn, str) or not re.fullmatch(r'[a-z0-9.-]+', public_fqdn):
         raise RuntimeError('Public banking checkout origin could not be verified')
