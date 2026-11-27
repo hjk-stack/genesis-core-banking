@@ -85,8 +85,10 @@ test('a new message: its own UETR and message ID, the spec\'s defaults, and its 
   // One press makes a new UETR, in the form and in the XML.
   page.$('[data-fin-new-uetr]').click();
   assert.notEqual(page.field('uetr').value,uetr);assert.equal(uetrOf(page.xml.value),page.field('uetr').value);
-  // Only what is real: no connection, peer or 4-eyes state is shown before their steps.
-  assert.doesNotMatch(page.doc.body.textContent,/CONNECTED|mTLS|Peer|ACK|4-Eyes|Dispatch/i);
+  // Only what is real: with no peer bank registered here, no connection or session is shown (screen A, step 4), and no 4-eyes
+  // state before its step.
+  assert.equal(page.$('[data-fin-peer-link]').textContent,'Peer link: NOT CONNECTED');
+  assert.doesNotMatch(page.doc.body.textContent,/(?<!NOT )CONNECTED|mTLS|PEER_ACK|UNLOCKED|4-Eyes|Dispatch/i);
  }finally{page.close();}
 });
 

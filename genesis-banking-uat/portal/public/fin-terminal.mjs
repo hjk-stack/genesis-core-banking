@@ -1,5 +1,6 @@
 import {FIN_TERMINAL_CHANNEL} from './fin-terminal-switch.mjs';
 import {createFinComposer} from './fin-composer.mjs';
+import {createFinPeer} from './fin-peer.mjs';
 
 // The FinTerminal window opened by its switch on the Payments page (fin-terminal-switch.mjs). It shares the bank's sign-in
 // and shows itself to a signed-in bank administrator only; its address opened by anyone else stays empty.
@@ -25,13 +26,13 @@ export async function startFinTerminal({root=document,fetcher=fetch,windowApi=ro
  }
  // Its sign-in is checked again whenever the bank signs in, out or changes workspace (fin-terminal-switch.mjs announces it,
  // from any of its pages) and whenever the terminal comes forward; a terminal whose administrator sign-in has ended closes.
- let checks=0,shown=false,csrf='',composer=null;
+ let checks=0,shown=false,csrf='',composer=null,peer=null;
  async function check(){
   const serial=++checks,session=await administratorSession(fetcher);if(serial!==checks)return;
   terminal.hidden=!session;csrf=session?.csrf||'';
   if(session){
    shown=true;
-   if(!composer){composer=createFinComposer({root,request});composer?.start();}
+   if(!composer){composer=createFinComposer({root,request});composer?.start();peer=createFinPeer({root,request});void peer?.start();}
    return;
   }
   if(shown)try{windowApi.close();}catch{}
