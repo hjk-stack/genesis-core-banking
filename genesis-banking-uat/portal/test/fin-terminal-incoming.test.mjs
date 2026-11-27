@@ -91,6 +91,8 @@ test('nothing is booked or kept for an incoming transfer that does not name its 
   // AVISPay PLC on the debtor side is an outgoing transfer, not an incoming one.
   [{form:incoming({creditorIban:exampleForm().creditorIban,debtorIban:account.iban}),selection},'FIN_CREDITOR_MISMATCH','bookingAccountId'],
   [{form:incoming({creditorAgentBic:'SMPLFRPPXXX'}),selection},'FIN_CREDITOR_MISMATCH','bookingAccountId'],
+  // AVISPay PLC's bank is the message's receiver too (review finding).
+  [{form:incoming({receiverBic:'SMPLFRPPXXX'}),selection},'FIN_CREDITOR_MISMATCH','bookingAccountId'],
   [{form:incoming({settlement:'INDA'}),selection},'FIN_NOSTRO_SENDER_MISMATCH','nostroAccountId'],
   [{form:incoming({senderBic:'SMPLFRPPXXX'}),selection},'FIN_NOSTRO_SENDER_MISMATCH','nostroAccountId'],
   [{form:incoming({settlementAccount:'NOSTRO-OTHER-9'}),selection},'FIN_NOSTRO_SENDER_MISMATCH','nostroAccountId'],

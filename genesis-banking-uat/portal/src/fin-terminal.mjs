@@ -118,8 +118,10 @@ export class FinTerminal{
   if(selection.bookingAccountId){
    const row=(await db.query(BOOKING+' AND a.account_id=$2 AND a.currency_code=$3',[RECEIVING_OWNERS,selection.bookingAccountId,form.currency])).rows[0];
    if(!row)fault('FIN_BOOKING_ACCOUNT','bookingAccountId',409);
+   // Incoming, the chosen account's bank is also the message's receiver (AppHdr To, InstdAgt) - review finding.
    const [iban,bic]=incoming?['creditorIban','creditorAgentBic']:['debtorIban','debtorAgentBic'];
-   if(form[iban]!==row.abiq_iban||form[bic]!==row.abiq_bic)fault(incoming?'FIN_CREDITOR_MISMATCH':'FIN_BOOKING_MISMATCH','bookingAccountId',409);
+   if(form[iban]!==row.abiq_iban||form[bic]!==row.abiq_bic||incoming&&form.receiverBic!==row.abiq_bic)
+    fault(incoming?'FIN_CREDITOR_MISMATCH':'FIN_BOOKING_MISMATCH','bookingAccountId',409);
   }
   if(selection.nostroAccountId){
    const row=(await db.query(NOSTRO+' WHERE cash_account_id=$1 AND currency_code=$2 AND is_active',[selection.nostroAccountId,form.currency])).rows[0];

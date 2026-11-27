@@ -80,7 +80,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   tokenWalletId:()=>null};
  // The fields that name a chosen account: written otherwise, the message no longer goes with that account (review finding).
  const binds={OUTGOING:{bookingAccountId:['debtorIban','debtorAgentBic'],nostroAccountId:['receiverBic','settlement','settlementAccount']},
-  INCOMING:{bookingAccountId:['creditorIban','creditorAgentBic'],nostroAccountId:['senderBic','settlement','settlementAccount']}};
+  INCOMING:{bookingAccountId:['creditorIban','creditorAgentBic','receiverBic'],nostroAccountId:['senderBic','settlement','settlementAccount']}};
  // The fields a chosen account wrote that are let go with it: all but the settlement method.
  const wrote={OUTGOING:{bookingAccountId:['debtorName','debtorIban','debtorAgentBic'],nostroAccountId:['receiverBic','settlementAccount']},
   INCOMING:{bookingAccountId:['creditorName','creditorIban','creditorAgentBic','receiverBic'],nostroAccountId:['senderBic','settlementAccount']}};
