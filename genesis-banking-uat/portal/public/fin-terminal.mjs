@@ -35,7 +35,8 @@ export async function startFinTerminal({root=document,fetcher=fetch,windowApi=ro
    if(!composer){composer=createFinComposer({root,request});composer?.start();peer=createFinPeer({root,request});void peer?.start();}
    return;
   }
-  if(shown)try{windowApi.close();}catch{}
+  // Closed once: the terminal's other requests that find the sign-in ended do not close it again.
+  if(shown){shown=false;try{windowApi.close();}catch{}}
  }
  // The terminal's own requests go with the bank's sign-in and, to change anything, its CSRF token; a sign-in that ended
  // is found out at once.

@@ -47,7 +47,7 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
 .fin-composer button:focus-visible{outline:2px solid var(--fin-orange);outline-offset:2px}
 /* Screen A's peer panel above the composer: the session message on the left, the peer server's answers on the right - the
    specification's picture, its stream green on black as a terminal writes. */
-.fin-peer{grid-column:1/-1;grid-row:1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"title title" "link link" "out in";gap:6px 16px;padding:10px 12px 12px;border:1px solid var(--fin-line);border-radius:8px;background:var(--fin-panel)}
+.fin-peer{grid-column:1/-1;grid-row:1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"title title" "link link" "listen listen" "out in";gap:6px 16px;padding:10px 12px 12px;border:1px solid var(--fin-line);border-radius:8px;background:var(--fin-panel)}
 .fin-peer h2{grid-area:title;margin:0;font-size:13px;font-weight:650;overflow-wrap:anywhere}
 .fin-peer-link{grid-area:link;margin:0;font-size:12px;font-weight:600;color:var(--fin-muted);overflow-wrap:anywhere}
 .fin-peer-link[data-state=READY]{color:var(--fin-right)}
@@ -59,6 +59,18 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
 .fin-composer .fin-peer-send select{flex:1 1 150px;width:auto}
 .fin-peer-send button{flex:1 0 auto;padding:7px 14px;border:1px solid var(--fin-orange);border-radius:7px;background:var(--fin-orange);color:#1a1205;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
 .fin-peer-problem{margin:0;font-size:12px;color:var(--fin-wrong)}
+/* Step 5: the listening port with its time, and the chosen peer's whitelisted IP addresses. */
+.fin-peer-listen{grid-area:listen;display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
+.fin-composer .fin-peer-listen select{flex:0 1 110px;width:auto}
+.fin-peer-listen button{flex:0 0 auto;padding:6px 12px;border:1px solid var(--fin-orange);border-radius:7px;background:none;color:var(--fin-orange);font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.fin-peer-listen-state{flex:1 1 220px;min-width:0;font-size:12px;color:var(--fin-muted);overflow-wrap:anywhere}
+.fin-peer-listen-state[data-state=LISTENING]{color:var(--fin-right)}
+.fin-peer-listen-state[data-state=NOT_LISTENING]{color:var(--fin-wrong)}
+.fin-peer-whitelist{display:grid;gap:4px;font-size:12.5px;color:var(--fin-muted)}
+.fin-peer-addresses{display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0;list-style:none}
+.fin-peer-addresses li{display:flex;align-items:center;gap:4px;padding:2px 4px 2px 8px;border:1px solid var(--fin-line);border-radius:6px;color:var(--fin-text);font-size:12px}
+.fin-peer-addresses button{padding:0 4px;border:0;background:none;color:var(--fin-muted);font:inherit;font-size:14px;line-height:1;cursor:pointer}
+.fin-peer-addresses button:hover{color:var(--fin-wrong)}
 .fin-peer-in{grid-area:in;display:flex;flex-direction:column;gap:4px;min-width:0}
 .fin-peer-in h3{margin:0;font-size:12.5px;font-weight:400;color:var(--fin-muted)}
 .fin-peer-stream{flex:1;min-height:110px;max-height:170px;overflow:auto;margin:0;padding:8px 10px;list-style:none;border:1px solid var(--fin-line);border-radius:6px;background:#04080f;color:var(--fin-right);font-size:11.5px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -73,5 +85,5 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
  .fin-xml textarea{flex:none;height:360px}
  .fin-actions{position:sticky;bottom:0;padding:10px 0;background:var(--fin-ground)}
 }
-@media(max-width:640px){.fin-peer{grid-template-columns:minmax(0,1fr);grid-template-areas:"title" "link" "out" "in"}}
+@media(max-width:640px){.fin-peer{grid-template-columns:minmax(0,1fr);grid-template-areas:"title" "link" "listen" "out" "in"}}
 @media(max-width:480px){.fin-panel label{grid-template-columns:minmax(0,1fr);gap:3px}.fin-drafts{flex-basis:100%;max-width:none}}

@@ -23,8 +23,9 @@ export async function authenticateMessage(pool,profileId,method,path,body,header
  if(!r.rows.length)fault('MESSAGE_REPLAY',null,409);
 }
 export function frame(payload){const data=Buffer.from(payload);if(!data.length||data.length>65535)fault('MESSAGE_LENGTH');const out=Buffer.alloc(data.length+2);out.writeUInt16BE(data.length);data.copy(out,2);return out;}
-export async function sendBankMessage(profile,body,credentials){
- const url=new URL(profile.endpoint_url),tlsOptions={cert:credentials.cert,key:credentials.key,ca:credentials.ca||undefined,minVersion:'TLSv1.2',rejectUnauthorized:true,servername:url.hostname};
+// A connection may ask for a newer TLS than the payment server's own minimum: the FinTerminal's peers speak TLS 1.3 only.
+export async function sendBankMessage(profile,body,credentials,{minVersion='TLSv1.2'}={}){
+ const url=new URL(profile.endpoint_url),tlsOptions={cert:credentials.cert,key:credentials.key,ca:credentials.ca||undefined,minVersion,rejectUnauthorized:true,servername:url.hostname};
  if(url.protocol==='https:')return new Promise((resolve,reject)=>{
   const req=https.request(url,{...tlsOptions,method:'POST',headers:{'content-type':'application/xml','content-length':Buffer.byteLength(body),...signRequest('POST',url.pathname+url.search,body,credentials.hmacSecret)}},res=>{
    const parts=[];let size=0;

@@ -1,6 +1,7 @@
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import tls from 'node:tls';
+import net from 'node:net';
 import {mkdir,mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -31,7 +32,9 @@ before(async()=>{
  dir=await mkdtemp(join(tmpdir(),'avis-fin-peer-browser-'));
  execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-days','1','-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost','-addext','extendedKeyUsage=serverAuth,clientAuth','-keyout',join(dir,'key.pem'),'-out',join(dir,'cert.pem')],{stdio:'ignore'});
  const credentials={key:await readFile(join(dir,'key.pem'),'utf8'),cert:await readFile(join(dir,'cert.pem'),'utf8'),hmacSecret:'isolated-fin-peer-browser-secret-32-bytes'};credentials.ca=credentials.cert;
- const env={AVIS_CONNECTOR_EXAMPLE_PEER:JSON.stringify(credentials)};
+ // Step 5: the bank's own certificate on its listening port, on a free port for this test.
+ const env={AVIS_CONNECTOR_EXAMPLE_PEER:JSON.stringify(credentials),AVIS_CONNECTOR_LISTENER:JSON.stringify({cert:credentials.cert,key:credentials.key})};
+ const probe=net.createServer();await new Promise(resolve=>probe.listen(0,'127.0.0.1',resolve));const port=probe.address().port;await new Promise(resolve=>probe.close(resolve));
  peer=tls.createServer({...credentials,requestCert:true,rejectUnauthorized:true},socket=>{
   let data=Buffer.alloc(0);socket.on('data',chunk=>{data=Buffer.concat([data,chunk]);if(data.length>=2&&data.length===2+data.readUInt16BE())socket.end(frame(answer));});
  });
@@ -40,7 +43,8 @@ before(async()=>{
  const nostro=await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example NOSTRO',bic:'SMPLFRPPXXX',accountNumber:'NOSTRO-EXAMPLE-1',currency:'EUR'},randomUUID());
  await bank.registerBankConnector(admin,{profileId:'EXAMPLE_TLS_PEER',name:'EXAMPLE-FRANKFURT-GW01',cashAccountId:nostro.id,protocol:'IP_TO_IP',localBic:'EXMPDEFFXXX',peerBic:'SMPLFRPPXXX',
   endpoint:'tls://localhost:'+peer.address().port,credentialReference:'AVIS_CONNECTOR_EXAMPLE_PEER'},randomUUID());
- server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false,transferOptions:{transport:{credentials:reference=>connectorCredentials(reference,env)}}});
+ server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false,
+  transferOptions:{transport:{credentials:reference=>connectorCredentials(reference,env)},finListener:{env,port,host:'127.0.0.1'}}});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base='http://127.0.0.1:'+server.address().port;
  browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
  await mkdir(new URL('../test-results/',import.meta.url),{recursive:true});
@@ -76,6 +80,20 @@ for(const width of [260,390,820,1440])test('screen A on '+(width<500?'a phone':w
   assert.ok(look.form.top>=look.panel.bottom-1,'composer under the panel');
   if(width>640)assert.ok(look.in.left>=look.out.right-1,'stream beside the message');else assert.ok(look.in.top>=look.out.bottom-1,'stream under the message');
   await page.screenshot({path:'test-results/fin-peer-'+width+'.png'});
+  // Step 5: the listening port opened for an hour to the peer's whitelisted address; nothing is sent meanwhile.
+  if(!(await page.locator('[data-fin-peer-addresses] li').count())){
+   await page.locator('[data-fin-peer-address]').fill('127.0.0.1');await page.getByRole('button',{name:'Add IP address'}).click();await page.locator('[data-fin-peer-addresses] li').waitFor();
+  }
+  await page.locator('[data-fin-listen-time]').selectOption('60');await page.locator('[data-fin-listen]').click();
+  await page.waitForFunction(()=>document.querySelector('[data-fin-listen-state]').dataset.state==='LISTENING');
+  assert.match(await page.locator('[data-fin-listen-state]').textContent(),/^Listening on port \d+ until .+ UTC · 0[01]:\d\d:\d\d left$/);
+  assert.equal(await page.locator('[data-fin-peer-send]').isDisabled(),true);
+  const listening=await page.evaluate(()=>({sideways:document.documentElement.scrollWidth>innerWidth,state:getComputedStyle(document.querySelector('[data-fin-listen-state]')).color,
+   parts:['.fin-peer-listen','.fin-peer-whitelist'].map(part=>document.querySelector(part).getBoundingClientRect().toJSON())}));
+  assert.deepEqual({sideways:listening.sideways,state:listening.state},{sideways:false,state:'rgb(52, 211, 153)'});
+  for(const part of listening.parts)assert.ok(part.left>=0&&part.right<=width+1,'inside the window');
+  await page.screenshot({path:'test-results/fin-peer-listening-'+width+'.png'});
+  await page.locator('[data-fin-listen]').click();await page.waitForFunction(()=>document.querySelector('[data-fin-listen-state]').dataset.state==='CLOSED');
   assert.deepEqual(errors,[]);
  }finally{await context.close();}
 });
