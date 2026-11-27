@@ -1,11 +1,13 @@
 import {FIN_TERMINAL_CHANNEL} from './fin-terminal-switch.mjs';
+import {createFinComposer} from './fin-composer.mjs';
 
 // The FinTerminal window opened by its switch on the Payments page (fin-terminal-switch.mjs). It shares the bank's sign-in
 // and shows itself to a signed-in bank administrator only; its address opened by anyone else stays empty.
-export async function administrator(fetcher=fetch){
- try{const response=await fetcher('/api/session',{credentials:'same-origin',cache:'no-store'});if(!response.ok)return false;return (await response.json())?.admin===true;}
- catch{return false;}
+export async function administratorSession(fetcher=fetch){
+ try{const response=await fetcher('/api/session',{credentials:'same-origin',cache:'no-store'});if(!response.ok)return null;const session=await response.json();return session?.admin===true?session:null;}
+ catch{return null;}
 }
+export const administrator=async(fetcher=fetch)=>(await administratorSession(fetcher))!==null;
 
 export async function startFinTerminal({root=document,fetcher=fetch,windowApi=root.defaultView}={}){
  const terminal=root.querySelector('[data-fin-terminal]'),tabs=[...root.querySelectorAll('[data-fin-screen-tab]')];
@@ -23,17 +25,30 @@ export async function startFinTerminal({root=document,fetcher=fetch,windowApi=ro
  }
  // Its sign-in is checked again whenever the bank signs in, out or changes workspace (fin-terminal-switch.mjs announces it,
  // from any of its pages) and whenever the terminal comes forward; a terminal whose administrator sign-in has ended closes.
- let checks=0,shown=false;
+ let checks=0,shown=false,csrf='',composer=null;
  async function check(){
-  const serial=++checks,admitted=await administrator(fetcher);if(serial!==checks)return;
-  terminal.hidden=!admitted;
-  if(admitted){shown=true;return;}
+  const serial=++checks,session=await administratorSession(fetcher);if(serial!==checks)return;
+  terminal.hidden=!session;csrf=session?.csrf||'';
+  if(session){
+   shown=true;
+   if(!composer){composer=createFinComposer({root,request});composer?.start();}
+   return;
+  }
   if(shown)try{windowApi.close();}catch{}
+ }
+ // The terminal's own requests go with the bank's sign-in and, to change anything, its CSRF token; a sign-in that ended
+ // is found out at once.
+ async function request(method,path,body){
+  const response=await fetcher(path,{method,credentials:'same-origin',cache:'no-store',...(body===undefined?{}:{headers:{'content-type':'application/json','x-csrf-token':csrf},body:JSON.stringify(body)})});
+  const data=await response.json().catch(()=>({}));
+  if(response.ok)return data;
+  if([401,403].includes(response.status))void check();
+  throw Object.assign(new Error(data?.message||'This action could not be completed.'),{code:data?.code,field:data?.field,status:response.status});
  }
  try{const channel=new windowApi.BroadcastChannel(FIN_TERMINAL_CHANNEL);channel.onmessage=({data})=>{if(data?.type==='session-changed')void check();};}catch{}
  windowApi.addEventListener('focus',()=>void check());
  await check();
- return {show,check};
+ return {show,check,request};
 }
 
 if(typeof document!=='undefined'&&document.querySelector('[data-fin-terminal]'))void startFinTerminal();

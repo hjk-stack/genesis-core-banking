@@ -6,6 +6,70 @@
 <button type="button" role="tab" id="fin-tab-fin" aria-controls="fin-screen-fin" aria-selected="true" data-fin-screen-tab="fin">1 · FIN – ISO 20022 Composer</button>
 <button type="button" role="tab" id="fin-tab-ip" aria-controls="fin-screen-ip" aria-selected="false" tabindex="-1" data-fin-screen-tab="ip">2 · Interbank Direct IP-to-IP Composer</button>
 </div></header>
-<section class="fin-terminal-screen" role="tabpanel" id="fin-screen-fin" aria-labelledby="fin-tab-fin" data-fin-screen="fin"></section>
+<section class="fin-terminal-screen fin-composer" role="tabpanel" id="fin-screen-fin" aria-labelledby="fin-tab-fin" data-fin-screen="fin" data-fin-composer>
+<form class="fin-form" data-fin-form autocomplete="off" novalidate>
+<div class="fin-row">
+<fieldset class="fin-panel"><legend>Business Application Header (head.001.001.02)</legend>
+<label><span>Message Type</span><select data-fin-field="messageType"><option value="pacs.008.001.08">pacs.008.001.08 – FI-to-FI Customer Credit Transfer</option></select></label>
+<label><span>Sender BIC</span><input class="fin-code" data-fin-field="senderBic" maxlength="11" spellcheck="false"></label>
+<label><span>Receiver BIC</span><input class="fin-code" data-fin-field="receiverBic" maxlength="11" spellcheck="false"></label>
+<label><span>Auto-generated UETR</span><span class="fin-with-button"><input class="fin-code" data-fin-field="uetr" readonly spellcheck="false"><button type="button" data-fin-new-uetr aria-label="New UETR" title="New UETR">↻</button></span></label>
+<label><span>End-to-End ID</span><input class="fin-code" data-fin-field="endToEndId" maxlength="35" spellcheck="false"></label>
+<label><span>Priority</span><select data-fin-field="priority"><option value="HIGH/URGP">HIGH / URGP</option><option value="NORM/NURG">NORM / NURG</option></select></label>
+<label><span>Business Message ID</span><input class="fin-code" data-fin-field="businessMessageId" maxlength="35" spellcheck="false"></label>
+<label><span>Created (UTC)</span><input class="fin-code" data-fin-field="createdAt" maxlength="35" spellcheck="false"></label>
+</fieldset>
+<fieldset class="fin-panel"><legend>Settlement &amp; Amount Details</legend>
+<label><span>Currency</span><input class="fin-code" data-fin-field="currency" maxlength="3" spellcheck="false"></label>
+<label><span>Interbank Settlement Amount</span><input class="fin-code" data-fin-field="amount" maxlength="25" inputmode="decimal" spellcheck="false"></label>
+<label><span>Value Date</span><input class="fin-code" data-fin-field="valueDate" maxlength="10" placeholder="YYYY-MM-DD" spellcheck="false"></label>
+<label><span>Charge Bearer</span><select data-fin-field="chargeBearer"><option>SHAR</option><option>DEBT</option><option>CRED</option><option>SLEV</option></select></label>
+<label><span>Clearing System</span><select data-fin-field="settlement"><option value="CLRG/TGT">CLRG · TGT2 / T2</option><option value="INDA">INDA · instructed agent</option><option value="INGA">INGA · instructing agent</option></select></label>
+</fieldset>
+</div>
+<div class="fin-row">
+<fieldset class="fin-panel"><legend>Debtor Side</legend>
+<label><span>Debtor Name</span><input data-fin-field="debtorName" maxlength="140"></label>
+<label><span>Debtor IBAN</span><input class="fin-code" data-fin-field="debtorIban" maxlength="42" spellcheck="false"></label>
+<label><span>Debtor Agent BIC</span><input class="fin-code" data-fin-field="debtorAgentBic" maxlength="11" spellcheck="false"></label>
+</fieldset>
+<fieldset class="fin-panel"><legend>Creditor Side</legend>
+<label><span>Creditor Name</span><input data-fin-field="creditorName" maxlength="140"></label>
+<label><span>Creditor IBAN</span><input class="fin-code" data-fin-field="creditorIban" maxlength="42" spellcheck="false"></label>
+<label><span>Creditor Agent BIC</span><input class="fin-code" data-fin-field="creditorAgentBic" maxlength="11" spellcheck="false"></label>
+</fieldset>
+</div>
+<fieldset class="fin-panel fin-panel-wide"><legend>Intermediary Agent &amp; Ultimate Parties</legend>
+<label><span>Intermediary Agent BIC</span><input class="fin-code" data-fin-field="intermediaryBic" maxlength="11" spellcheck="false"></label>
+<label><span>Intermediary Agent LEI</span><input class="fin-code" data-fin-field="intermediaryLei" maxlength="20" spellcheck="false"></label>
+<label><span>Ultimate Debtor Name</span><input data-fin-field="ultimateDebtorName" maxlength="140"></label>
+<label><span>Ultimate Debtor LEI</span><input class="fin-code" data-fin-field="ultimateDebtorLei" maxlength="20" spellcheck="false"></label>
+<label><span>Ultimate Creditor Name</span><input data-fin-field="ultimateCreditorName" maxlength="140"></label>
+<label><span>Ultimate Creditor LEI</span><input class="fin-code" data-fin-field="ultimateCreditorLei" maxlength="20" spellcheck="false"></label>
+</fieldset>
+<div class="fin-row">
+<fieldset class="fin-panel"><legend>Remittance Information</legend>
+<label><span>Structured Reference</span><input class="fin-code" data-fin-field="structuredReference" maxlength="35" spellcheck="false"></label>
+<label><span>Unstructured Remittance</span><input data-fin-field="unstructuredRemittance" maxlength="140"></label>
+</fieldset>
+<fieldset class="fin-panel"><legend>Regulatory Reporting</legend>
+<label><span>Authority Country</span><span class="fin-pair"><input class="fin-code" data-fin-field="regulatoryCountry" maxlength="2" spellcheck="false" aria-label="Authority Country"><input class="fin-code" data-fin-field="regulatoryCode" maxlength="10" spellcheck="false" aria-label="Reporting Code" placeholder="INF"></span></label>
+<label><span>Regulatory Details</span><textarea data-fin-field="regulatoryDetails" maxlength="359" rows="3"></textarea></label>
+</fieldset>
+</div>
+</form>
+<section class="fin-xml" aria-labelledby="fin-xml-title">
+<h2 id="fin-xml-title">Live XML Preview &amp; Writer</h2>
+<textarea class="fin-code" data-fin-xml spellcheck="false" wrap="off" aria-labelledby="fin-xml-title"></textarea>
+<p class="fin-status" role="status"><span data-fin-xsd data-state="unchecked">XSD: not checked</span><span data-fin-draft-state>New message</span></p>
+<ul class="fin-errors" data-fin-errors hidden></ul>
+</section>
+<footer class="fin-actions">
+<label class="fin-drafts"><span>Drafts</span><select data-fin-drafts><option value="">New message</option></select></label>
+<button type="button" data-fin-new>New</button>
+<button type="button" data-fin-save>Save Draft</button>
+<button type="button" class="fin-primary" data-fin-validate>Validate XML</button>
+</footer>
+</section>
 <section class="fin-terminal-screen" role="tabpanel" id="fin-screen-ip" aria-labelledby="fin-tab-ip" data-fin-screen="ip" hidden></section>
 </main></body></html>
