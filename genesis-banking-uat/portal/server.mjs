@@ -35,6 +35,7 @@ import {buildPacs002,readIso20022} from './src/iso20022.mjs';
 import {FinTerminal} from './src/fin-terminal.mjs';
 import {FinPeers} from './src/fin-peer.mjs';
 
+import {isStaffHost, workstationFingerprint, contactIncubator} from './src/staff-workstation.mjs';
 const digest=v=>createHash('sha256').update(v).digest('hex');
 // A session-bound token stays valid across tabs and is renewed at every login.
 // The random HttpOnly session secret cannot be recovered from this digest.
@@ -116,6 +117,7 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  INSUFFICIENT_FUNDS:'The selected account has insufficient available funds.',ACCOUNT_NOT_FOUND:'Select an existing account in this currency.',
  ABIQ_INVALID_IDENTIFIER:'Check the ABIQ account number.',ABIQ_CURRENCY_MISMATCH:'The account currency does not match.',
  BUSINESS_ACCOUNT_REQUIRED:'Select a business account for this shop.',SHOP_NOT_FOUND:'Select an active shop.',
+ BANK_WORKSTATION_REQUIRED:'Use the bank desk on an approved workstation.',
  SIGN_IN_FAILED:'Check your username and password.',OPERATOR_ACCESS_REQUIRED:'Use an administrator account.',
  SIGN_IN_SERVICE:'Sign-in could not be completed. Please try again.',UNAUTHORIZED:'Sign in to continue.',
  IDEMPOTENCY_CONFLICT:'This request reference was already used for different details.',SAME_ACCOUNT:'Select a different receiving account.',
@@ -173,6 +175,13 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
   try {
    const url=new URL(req.url,'http://localhost'),path=url.pathname;
    if(req.method==='GET'&&path==='/healthz')return send(res,200,{status:'ok',release});
+   const privateDesk=isStaffHost(req);
+   const deskPolicy=privateDesk || process.env.BANK_DESK_ENFORCE==='1';
+   const fingerprint=privateDesk ? workstationFingerprint(req) : null;
+   if(privateDesk) {
+    const admission=await contactIncubator('admit',{fp:fingerprint});
+    if(admission.approved!==true)fault('BANK_WORKSTATION_REQUIRED',null,403);
+   }
    if(req.method==='GET'&&path==='/api/crypto/trading/index-receipt')return send(res,200,engineStatus.indexReceipt||{producer:'AVIS_W_EFFECT_ROBOT',source:'AVIS_PRESS_ROBOT',sequence:null,receivedAt:null});
    if(path==='/api/services/press-index/policy'||path==='/api/services/press-index/candidates'){
     if(path.endsWith('/policy')&&req.method==='GET')return send(res,200,await core.indexPolicy(await indexService.authenticate(req)));
@@ -286,6 +295,18 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     try{body=JSON.parse(raw);}catch{fault('INVALID_FIELD',null,400);}
     if(!body||typeof body!=='object'||Array.isArray(body))fault('INVALID_FIELD',null,400);
    }
+   if(path==='/api/login/mobile'&&req.method==='POST'){
+    if(!privateDesk)fault('BANK_WORKSTATION_REQUIRED',null,403);
+    const ticket=/(?:^|;\s*)__Host-avis_staff_scan=([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{43})(?:;|$)/.exec(req.headers.cookie||'');
+    if(!ticket)fault('BANK_WORKSTATION_REQUIRED',null,403);
+    const grant=await contactIncubator('consume',{fp:fingerprint,id:ticket[1],poll:ticket[2]});
+    if(grant.pending===true)return send(res,202,{pending:true});
+    if(!/^fineract:[0-9]+$/.test(grant.actor)||typeof grant.username!=='string'||!grant.generation)fault('BANK_WORKSTATION_REQUIRED',null,403);
+    const token=randomBytes(32).toString('base64url'),csrf=sessionCsrf(token);
+    await pool.query("INSERT INTO avis_core_v2.operator_sessions(token_hash,csrf_hash,actor_id,username,is_admin,expires_at,workstation_sha256,workstation_approval) VALUES($1,$2,$3,$4,true,now()+interval '1 hour',$5,$6)",[digest(token),digest(csrf),grant.actor,grant.username,fingerprint,grant.generation]);
+    res.setHeader('Set-Cookie',[`avis_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=3600`,'__Host-avis_staff_scan=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0']);
+    return send(res,200,{username:grant.username,csrf,admin:true,customerUserId:null,canSwitchWorkspace:true});
+   }
    if(path==='/api/login'&&req.method==='POST'){
     const username=text(body.username,'username',100);text(body.password,'password',256);const password=body.password;
     // Bound the map and throttle by account, independently of spoofable proxy headers.
@@ -295,6 +316,14 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     if(attempts.size>=10000&&!previous)fault('TOO_MANY_ATTEMPTS',null,429);
     attempts.set(bucket,previous&&now-previous.since<60000?{since:previous.since,count:previous.count+1}:{since:now,count:1});
     const actor=await authenticate(username,password);if(!actor?.id)fault('FORBIDDEN',null,403);
+    if(privateDesk&&!actor.admin)fault('FORBIDDEN',null,403);
+    if(actor.admin&&deskPolicy){
+     if(!privateDesk)fault('BANK_WORKSTATION_REQUIRED',null,403);
+     const start=await contactIncubator('start',{fp:fingerprint,actor:actor.id,username:actor.username});
+     if(![start.id,start.poll].every(value=>/^[A-Za-z0-9_-]{43}$/.test(value))||!start.qr?.startsWith('data:image/png;base64,'))fault('BANK_WORKSTATION_REQUIRED',null,403);
+     res.setHeader('Set-Cookie',`__Host-avis_staff_scan=${start.id}.${start.poll}; Secure; HttpOnly; Path=/; SameSite=Strict; Max-Age=300`);
+     return send(res,202,{qr:start.qr,expiresAt:start.expiresAt});
+    }
     const binding=actor.admin?null:(await pool.query('SELECT l.user_id,h.user_id AS identity_user_id FROM avis_core_v2.customer_logins l JOIN avis_core_v2.holder_identities h ON h.record_user_id=l.user_id WHERE l.principal_id=$1',[actor.id])).rows[0];
     if(!actor.admin&&!binding)fault('FORBIDDEN',null,403);
     const token=randomBytes(32).toString('base64url'),csrf=sessionCsrf(token);
@@ -309,6 +338,12 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     LEFT JOIN avis_core_v2.holder_identities h ON h.record_user_id=CASE WHEN s.is_admin THEN s.workspace_user_id ELSE s.customer_user_id END
     WHERE s.token_hash=$1 AND s.expires_at>now()`,[digest(token)])).rows[0];
    if(!session)fault('UNAUTHORIZED',null,401);
+   if(privateDesk&&!session.is_admin)fault('FORBIDDEN',null,403);
+   if(session.is_admin&&(deskPolicy||session.workstation_sha256)){
+    if(!privateDesk||!session.workstation_approval||session.workstation_sha256!==fingerprint)fault('BANK_WORKSTATION_REQUIRED',null,403);
+    const admission=await contactIncubator('admit',{fp:fingerprint,actor:session.actor_id,generation:session.workstation_approval});
+    if(admission.approved!==true)fault('BANK_WORKSTATION_REQUIRED',null,403);
+   }
    const holder=session.is_admin?session.workspace_user_id:session.customer_user_id;
    if(!session.is_admin){const binding=(await pool.query('SELECT user_id FROM avis_core_v2.customer_logins WHERE principal_id=$1',[session.actor_id])).rows[0];if(!binding||String(binding.user_id)!==String(holder))fault('FORBIDDEN',null,403);}
    const actor={id:session.actor_id+(session.is_admin&&holder?':customer:'+holder:''),username:session.username,admin:session.is_admin&&!holder,customerUserId:holder?String(holder):null,identityUserId:holder?String(session.identity_user_id):null};
