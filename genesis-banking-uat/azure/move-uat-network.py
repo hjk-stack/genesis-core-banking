@@ -150,6 +150,13 @@ def own_identity(entry):
     return str((entry or {}).get('identity') or '').lower() == 'system'
 
 
+def apex(hostname):
+    """A domain's own name (example.com), not one of its subdomains: Azure reaches it by an A record to the
+    environment's address and checks it over HTTP; a subdomain by a CNAME to the app (review finding)."""
+    labels = hostname.split('.')
+    return len(labels) == 2 or (len(labels) == 3 and len(labels[-1]) == 2 and labels[-2] in ('ac', 'co', 'com', 'edu', 'gov', 'net', 'org'))
+
+
 def database_servers(text):
     """The Azure PostgreSQL servers a setting names (only their names are ever kept or shown)."""
     return set(re.findall(r'([a-z0-9][a-z0-9-]{1,62})\.postgres\.database\.azure\.com', str(text or '').lower()))
@@ -580,7 +587,8 @@ class Move:
         for name, hostnames in domains.items():
             for hostname in hostnames:
                 app = bank if name == BANK else landed[name]
-                self.say('DNS for ChatGPT: ' + hostname + ' CNAME ' + str(ingress_of(app).get('fqdn')) + '; asuid.' + hostname + ' TXT '
+                record = ' A ' + str(properties.get('staticIp')) if apex(hostname) else ' CNAME ' + str(ingress_of(app).get('fqdn'))
+                self.say('DNS for ChatGPT: ' + hostname + record + '; asuid.' + hostname + ' TXT '
                          + str(properties_of(app).get('customDomainVerificationId')) + '. Then: bind ' + hostname + '.')
         self.say('The old environment ' + OLD_ENV + ' stays, empty, until the owner says to delete it.')
 
@@ -596,7 +604,7 @@ class Move:
         if hostname not in [str(domain.get('name')) for domain in ingress_of(app).get('customDomains') or []]:
             az('containerapp', 'hostname', 'add', '-g', RG, '-n', BANK, '--hostname', hostname)
         az('containerapp', 'hostname', 'bind', '-g', RG, '-n', BANK, '--hostname', hostname, '--environment', NEW_ENV,
-           '--validation-method', 'CNAME')
+           '--validation-method', 'HTTP' if apex(hostname) else 'CNAME')
         self.say('Bound: https://' + hostname + ' on ' + BANK + ', with a certificate Azure manages.')
 
 

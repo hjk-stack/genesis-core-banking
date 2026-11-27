@@ -74,7 +74,9 @@ def bank(**extra):
                identity=own('bank-principal'), registry={'server': ACR, 'identity': 'system'},
                env=[{'name': 'PGHOST', 'value': DATABASE}, {'name': 'PGPASSWORD', 'secretRef': 'avispay-db-password'}],
                properties__configuration__ingress__customDomains=[{'name': 'banking.example.test', 'bindingType': 'SniEnabled',
-                                                                   'certificateId': ENVS + move.OLD_ENV + '/managedCertificates/example'}], **extra)
+                                                                   'certificateId': ENVS + move.OLD_ENV + '/managedCertificates/example'},
+                                                                  {'name': 'example-bank.test', 'bindingType': 'SniEnabled',
+                                                                   'certificateId': ENVS + move.OLD_ENV + '/managedCertificates/apex'}], **extra)
 
 
 def job(name):
@@ -338,6 +340,8 @@ class MoveTests(unittest.TestCase):
         # What ChatGPT sets for the custom domain (the bank owner: "ChatGPT does the DNS"), then bind.
         self.assertIn('DNS for ChatGPT: banking.example.test CNAME genesis-banking-uat.genesis-banking-uat-net-example.italynorth.azurecontainerapps.io;'
                       ' asuid.banking.example.test TXT example-verification. Then: bind banking.example.test.', text)
+        # A domain's own name is reached by an A record to the environment's address (review finding).
+        self.assertIn('DNS for ChatGPT: example-bank.test A 203.0.113.10; asuid.example-bank.test TXT example-verification. Then: bind example-bank.test.', text)
         self.assertIn('The old environment genesis-banking-uat-env stays, empty, until the owner says to delete it.', text)
         # Run again: everything is there, nothing moves twice.
         before = len(azure.writes())
@@ -462,6 +466,13 @@ class MoveTests(unittest.TestCase):
         before = len(azure.calls)
         self.run_move('bind', azure, hostname='banking.example.test')
         self.assertEqual([call[2] for call in azure.calls[before:] if call[0] == 'containerapp'], ['bind'])
+        # A domain's own name is checked over HTTP, a subdomain by its CNAME (review finding).
+        before = len(azure.calls)
+        self.run_move('bind', azure, hostname='example-bank.test')
+        bind = [call for call in azure.calls[before:] if call[:3] == ('containerapp', 'hostname', 'bind')][0]
+        self.assertEqual(bind[bind.index('--validation-method') + 1], 'HTTP')
+        self.assertEqual([move.apex(name) for name in ('avis.exchange', 'example.co.uk', 'banking.avis.exchange', 'bank.example.co.uk', 'bank.avispay.online')],
+                         [True, True, False, False, False])
 
     def test_an_azure_error_shows_its_codes_never_the_command_or_the_answer(self):
         error = move.AzureError(('containerapp', 'secret', 'set', '-g', 'rg', '--secrets', 'name=example-stripe-key-value'),
