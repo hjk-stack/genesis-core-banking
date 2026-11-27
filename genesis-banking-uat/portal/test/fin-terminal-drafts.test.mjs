@@ -4,16 +4,17 @@ import {randomUUID} from 'node:crypto';
 import {PGlite} from '@electric-sql/pglite';
 import pg from 'pg';
 import {migrate} from '../src/migrate.mjs';
-import {PaymentRegister} from '../src/payment-register.mjs';
+import {AccountManagement} from '../src/account-management.mjs';
+import {cryptoLedgerAccount} from '../src/crypto/rolling-ledger.mjs';
 import {FinTerminal} from '../src/fin-terminal.mjs';
-import {buildFinMessage,normalizeForm,newUetr} from '../public/fin-message.mjs';
+import {buildFinMessage,normalizeForm,newUetr,ibanValid} from '../public/fin-message.mjs';
 import {createBankServer} from '../server.mjs';
 import {exampleForm,exampleIban} from './helpers/fin-example.mjs';
 
 // Requested by the bank owner with the FinTerminal ISO 20022 specification: screen 1 keeps drafts, checks a message against
 // the official schemas, and makes the UETR - "a UETR names one payment only".
 const admin={id:'fin-terminal-admin',username:'fin-admin',admin:true},guest={id:'guest',admin:false};
-let pool,db,fin,register,sender,nostro;
+let pool,db,fin,register,sender,nostro,holder,commonEur,commonUsd,suspense,nostroUsd,closed,longNumber,wallets;
 const form=(overrides={})=>({...exampleForm(),uetr:newUetr(),...overrides});
 const refused=code=>error=>error.code===code;
 before(async()=>{
@@ -24,9 +25,20 @@ before(async()=>{
   return {query:(...args)=>db.query(...args),exec:(...args)=>db.exec(...args),release};
  }};}
  const connection=await pool.connect();try{await migrate(connection)}finally{connection.release()}
- fin=new FinTerminal(pool);register=new PaymentRegister(pool,{directory:{env:{}}});
+ fin=new FinTerminal(pool);register=new AccountManagement(pool,{directory:{env:{}}});
  sender=(await register.openCustomer(admin,{fullName:'Example Sender',accountType:'PERSONAL',currencies:['EUR']},randomUUID())).accounts[0];
  nostro=await register.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example NOSTRO',bic:'EXMPDEFFXXX',accountNumber:'NOSTRO-EXAMPLE-1',currency:'EUR'},randomUUID());
+ // Step 3's lists: Common and Suspense accounts, NOSTRO accounts (one in dollars, one closed), and wallets of the wallet scroller.
+ [commonEur,commonUsd]=(await register.openAccount(admin,{accountType:'COMMON',fullName:'Example Common',currencies:['EUR','USD']},randomUUID())).managedAccounts;
+ suspense=(await register.openAccount(admin,{accountType:'SUSPENSE',fullName:'Example Suspense',currencies:['EUR']},randomUUID())).managedAccounts[0];
+ nostroUsd=await register.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example Dollar NOSTRO',bic:'EXMPUS33XXX',accountNumber:'NOSTRO-EXAMPLE-2',currency:'USD'},randomUUID());
+ closed=await register.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example Closed NOSTRO',bic:'EXMPGB2LXXX',accountNumber:'NOSTRO-EXAMPLE-3',currency:'EUR'},randomUUID());
+ await pool.query('UPDATE avis_core_v2.external_cash_accounts SET is_active=false WHERE cash_account_id=$1',[closed.id]);
+ // The register keeps account numbers of up to 128 characters; the message's settlement account holds 34.
+ longNumber=await register.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example Long NOSTRO',bic:'EXMPNL2AXXX',accountNumber:'NOSTRO-'+'0'.repeat(40),currency:'EUR'},randomUUID());
+ holder=(await pool.query('SELECT user_id FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[sender.accountId])).rows[0].user_id;
+ wallets={usdc:await cryptoLedgerAccount(pool,{userId:holder,currency:'USDC',network:'ETHEREUM'}),ag:await cryptoLedgerAccount(pool,{userId:holder,currency:'AG',network:'ETHEREUM'}),
+  agi:await cryptoLedgerAccount(pool,{userId:holder,currency:'AGi',network:'ETHEREUM'}),custody:await cryptoLedgerAccount(pool,{userId:holder,currency:'USDC',network:'SOLANA',scope:'CUSTODY'})};
 });
 after(async()=>{if(db)await db.close();else await pool.end()});
 
@@ -120,6 +132,61 @@ test('only a bank administrator: a customer, or an administrator in a customer\'
  }
 });
 
+test('the accounts to choose: the Common and Suspense accounts, the NOSTRO register and the "+" wallets - never AG or AGi',async()=>{
+ const listed=await fin.accounts(admin),booking=Object.fromEntries(listed.bookingAccounts.map(account=>[account.accountId,account]));
+ assert.deepEqual([commonEur.id,commonUsd.id,suspense.id].map(id=>[booking[id].type,booking[id].label,booking[id].currency]),
+  [['COMMON','Example Common','EUR'],['COMMON','Example Common','USD'],['SUSPENSE','Example Suspense','EUR']]);
+ // The bank's own account: its IBAN, the bank's BIC and name - the debtor's account when the message is booked against it.
+ assert.equal(booking[commonEur.id].iban,commonEur.abiqIban);assert.ok(ibanValid(commonEur.abiqIban));
+ assert.match(booking[commonEur.id].bic,/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/);assert.ok(booking[commonEur.id].institution);
+ assert.equal(booking[sender.accountId],undefined,'a customer account is not booked against here');
+ const nostros=Object.fromEntries(listed.nostroAccounts.map(account=>[account.accountId,account]));
+ assert.deepEqual(nostros[nostro.id],{accountId:nostro.id,institution:'Example NOSTRO',bic:'EXMPDEFFXXX',account:'NOSTRO-EXAMPLE-1',accountName:'',currency:'EUR',active:true});
+ assert.equal(nostros[nostroUsd.id].currency,'USD');assert.equal(nostros[closed.id].active,false);
+ assert.equal(nostros[longNumber.id],undefined,'a number longer than the settlement account holds is not offered');
+ const offered=listed.tokenWallets.map(wallet=>wallet.accountId);
+ assert.deepEqual(listed.tokenWallets.find(wallet=>wallet.accountId===wallets.usdc),{accountId:wallets.usdc,holder:'Example Sender',currency:'USDC',network:'ETHEREUM',name:'USDC'});
+ for(const excluded of [wallets.ag,wallets.agi,wallets.custody,commonEur.id])assert.ok(!offered.includes(excluded),excluded);
+ assert.ok(listed.tokenWallets.every(wallet=>!['AG','AGi'].includes(wallet.currency)));
+ for(const actor of [guest,{id:admin.id+':customer:'+holder,admin:false,customerUserId:String(holder)}])await assert.rejects(fin.accounts(actor),refused('FORBIDDEN'));
+});
+
+// A message as the terminal writes it for chosen accounts: the debtor's account, the receiver, INDA and the settlement account.
+async function written(selection,overrides={}){
+ const listed=await fin.accounts(admin),booking=listed.bookingAccounts.find(account=>account.accountId===selection.bookingAccountId),
+  nostroAccount=listed.nostroAccounts.find(account=>account.accountId===selection.nostroAccountId);
+ return form({...(booking?{debtorName:booking.institution,debtorIban:booking.iban,debtorAgentBic:booking.bic}:{}),
+  ...(nostroAccount?{receiverBic:nostroAccount.bic,settlement:'INDA',settlementAccount:nostroAccount.account}:{}),...overrides});
+}
+
+test('a draft keeps its chosen accounts; each must be one the terminal offers, in the message\'s currency',async()=>{
+ const selection={bookingAccountId:commonEur.id,nostroAccountId:nostro.id,tokenWalletId:wallets.usdc};
+ const saved=await fin.save(admin,{form:await written(selection),selection});
+ assert.deepEqual(saved.selection,selection);assert.deepEqual((await fin.draft(admin,saved.draftId)).selection,selection);
+ assert.equal((await fin.drafts(admin)).find(row=>row.draftId===saved.draftId).selection,undefined);
+ // Saved again without them, the draft keeps none.
+ assert.deepEqual((await fin.save(admin,{draftId:saved.draftId,revision:1,form:saved.form})).selection,{bookingAccountId:null,nostroAccountId:null,tokenWalletId:null});
+ const count=async()=>(await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.fin_terminal_drafts')).rows[0].n,before=await count();
+ for(const [choice,code] of [
+  [{bookingAccountId:commonUsd.id},'FIN_BOOKING_ACCOUNT'],[{bookingAccountId:sender.accountId},'FIN_BOOKING_ACCOUNT'],[{bookingAccountId:randomUUID()},'FIN_BOOKING_ACCOUNT'],
+  [{nostroAccountId:closed.id},'FIN_NOSTRO_ACCOUNT'],[{nostroAccountId:nostroUsd.id},'FIN_NOSTRO_ACCOUNT'],[{nostroAccountId:longNumber.id},'FIN_NOSTRO_ACCOUNT'],
+  [{tokenWalletId:wallets.ag},'FIN_TOKEN_WALLET'],[{tokenWalletId:wallets.agi},'FIN_TOKEN_WALLET'],[{tokenWalletId:wallets.custody},'FIN_TOKEN_WALLET'],[{tokenWalletId:commonEur.id},'FIN_TOKEN_WALLET']])
+  await assert.rejects(fin.save(admin,{form:form(),selection:choice}),e=>e.code===code&&e.status===409&&e.field===Object.keys(choice)[0],JSON.stringify(choice));
+ for(const [choice,field] of [[{bookingAccountId:'not-an-account'},'bookingAccountId'],[[],'selection'],['selection','selection']])
+  await assert.rejects(fin.save(admin,{form:form(),selection:choice}),e=>e.code==='INVALID_FIELD'&&e.field===field,field);
+ // A message that names other accounts than the ones chosen is refused (review finding).
+ for(const [choice,overrides,code] of [
+  [{bookingAccountId:commonEur.id},{debtorIban:exampleForm().debtorIban},'FIN_BOOKING_MISMATCH'],[{bookingAccountId:commonEur.id},{debtorAgentBic:'EXMPDEFFXXX'},'FIN_BOOKING_MISMATCH'],
+  [{nostroAccountId:nostro.id},{settlement:'CLRG/TGT'},'FIN_NOSTRO_MISMATCH'],[{nostroAccountId:nostro.id},{settlementAccount:'NOSTRO-OTHER-9'},'FIN_NOSTRO_MISMATCH'],
+  [{nostroAccountId:nostro.id},{receiverBic:'SMPLFRPPXXX'},'FIN_NOSTRO_MISMATCH']])
+  await assert.rejects(fin.save(admin,{form:await written(choice,overrides),selection:choice}),e=>e.code===code&&e.status===409&&e.field===Object.keys(choice)[0],code+' '+JSON.stringify(overrides));
+ assert.equal(await count(),before);
+ // In dollars, the dollar accounts are the ones to choose.
+ const dollars={bookingAccountId:commonUsd.id,nostroAccountId:nostroUsd.id};
+ assert.deepEqual((await fin.save(admin,{form:await written(dollars,{currency:'USD'}),selection:{...dollars,bookingAccountId:commonUsd.id.toUpperCase()}})).selection,
+  {...dollars,tokenWalletId:null});
+});
+
 test('fields are checked before anything is kept: length, kind, control characters, the message type and the UETR',async()=>{
  const before=(await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.fin_terminal_drafts')).rows[0].n;
  for(const [field,value] of [['creditorName','X'.repeat(141)],['debtorIban','DE'.repeat(18)],['amount',1250],['debtorName','Example\u0000Debtor'],
@@ -153,10 +220,15 @@ test('over HTTP: a signed-in bank administrator with the session\'s CSRF token s
    {code:'FIN_UETR_DUPLICATE',field:'uetr',message:'This UETR is already used by another payment or draft. Make a new UETR.'});
   const other=form(),checked=await post('/api/fin-terminal/validate',{form:other,xml:buildFinMessage(other)});
   assert.equal(checked.status,200);assert.deepEqual(await checked.json(),{valid:true,errors:[]});
+  const accounts=await fetch(base+'/api/fin-terminal/accounts',{headers:{cookie}});assert.equal(accounts.status,200);
+  assert.ok((await accounts.json()).accounts.bookingAccounts.some(account=>account.accountId===commonEur.id));
+  const chosen=await post('/api/fin-terminal/drafts',{form:form(),selection:{nostroAccountId:nostroUsd.id}});
+  assert.equal(chosen.status,409);assert.deepEqual((({code,field,message})=>({code,field,message}))(await chosen.json()),
+   {code:'FIN_NOSTRO_ACCOUNT',field:'nostroAccountId',message:'Select an active NOSTRO account in the message\'s currency.'});
   // Changed to a customer's workspace, the same sign-in no longer reaches the terminal.
-  const holder=(await pool.query('SELECT user_id FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[sender.accountId])).rows[0].user_id;
   await pool.query('UPDATE avis_core_v2.operator_sessions SET workspace_user_id=$2 WHERE actor_id=$1',[admin.id,holder]);
   assert.equal((await fetch(base+'/api/fin-terminal/drafts',{headers:{cookie}})).status,403);
+  assert.equal((await fetch(base+'/api/fin-terminal/accounts',{headers:{cookie}})).status,403);
   assert.equal((await post('/api/fin-terminal/drafts',{form:form()})).status,403);
  }finally{await new Promise(resolve=>server.close(resolve))}
 });

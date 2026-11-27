@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
 import {FIELDS,PACS008,blankForm,buildFinMessage,readFinMessage,normalizeForm,detailPieces,fieldProblems,ibanValid,leiValid,newMessageId} from '../public/fin-message.mjs';
 import {validateFinMessage} from '../src/fin-terminal.mjs';
-import {exampleForm} from './helpers/fin-example.mjs';
+import {exampleForm,exampleIban} from './helpers/fin-example.mjs';
 
 // Requested by the bank owner with the FinTerminal ISO 20022 specification: screen 1, "FIN - ISO 20022 Composer" - head.001 and
 // pacs.008 with live two-way XML, checked against the official schemas. Example parties only (test/helpers/fin-example.mjs).
@@ -58,6 +58,19 @@ test('regulatory details longer than 35 characters go in several Inf elements, a
  const xml=buildFinMessage({...exampleForm(),regulatoryDetails:details});
  assert.equal((xml.match(/<Inf>/g)||[]).length,pieces.length);
  assert.equal(readFinMessage(xml,DOMParser).form.regulatoryDetails,details);
+});
+
+test('a NOSTRO account settles the transfer: its account right after the settlement method, an IBAN as IBAN, any other number as written',async()=>{
+ const iban=exampleIban('GB','EXMP00000012345678');
+ for(const [written,kept,element] of [[iban.replace(/(.{4})/g,'$1 ').toLowerCase(),iban,'<IBAN>'+iban+'</IBAN>'],[' NOSTRO-example-1 ','NOSTRO-example-1','<Othr><Id>NOSTRO-example-1</Id></Othr>']]){
+  const form={...exampleForm(),settlement:'INDA',settlementAccount:written},xml=buildFinMessage(form);
+  assert.equal(normalizeForm(form).settlementAccount,kept);
+  assert.ok(xml.replace(/\n\s*/g,'').includes('<SttlmInf><SttlmMtd>INDA</SttlmMtd><SttlmAcct><Id>'+element+'</Id></SttlmAcct></SttlmInf>'),xml);
+  assert.deepEqual(await validateFinMessage(xml),{valid:true,errors:[]});
+  assert.equal(readFinMessage(xml,DOMParser).form.settlementAccount,kept);
+ }
+ // Cleared through TARGET2 without an account, the settlement part is as before.
+ assert.ok(buildFinMessage(exampleForm()).replace(/\n\s*/g,'').includes('<SttlmInf><SttlmMtd>CLRG</SttlmMtd><ClrSys><Cd>TGT</Cd></ClrSys></SttlmInf>'));
 });
 
 test('a message the schemas refuse is answered with their own words, element by element',async()=>{

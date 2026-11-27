@@ -33,6 +33,7 @@ import {StripeWebPos} from './src/stripe-pos.mjs';
 import {authenticateMessage,connectorCredentials,dispatchPayment,recoverPaymentDeliveries} from './src/payment-transport.mjs';
 import {buildPacs002,readIso20022} from './src/iso20022.mjs';
 import {FinTerminal} from './src/fin-terminal.mjs';
+import {FinPeers} from './src/fin-peer.mjs';
 
 const digest=v=>createHash('sha256').update(v).digest('hex');
 // A session-bound token stays valid across tabs and is renewed at every login.
@@ -150,7 +151,11 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  CSRF:'Refresh the page and submit again.',TOO_MANY_ATTEMPTS:'Please wait before trying to sign in again.',
  FIN_UETR_DUPLICATE:'This UETR is already used by another payment or draft. Make a new UETR.',
  FIN_DRAFT_CHANGED:'This draft was saved meanwhile. Open it again before saving.',FIN_DRAFT_NOT_FOUND:'Select an existing FinTerminal draft.',
- FIN_MESSAGE_INVALID:'Write the ISO 20022 message as XML, without a document type.'
+ FIN_MESSAGE_INVALID:'Write the ISO 20022 message as XML, without a document type.',
+ FIN_BOOKING_ACCOUNT:'Select a Common or Suspense account in the message\'s currency.',FIN_NOSTRO_ACCOUNT:'Select an active NOSTRO account in the message\'s currency.',
+ FIN_TOKEN_WALLET:'Select a "+" wallet; AG and AGi are not booked here.',
+ FIN_BOOKING_MISMATCH:'The debtor\'s IBAN and BIC are not those of the chosen Common or Suspense account.',
+ FIN_NOSTRO_MISMATCH:'The receiver, INDA and the settlement account are not those of the chosen NOSTRO account.'
 };
 export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={}}) {
  const core=new TradingRobotCore(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map(),indexService=new IndexServiceAuthenticator(pool,{env:core.secretEnv,fetcher:transferOptions.indexServiceFetcher||core.cryptoFetch});
@@ -158,7 +163,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
  const basket=new CryptoBasket(core,stripePos),storeWallet=new StoreWallet(basket);
  const posControl=new CheckoutPosControl(pool),ipControl=new CheckoutIpControl(pool),posAuth=new CheckoutPosAuthenticator(pool,{fetcher:transferOptions.posServiceFetcher||fetch});
  const ipHandlerAuth=new CheckoutIpHandlerAuthenticator(pool,{fetcher:transferOptions.ipHandlerServiceFetcher||transferOptions.posServiceFetcher||fetch});
- const nostroStatements=new NostroStatements(pool),finTerminal=new FinTerminal(pool);
+ const nostroStatements=new NostroStatements(pool),finTerminal=new FinTerminal(pool),finPeers=new FinPeers(pool,transferOptions.transport);
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  const server=http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
@@ -258,7 +263,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const script=await readFile(new URL('./node_modules/pdfjs-dist/build'+path,import.meta.url));
     res.writeHead(200,{'content-type':'text/javascript; charset=utf-8','cache-control':'private, max-age=3600'});return res.end(script);
    }
-   if(req.method==='GET'&&['/','/card-message','/fin-terminal','/fin-terminal.mjs','/fin-terminal.css','/fin-terminal-switch.mjs','/fin-message.mjs','/fin-composer.mjs','/app.mjs','/open-account-register.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/nostro-clearing.mjs','/checkout-ip.mjs','/nostro-clearing.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
+   if(req.method==='GET'&&['/','/card-message','/fin-terminal','/fin-terminal.mjs','/fin-terminal.css','/fin-terminal-switch.mjs','/fin-message.mjs','/fin-composer.mjs','/fin-peer.mjs','/app.mjs','/open-account-register.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/nostro-clearing.mjs','/checkout-ip.mjs','/nostro-clearing.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
     const page=['/','/card-message','/fin-terminal'].includes(path),file=path==='/'?'index.html':page?'public'+path+'.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     // Always present the deployed UAT revision's current application source after an update.
@@ -381,10 +386,15 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    // The FinTerminal composer's drafts and its schema check (src/fin-terminal.mjs), for bank administrators.
    const finDraft=/^\/api\/fin-terminal\/drafts(?:\/([0-9a-f-]{36}))?$/.exec(path);
    if(req.method==='GET'&&finDraft)return send(res,200,finDraft[1]?{draft:await finTerminal.draft(actor,finDraft[1])}:{rows:await finTerminal.drafts(actor)});
+   if(req.method==='GET'&&path==='/api/fin-terminal/accounts')return send(res,200,{accounts:await finTerminal.accounts(actor)});
+   // Screen A's peer banks (src/fin-peer.mjs): the IP-to-IP connectors, and the session messages sent to each with its answers.
+   const finPeer=/^\/api\/fin-terminal\/peers(?:\/([A-Z0-9_]{1,35})\/messages)?$/.exec(path);
+   if(req.method==='GET'&&finPeer)return send(res,200,finPeer[1]?await finPeers.messages(actor,finPeer[1]):{peers:await finPeers.list(actor)});
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
    if(path==='/api/fin-terminal/drafts')return send(res,200,{draft:await finTerminal.save(actor,body)});
    if(path==='/api/fin-terminal/validate')return send(res,200,await finTerminal.validate(actor,body));
+   if(finPeer?.[1])return send(res,200,await finPeers.send(actor,finPeer[1],body));
    if(path==='/api/abiq/cleanup'){
     if(!Array.isArray(body.rows)||!body.rows.length||body.rows.length>500)fault('INVALID_FIELD','rows');
     const result=await core.operation(actor,'REPAIR_LEGACY_ACCOUNTS',body,req.headers['idempotency-key'],async db=>{

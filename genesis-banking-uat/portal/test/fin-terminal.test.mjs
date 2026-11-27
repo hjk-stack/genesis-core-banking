@@ -137,8 +137,14 @@ test('the terminal has its two screens, the FIN composer first, chosen by a clic
   tabs[1].click();assert.deepEqual(screens.map(screen=>screen.hidden),[true,false]);assert.deepEqual(tabs.map(tab=>tab.tabIndex),[-1,0]);
   tabs[1].dispatchEvent(new t.dom.window.KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));assert.deepEqual(screens.map(screen=>screen.hidden),[false,true]);
   tabs[0].dispatchEvent(new t.dom.window.KeyboardEvent('keydown',{key:'End',bubbles:true}));assert.deepEqual(screens.map(screen=>screen.hidden),[true,false]);
-  // Only what is real: no connection or peer is shown before the connector exists.
-  assert.doesNotMatch(t.doc.body.textContent,/CONNECTED|mTLS|Peer IP|ACK/i);
+  // Only what is real (step 4, screen A): with no peer bank registered none is offered, nothing can be sent, the link is not
+  // connected and the stream is empty - no connection, session or answer is made up.
+  await settle();
+  assert.deepEqual([...t.doc.querySelectorAll('[data-fin-peer-server] option')].map(option=>option.textContent),['No peer server registered']);
+  assert.deepEqual([t.doc.querySelector('[data-fin-peer-server]').disabled,t.doc.querySelector('[data-fin-peer-send]').disabled],[true,true]);
+  assert.equal(t.doc.querySelector('[data-fin-peer-link]').textContent,'Peer link: NOT CONNECTED');
+  assert.equal(t.doc.querySelector('[data-fin-peer-stream]').children.length,0);assert.equal(t.doc.querySelector('[data-fin-peer-node]').textContent,'—');
+  assert.doesNotMatch(t.doc.body.textContent,/(?<!NOT )CONNECTED|mTLS|Peer IP|PEER_ACK|UNLOCKED|SENT|READY ·/);
  }finally{t.close();}
 });
 
