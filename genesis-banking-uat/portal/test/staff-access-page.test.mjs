@@ -78,7 +78,8 @@ test('FinTerminal navigation without an admitted workstation initiates the exist
  assert.equal(response.status,303);
  assert.equal(response.headers.location,'/access/start');
  assert.equal(response.headers['cache-control'],'private, no-store');
- jsonDenied(await fixture.request('/fin-terminal.mjs',{headers:navigation}));
+ // The terminal's module is loaded as a module script, never navigated to; a navigation gets the 403 page as above.
+ jsonDenied(await fixture.request('/fin-terminal.mjs',{headers:{accept:'*/*','sec-fetch-dest':'script','sec-fetch-mode':'cors'}}));
  jsonDenied(await fixture.request('/api/fin-terminal/accounts',{headers:navigation}));
 });
 
