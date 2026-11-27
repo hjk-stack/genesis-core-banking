@@ -1,0 +1,15 @@
+/* FinTerminal ISO 20022: the specification's dark blue with orange, as the bank owner approved ("Dark blue and orange is OK"). */
+:root{color-scheme:dark;--fin-ground:#0a1220;--fin-panel:#101b2e;--fin-line:#1f2d45;--fin-text:#e6edf7;--fin-muted:#8fa0b8;--fin-orange:#f59f0b}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-text);font:14px/1.45 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+[hidden]{display:none!important}
+.fin-terminal{display:flex;flex-direction:column;min-height:100vh}
+.fin-terminal-bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px 24px;padding:12px 18px;background:var(--fin-panel);border-bottom:1px solid var(--fin-line)}
+.fin-terminal-bar h1{margin:0;font-size:16px;font-weight:650;letter-spacing:.01em;white-space:nowrap}
+.fin-terminal-screens{display:flex;gap:6px;min-width:0;overflow-x:auto;scrollbar-width:none}
+.fin-terminal-screens button{flex:0 0 auto;padding:7px 12px;border:1px solid var(--fin-line);border-radius:7px;background:transparent;color:var(--fin-muted);font:inherit;font-size:13px;cursor:pointer;white-space:nowrap}
+.fin-terminal-screens button:hover{color:var(--fin-text)}
+.fin-terminal-screens button[aria-selected=true]{border-color:var(--fin-orange);color:var(--fin-orange);background:rgba(245,159,11,.08)}
+.fin-terminal-screens button:focus-visible{outline:2px solid var(--fin-orange);outline-offset:2px}
+.fin-terminal-screen{flex:1;margin:16px;border:1px solid var(--fin-line);border-radius:10px;background:var(--fin-panel)}
+@media(max-width:640px){.fin-terminal-bar{padding:10px 12px}.fin-terminal-screen{margin:10px}}
