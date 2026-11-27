@@ -308,7 +308,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const script=await readFile(new URL('./node_modules/pdfjs-dist/build'+path,import.meta.url));
     res.writeHead(200,{'content-type':'text/javascript; charset=utf-8','cache-control':'private, max-age=3600'});return res.end(script);
    }
-   if(req.method==='GET'&&['/','/card-message','/fin-terminal','/fin-terminal.mjs','/fin-terminal.css','/fin-terminal-switch.mjs','/fin-message.mjs','/fin-composer.mjs','/fin-peer.mjs','/app.mjs','/open-account-register.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/nostro-clearing.mjs','/checkout-ip.mjs','/nostro-clearing.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
+   if(req.method==='GET'&&['/','/card-message','/fin-terminal','/fin-terminal.mjs','/fin-terminal.css','/fin-terminal-switch.mjs','/fin-message.mjs','/fin-composer.mjs','/fin-peer.mjs','/fin-settlement.mjs','/app.mjs','/open-account-register.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/nostro-clearing.mjs','/checkout-ip.mjs','/nostro-clearing.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
     const page=['/','/card-message','/fin-terminal'].includes(path),file=path==='/'?'index.html':page?'public'+path+'.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     // Always present the deployed UAT revision's current application source after an update.
@@ -474,11 +474,14 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(req.method==='GET'&&finPeer)return send(res,200,finPeer[1]?await finPeers.messages(actor,finPeer[1]):{peers:await finPeers.list(actor)});
    // Step 5's listening port (src/fin-listener.mjs) and the peers' whitelisted IP addresses.
    if(req.method==='GET'&&path==='/api/fin-terminal/listener')return send(res,200,await finListener.status(actor));
+   // The specification v3's top bar and Screen B's "Final Settlement Ledgers" (src/fin-terminal.mjs), with the listening port's state.
+   if(req.method==='GET'&&path==='/api/fin-terminal/telemetry')return send(res,200,{...await finTerminal.telemetry(actor),listener:await finListener.status(actor)});
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
    if(path==='/api/fin-terminal/drafts')return send(res,200,{draft:await finTerminal.save(actor,body)});
    if(path==='/api/fin-terminal/validate')return send(res,200,await finTerminal.validate(actor,body));
    if(path==='/api/fin-terminal/incoming')return send(res,200,{draft:await finTerminal.register(actor,body)});
+   if(path==='/api/fin-terminal/mode')return send(res,200,await finTerminal.mode(actor,body));
    if(finPeer?.[1])return send(res,200,await finPeers.send(actor,finPeer[1],body));
    if(path==='/api/fin-terminal/listener'){
     if(typeof body?.open!=='boolean')fault('INVALID_FIELD','open');

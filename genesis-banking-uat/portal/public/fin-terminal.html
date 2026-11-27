@@ -2,10 +2,12 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FinTerminal ISO 20022</title><link rel="stylesheet" href="/fin-terminal.css"><script type="module" src="/fin-terminal.mjs"></script></head>
 <body><main class="fin-terminal" data-fin-terminal hidden>
 <header class="fin-terminal-bar"><h1>FinTerminal ISO 20022</h1>
+<button type="button" class="fin-stp" data-fin-stp data-state="LOCKED" aria-pressed="false">MANUAL INTERVENTION: LOCKED</button>
 <div class="fin-terminal-screens" role="tablist" aria-label="FinTerminal screens">
 <button type="button" role="tab" id="fin-tab-fin" aria-controls="fin-screen-fin" aria-selected="true" data-fin-screen-tab="fin">1 · FIN – ISO 20022 Composer</button>
 <button type="button" role="tab" id="fin-tab-ip" aria-controls="fin-screen-ip" aria-selected="false" tabindex="-1" data-fin-screen-tab="ip">2 · Interbank Direct IP-to-IP Composer</button>
-</div></header>
+</div>
+<p class="fin-uptime" role="status" data-fin-uptime data-state="CLOSED"></p></header>
 <section class="fin-terminal-screen fin-composer" role="tabpanel" id="fin-screen-fin" aria-labelledby="fin-tab-fin" data-fin-screen="fin" data-fin-composer>
 <section class="fin-peer" aria-labelledby="fin-peer-title" data-fin-peer>
 <h2 id="fin-peer-title">Peer Server Handshake &amp; Direct IP Interaction — NODE: <span data-fin-peer-node>—</span></h2>
@@ -92,5 +94,12 @@
 <button type="button" class="fin-primary" data-fin-register hidden>Register incoming</button>
 </footer>
 </section>
-<section class="fin-terminal-screen" role="tabpanel" id="fin-screen-ip" aria-labelledby="fin-tab-ip" data-fin-screen="ip" hidden></section>
+<section class="fin-terminal-screen fin-settle" role="tabpanel" id="fin-screen-ip" aria-labelledby="fin-tab-ip" data-fin-screen="ip" hidden>
+<section class="fin-ledgers" aria-labelledby="fin-ledgers-title" data-fin-ledgers>
+<h2 id="fin-ledgers-title">Final Settlement Ledgers</h2>
+<div class="fin-ledger"><h3 id="fin-ledger-core">Core Banking Cash Ledger</h3><ul aria-labelledby="fin-ledger-core" data-fin-ledger="coreBanking"></ul></div>
+<div class="fin-ledger"><h3 id="fin-ledger-nostro">NOSTRO Correspondent</h3><ul aria-labelledby="fin-ledger-nostro" data-fin-ledger="nostro"></ul></div>
+<div class="fin-ledger"><h3 id="fin-ledger-wallets">Direct Institutional MPC Wallet</h3><ul aria-labelledby="fin-ledger-wallets" data-fin-ledger="wallets"></ul></div>
+</section>
+</section>
 </main></body></html>
