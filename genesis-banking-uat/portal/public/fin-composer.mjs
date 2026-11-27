@@ -5,14 +5,19 @@ import {FIELDS,PACS008,blankForm,buildFinMessage,readFinMessage,normalizeForm,ne
 // (src/fin-terminal.mjs), the UETR made here and refused there when another payment or draft has it, and drafts.
 const PAUSE=300;
 const whole=form=>Object.fromEntries(FIELDS.map(field=>[field,typeof form?.[field]==='string'?form[field]:'']));
+// The accounts a message is booked against (step 3 of the specification's job): the Common or Suspense account, the NOSTRO
+// account and the "+" wallet for the converted tokens. Chosen, an account writes what the message says of it; nothing is booked.
+const CHOICES=['bookingAccountId','nostroAccountId','tokenWalletId'];
+const noChoice=()=>Object.fromEntries(CHOICES.map(name=>[name,'']));
 const same=(one,two)=>{const a=normalizeForm(one),b=normalizeForm(two);return FIELDS.every(field=>a[field]===b[field]);};
 
 export function createFinComposer({root=document,request,view=root.defaultView||globalThis}){
  const screen=root.querySelector('[data-fin-composer]');if(!screen)return null;
  const $=selector=>screen.querySelector(selector),inputs=[...screen.querySelectorAll('[data-fin-field]')];
  const xml=$('[data-fin-xml]'),verdict=$('[data-fin-xsd]'),problems=$('[data-fin-errors]'),state=$('[data-fin-draft-state]'),list=$('[data-fin-drafts]');
- const controls=[...screen.querySelectorAll('.fin-actions button,.fin-actions select,[data-fin-new-uetr]')];
- let form=blankForm(),draft=null,dirty=false,edits=0,broken=null,pause=null,busy=false,refused=null;
+ const controls=[...screen.querySelectorAll('.fin-actions button,.fin-actions select,[data-fin-new-uetr]')],choices=[...screen.querySelectorAll('[data-fin-choice]')];
+ let form=blankForm(),draft=null,dirty=false,edits=0,broken=null,pause=null,busy=false,refused=null,selection=noChoice();
+ let accounts={bookingAccounts:[],nostroAccounts:[],tokenWallets:[]};
 
  // A choice the XML holds that the list does not offer is shown as a choice of its own: the form shows what the XML says.
  function choose(select,value){
@@ -40,11 +45,44 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  }
  function changed(){edits++;dirty=true;refused=null;show('unchecked','XSD: not checked');paintState();}
 
+ // The Common and Suspense accounts and the NOSTRO accounts in the message's currency; the "+" wallets, never AG or AGi
+ // (the server lists them so). A choice a draft keeps that the lists no longer hold is shown as not available.
+ const option=(value,text,enabled=true)=>{const item=root.createElement('option');item.value=value;item.textContent=text;item.disabled=!enabled;return item;};
+ function paintChoices(){
+  const currency=normalizeForm(form).currency,lists={
+   bookingAccountId:accounts.bookingAccounts.filter(account=>account.currency===currency).map(account=>[account.accountId,[account.label,account.iban,account.currency].join(' · ')]),
+   nostroAccountId:accounts.nostroAccounts.filter(account=>account.currency===currency).map(account=>[account.accountId,[account.institution,account.account,account.currency].join(' · ')+(account.active?'':' · inactive'),account.active]),
+   tokenWalletId:accounts.tokenWallets.map(wallet=>[wallet.accountId,[wallet.holder,wallet.currency,wallet.network].join(' · ')])};
+  for(const select of choices){
+   const name=select.dataset.finChoice,items=lists[name];
+   select.replaceChildren(option('','—'),...items.map(([value,text,enabled])=>option(value,text,enabled!==false)));
+   if(selection[name]&&!items.some(([value])=>value===selection[name]))select.append(option(selection[name],'Not available'));
+   select.value=selection[name];
+  }
+ }
+ // A chosen account writes the message's fields it stands for: the Common or Suspense account is the debtor's account at the
+ // bank; the NOSTRO account is the receiver's bank and the account the transfer settles through there (INDA, SttlmAcct).
+ const fills={
+  bookingAccountId:id=>{const account=accounts.bookingAccounts.find(item=>item.accountId===id);return account&&{debtorName:account.institution,debtorIban:account.iban,debtorAgentBic:account.bic};},
+  nostroAccountId:id=>{const account=accounts.nostroAccounts.find(item=>item.accountId===id);return account&&{...(account.bic?{receiverBic:account.bic}:{}),settlement:'INDA',settlementAccount:account.account};},
+  tokenWalletId:()=>null};
+ for(const select of choices)select.addEventListener('change',()=>{
+  const name=select.dataset.finChoice;if(selection[name]===select.value)return;
+  selection={...selection,[name]:select.value};
+  const fill=select.value&&fills[name](select.value);
+  if(fill){form={...form,...fill};paint();broken=null;write();}
+  changed();
+ });
+ // Another currency leaves the accounts chosen in the former one.
+ function currencyChanged(before){
+  if(normalizeForm(form).currency===normalizeForm(before).currency)return;
+  selection={...selection,bookingAccountId:'',nostroAccountId:''};paintChoices();
+ }
  // The form writes the XML.
  const take=event=>{
   const field=event.target?.dataset?.finField;if(!field||form[field]===event.target.value)return;
   if(event.target.tagName==='SELECT')choose(event.target,event.target.value);
-  form={...form,[field]:event.target.value};broken=null;write();changed();
+  const before=form;form={...form,[field]:event.target.value};broken=null;write();currencyChanged(before);changed();
  };
  const sheet=$('[data-fin-form]');
  sheet.addEventListener('input',take);sheet.addEventListener('change',take);sheet.addEventListener('submit',event=>event.preventDefault());
@@ -56,7 +94,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   if(result.error){broken=result.error;show('broken','XML: '+result.error);return;}
   broken=null;
   if(same(result.form,form)){if(verdict.dataset.state==='broken')show('unchecked','XSD: not checked');return;}
-  form=result.form;paint();changed();
+  const before=form;form=result.form;paint();currencyChanged(before);changed();
  }
  const flush=()=>{if(pause!==null)read();};
  xml.addEventListener('input',()=>{view.clearTimeout(pause);pause=view.setTimeout(read,PAUSE);});
@@ -93,17 +131,23 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  async function save(){
   flush();
   if(broken)throw Object.assign(new Error('XML: '+broken),{code:'FIN_MESSAGE_INVALID'});
-  const at=edits,{draft:saved}=await request('POST','/api/fin-terminal/drafts',{form,...(draft?{draftId:draft.draftId,revision:draft.revision}:{})});
+  const at=edits,{draft:saved}=await request('POST','/api/fin-terminal/drafts',{form,selection,...(draft?{draftId:draft.draftId,revision:draft.revision}:{})});
   draft={draftId:saved.draftId,revision:saved.revision};
-  if(edits===at){form=whole(saved.form);dirty=false;paint();xml.value=saved.xml;}
+  if(edits===at){form=whole(saved.form);selection=chosen(saved.selection);dirty=false;paint();paintChoices();xml.value=saved.xml;}
   await listDrafts();paintState();
   return saved;
  }
- function start(){form=blankForm(new Date());draft=null;dirty=false;broken=null;refused=null;paint();write();show('unchecked','XSD: not checked');paintState();}
+ const chosen=kept=>Object.fromEntries(CHOICES.map(name=>[name,typeof kept?.[name]==='string'?kept[name]:'']));
+ function start(){form=blankForm(new Date());selection=noChoice();draft=null;dirty=false;broken=null;refused=null;paint();paintChoices();write();show('unchecked','XSD: not checked');paintState();}
  async function open(draftId){
   const {draft:loaded}=await request('GET','/api/fin-terminal/drafts/'+encodeURIComponent(draftId));
-  form=whole(loaded.form);draft={draftId:loaded.draftId,revision:loaded.revision};dirty=false;broken=null;refused=null;
-  paint();xml.value=loaded.xml;paintState();await check();
+  form=whole(loaded.form);selection=chosen(loaded.selection);draft={draftId:loaded.draftId,revision:loaded.revision};dirty=false;broken=null;refused=null;
+  paint();paintChoices();xml.value=loaded.xml;paintState();await check();
+ }
+ async function listAccounts(){
+  let listed;try{listed=(await request('GET','/api/fin-terminal/accounts'))?.accounts;}catch{return;}
+  accounts={bookingAccounts:[],nostroAccounts:[],tokenWallets:[],...Object.fromEntries(Object.entries(listed||{}).filter(([,rows])=>Array.isArray(rows)))};
+  paintChoices();
  }
  // Another message replaces this one only once this one is kept: it is saved as a draft first. Refused, it stays with the
  // reason shown; asked for the same again without a change in between, the other message is opened as asked.
@@ -117,5 +161,5 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  $('[data-fin-save]').addEventListener('click',()=>void act(async()=>{await save();await check();}));
  $('[data-fin-validate]').addEventListener('click',()=>void act(check));
 
- return {start(){start();void listDrafts();},listDrafts};
+ return {start(){start();void listDrafts();void listAccounts();},listDrafts};
 }

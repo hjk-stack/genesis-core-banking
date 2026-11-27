@@ -1,9 +1,12 @@
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
+import {randomUUID} from 'node:crypto';
 import {chromium} from 'playwright';
 import {PGlite} from '@electric-sql/pglite';
 import {migrate} from '../src/migrate.mjs';
+import {AccountManagement} from '../src/account-management.mjs';
+import {cryptoLedgerAccount} from '../src/crypto/rolling-ledger.mjs';
 import {createBankServer} from '../server.mjs';
 import {exampleForm} from '../test/helpers/fin-example.mjs';
 
@@ -11,7 +14,7 @@ import {exampleForm} from '../test/helpers/fin-example.mjs';
 // dark blue and orange they approved; checked on a phone (also in the two-thirds window the Payments switch opens there),
 // an iPad and a computer against the real bank server.
 const admin={id:'fin-composer-browser',username:'fin-composer-browser',admin:true};
-let db,server,browser,base;
+let db,server,browser,base,common,nostro,wallet;
 before(async()=>{
  db=new PGlite();let connections=Promise.resolve();
  const pool={query:(...args)=>db.query(...args),connect:async()=>{
@@ -19,6 +22,12 @@ before(async()=>{
   return {query:(...args)=>db.query(...args),exec:(...args)=>db.exec(...args),release};
  }};
  const connection=await pool.connect();try{await migrate(connection)}finally{connection.release()}
+ // Step 3's accounts: a Common account and a NOSTRO account in euros, and "+" wallets of a holder (with AG, never offered).
+ const bank=new AccountManagement(pool,{directory:{env:{}}});
+ common=(await bank.openAccount(admin,{accountType:'COMMON',fullName:'Example Common',currencies:['EUR']},randomUUID())).managedAccounts[0];
+ nostro=await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example NOSTRO',bic:'EXMPCHZZXXX',accountNumber:'NOSTRO-EXAMPLE-1',currency:'EUR'},randomUUID());
+ const holder=(await bank.openCustomer(admin,{fullName:'Example Holder',accountType:'PERSONAL',currencies:['EUR']},randomUUID())).userId;
+ wallet=await cryptoLedgerAccount(pool,{userId:holder,currency:'USDC',network:'ETHEREUM'});await cryptoLedgerAccount(pool,{userId:holder,currency:'AG',network:'ETHEREUM'});
  server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base='http://127.0.0.1:'+server.address().port;
  browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
@@ -27,7 +36,7 @@ before(async()=>{
 after(async()=>{await browser?.close();await new Promise(resolve=>server?.close(resolve));await db?.close();});
 
 const SELECTS=new Set(['messageType','priority','chargeBearer','settlement']);
-for(const width of [260,390,820,1440])test('the composer on '+(width<500?'a phone':width<1000?'an iPad':'a computer')+' ('+width+'px): form and XML in step, checked, saved, opened again, a used UETR refused',async()=>{
+for(const width of [260,390,820,1440])test('the composer on '+(width<500?'a phone':width<1000?'an iPad':'a computer')+' ('+width+'px): form and XML in step, accounts chosen, checked, saved, opened again, a used UETR refused',async()=>{
  const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  try{
@@ -38,6 +47,13 @@ for(const width of [260,390,820,1440])test('the composer on '+(width<500?'a phon
   // The form writes the XML.
   for(const [name,value] of Object.entries(exampleForm()))if(!['uetr','businessMessageId','createdAt'].includes(name))await (SELECTS.has(name)?field(name).selectOption(value):field(name).fill(value));
   assert.match(await xml.inputValue(),/<Nm>Example Creditor SARL<\/Nm>/);assert.match(await xml.inputValue(),/<IntrBkSttlmAmt Ccy="EUR">1250000\.00<\/IntrBkSttlmAmt>/);
+  // The accounts: the Common account is the debtor's, the NOSTRO account settles the transfer, the "+" wallet is kept.
+  const choice=name=>page.locator('[data-fin-choice="'+name+'"]');
+  await page.waitForFunction(()=>document.querySelector('[data-fin-choice="tokenWalletId"]').options.length>1);
+  assert.deepEqual(await choice('tokenWalletId').locator('option').allTextContents(),['—','Example Holder · USDC · ETHEREUM']);
+  await choice('bookingAccountId').selectOption(common.id);await choice('nostroAccountId').selectOption(nostro.id);await choice('tokenWalletId').selectOption(wallet);
+  assert.deepEqual([await field('debtorIban').inputValue(),await field('receiverBic').inputValue(),await field('settlement').inputValue(),await field('settlementAccount').inputValue()],
+   [common.abiqIban,'EXMPCHZZXXX','INDA','NOSTRO-EXAMPLE-1']);
   // The XML writes the form.
   await xml.fill((await xml.inputValue()).replace('>1250000.00<','>990.50<'));
   await page.waitForFunction(()=>document.querySelector('[data-fin-field="amount"]').value==='990.50');
@@ -61,6 +77,7 @@ for(const width of [260,390,820,1440])test('the composer on '+(width<500?'a phon
   await page.locator('[data-fin-drafts]').selectOption(draftId);
   await page.waitForFunction(()=>document.querySelector('[data-fin-xsd]').textContent==='XSD: PASSED');
   assert.equal(await field('uetr').inputValue(),uetr);assert.equal(await field('amount').inputValue(),'990.50');assert.equal(await state.textContent(),'Draft saved · revision 1');
+  assert.deepEqual([await choice('bookingAccountId').inputValue(),await choice('nostroAccountId').inputValue(),await choice('tokenWalletId').inputValue()],[common.id,nostro.id,wallet]);
   // A new message given the saved message's UETR is refused, the UETR marked.
   await page.getByRole('button',{name:'New',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[data-fin-draft-state]').textContent==='New message');
   await field('debtorName').fill('Example Debtor GmbH');
