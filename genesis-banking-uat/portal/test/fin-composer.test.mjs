@@ -4,7 +4,11 @@ import {readFile} from 'node:fs/promises';
 import {JSDOM} from 'jsdom';
 import {PGlite} from '@electric-sql/pglite';
 import pg from 'pg';
+import {randomUUID} from 'node:crypto';
 import {migrate} from '../src/migrate.mjs';
+import {AccountManagement} from '../src/account-management.mjs';
+import {cryptoLedgerAccount} from '../src/crypto/rolling-ledger.mjs';
+import {FinTerminal} from '../src/fin-terminal.mjs';
 import {createBankServer} from '../server.mjs';
 import {startFinTerminal} from '../public/fin-terminal.mjs';
 import {buildFinMessage,normalizeForm} from '../public/fin-message.mjs';
@@ -13,7 +17,7 @@ import {exampleForm} from './helpers/fin-example.mjs';
 // Requested by the bank owner with the FinTerminal ISO 20022 specification, screen 1 "FIN - ISO 20022 Composer": "live two-way
 // XML synchronization", XSD validation, the UETR made and a duplicate refused, drafts. The window talks to the real bank server.
 const admin={id:'fin-composer-admin',username:'fin-composer',admin:true};
-let pool,db,server,base,cookie;
+let pool,db,server,base,cookie,commonEur,commonUsd,nostroEur,walletUsdc;
 const sent=[];
 before(async()=>{
  if(process.env.TEST_DATABASE_URL){const url=new URL(process.env.TEST_DATABASE_URL);assert.equal(url.pathname,'/avispay_ci');
@@ -23,6 +27,14 @@ before(async()=>{
   return {query:(...args)=>db.query(...args),exec:(...args)=>db.exec(...args),release};
  }};}
  const connection=await pool.connect();try{await migrate(connection)}finally{connection.release()}
+ // Step 3's accounts: Common accounts in euros and dollars, a NOSTRO account in each, and wallets of the wallet scroller.
+ const bank=new AccountManagement(pool,{directory:{env:{}}});
+ [commonEur,commonUsd]=(await bank.openAccount(admin,{accountType:'COMMON',fullName:'Example Common',currencies:['EUR','USD']},randomUUID())).managedAccounts;
+ nostroEur=await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example NOSTRO',bic:'EXMPCHZZXXX',accountNumber:'NOSTRO-EXAMPLE-1',currency:'EUR'},randomUUID());
+ await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example Dollar NOSTRO',bic:'EXMPUS33XXX',accountNumber:'NOSTRO-EXAMPLE-2',currency:'USD'},randomUUID());
+ const holder=(await bank.openCustomer(admin,{fullName:'Example Holder',accountType:'PERSONAL',currencies:['EUR']},randomUUID())).userId;
+ walletUsdc=await cryptoLedgerAccount(pool,{userId:holder,currency:'USDC',network:'ETHEREUM'});
+ await cryptoLedgerAccount(pool,{userId:holder,currency:'AG',network:'ETHEREUM'});
  server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base='http://127.0.0.1:'+server.address().port;
  const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:admin.username,password:'fixture'})});
@@ -53,6 +65,7 @@ async function composer(){
   // The schema check waits until released: what happens while a check is under way.
   holdChecks(){let release;held=new Promise(resolve=>{release=resolve});return ()=>{held=null;release();};},
   idle:()=>until(idle),
+  pick(name,value){const select=$('[data-fin-choice="'+name+'"]');select.value=value;select.dispatchEvent(new dom.window.Event('change',{bubbles:true}));},
   async choose(draftId){await until(idle);const list=$('[data-fin-drafts]');list.value=draftId;list.dispatchEvent(new dom.window.Event('change',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,0));await until(idle,'the draft');},
   close(){dom.window.close();}};
  await until(()=>!$('[data-fin-terminal]').hidden&&page.xml.value,'the terminal');
@@ -177,6 +190,44 @@ test('a UETR another payment or draft already has is refused with its reason at 
   page.$('[data-fin-new-uetr]').click();assert.notEqual(page.field('uetr').value,taken);assert.equal(uetrOf(page.xml.value),page.field('uetr').value);
   await page.press('[data-fin-save]');assert.equal(page.state(),'Draft saved · revision 1');assert.equal(page.verdict(),'XSD: PASSED');
   assert.notEqual(page.$('[data-fin-drafts]').value,draftId);
+ }finally{page.close();}
+});
+
+test('Accounts: a Common or Suspense account and a NOSTRO account write the message\'s fields, the "+" wallet is kept, all three with the draft',async()=>{
+ const page=await composer();try{
+  const select=name=>page.$('[data-fin-choice="'+name+'"]'),texts=name=>[...select(name).options].map(item=>item.textContent);
+  const chosen=()=>['bookingAccountId','nostroAccountId','tokenWalletId'].map(name=>select(name).value);
+  await until(()=>select('bookingAccountId').options.length>1,'the accounts');
+  // In euros: the euro accounts; every "+" wallet but AG and AGi.
+  assert.deepEqual(texts('bookingAccountId'),['—','Example Common · '+commonEur.abiqIban+' · EUR']);
+  assert.deepEqual(texts('nostroAccountId'),['—','Example NOSTRO · NOSTRO-EXAMPLE-1 · EUR']);
+  assert.deepEqual(texts('tokenWalletId'),['—','Example Holder · USDC · ETHEREUM']);
+  page.fill(exampleForm());
+  page.pick('bookingAccountId',commonEur.id);
+  const account=(await new FinTerminal(pool).accounts(admin)).bookingAccounts.find(item=>item.accountId===commonEur.id);
+  assert.deepEqual(['debtorName','debtorIban','debtorAgentBic'].map(name=>page.field(name).value),[account.institution,account.iban,account.bic]);
+  assert.ok(page.xml.value.includes('<IBAN>'+account.iban+'</IBAN>'));
+  page.pick('nostroAccountId',nostroEur.id);
+  assert.deepEqual(['receiverBic','settlement','settlementAccount'].map(name=>page.field(name).value),['EXMPCHZZXXX','INDA','NOSTRO-EXAMPLE-1']);
+  assert.ok(page.xml.value.replace(/\n\s*/g,'').includes('<SttlmInf><SttlmMtd>INDA</SttlmMtd><SttlmAcct><Id><Othr><Id>NOSTRO-EXAMPLE-1</Id></Othr></Id></SttlmAcct></SttlmInf>'));
+  page.pick('tokenWalletId',walletUsdc);
+  assert.equal(page.state(),'New message · not saved');
+  await page.press('[data-fin-save]');assert.equal(page.state(),'Draft saved · revision 1');assert.equal(page.verdict(),'XSD: PASSED');
+  const draftId=page.$('[data-fin-drafts]').value;
+  await page.press('[data-fin-new]');assert.deepEqual(chosen(),['','','']);
+  await page.choose(draftId);assert.deepEqual(chosen(),[commonEur.id,nostroEur.id,walletUsdc]);
+  // A field that names a chosen account, written otherwise, lets that account go; the others stay (review finding).
+  page.type('debtorAgentBic','EXMPDEFFXXX');assert.deepEqual(chosen(),['',nostroEur.id,walletUsdc]);
+  await page.writeXml(page.xml.value.replace('<Id>NOSTRO-EXAMPLE-1</Id>','<Id>NOSTRO-OTHER-9</Id>'));assert.deepEqual(chosen(),['','',walletUsdc]);
+  page.pick('bookingAccountId',commonEur.id);page.pick('nostroAccountId',nostroEur.id);assert.deepEqual(chosen(),[commonEur.id,nostroEur.id,walletUsdc]);
+  // Another currency: the accounts chosen in euros are let go with the fields they wrote, the dollar ones are offered; the wallet
+  // stays (review finding).
+  page.type('currency','USD');
+  assert.deepEqual(chosen(),['','',walletUsdc]);
+  assert.deepEqual(['debtorName','debtorIban','debtorAgentBic','receiverBic','settlementAccount','settlement'].map(name=>page.field(name).value),['','','','','','INDA']);
+  assert.doesNotMatch(page.xml.value,/NOSTRO-EXAMPLE-1|EXMPCHZZXXX/);
+  assert.deepEqual(texts('bookingAccountId'),['—','Example Common · '+commonUsd.abiqIban+' · USD']);
+  assert.deepEqual(texts('nostroAccountId'),['—','Example Dollar NOSTRO · NOSTRO-EXAMPLE-2 · USD']);
  }finally{page.close();}
 });
 

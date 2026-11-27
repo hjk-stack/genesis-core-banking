@@ -25,8 +25,14 @@
 <label><span>Value Date</span><input class="fin-code" data-fin-field="valueDate" maxlength="10" placeholder="YYYY-MM-DD" spellcheck="false"></label>
 <label><span>Charge Bearer</span><select data-fin-field="chargeBearer"><option>SHAR</option><option>DEBT</option><option>CRED</option><option>SLEV</option></select></label>
 <label><span>Clearing System</span><select data-fin-field="settlement"><option value="CLRG/TGT">CLRG · TGT2 / T2</option><option value="INDA">INDA · instructed agent</option><option value="INGA">INGA · instructing agent</option></select></label>
+<label><span>Settlement Account</span><input class="fin-code" data-fin-field="settlementAccount" maxlength="42" spellcheck="false"></label>
 </fieldset>
 </div>
+<fieldset class="fin-panel fin-panel-wide"><legend>Accounts</legend>
+<label><span>Common / Suspense Account</span><select data-fin-choice="bookingAccountId"><option value="">—</option></select></label>
+<label><span>NOSTRO Account</span><select data-fin-choice="nostroAccountId"><option value="">—</option></select></label>
+<label><span>+ Wallet</span><select data-fin-choice="tokenWalletId"><option value="">—</option></select></label>
+</fieldset>
 <div class="fin-row">
 <fieldset class="fin-panel"><legend>Debtor Side</legend>
 <label><span>Debtor Name</span><input data-fin-field="debtorName" maxlength="140"></label>

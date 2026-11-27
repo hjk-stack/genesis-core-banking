@@ -150,7 +150,11 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  CSRF:'Refresh the page and submit again.',TOO_MANY_ATTEMPTS:'Please wait before trying to sign in again.',
  FIN_UETR_DUPLICATE:'This UETR is already used by another payment or draft. Make a new UETR.',
  FIN_DRAFT_CHANGED:'This draft was saved meanwhile. Open it again before saving.',FIN_DRAFT_NOT_FOUND:'Select an existing FinTerminal draft.',
- FIN_MESSAGE_INVALID:'Write the ISO 20022 message as XML, without a document type.'
+ FIN_MESSAGE_INVALID:'Write the ISO 20022 message as XML, without a document type.',
+ FIN_BOOKING_ACCOUNT:'Select a Common or Suspense account in the message\'s currency.',FIN_NOSTRO_ACCOUNT:'Select an active NOSTRO account in the message\'s currency.',
+ FIN_TOKEN_WALLET:'Select a "+" wallet; AG and AGi are not booked here.',
+ FIN_BOOKING_MISMATCH:'The debtor\'s IBAN and BIC are not those of the chosen Common or Suspense account.',
+ FIN_NOSTRO_MISMATCH:'The receiver, INDA and the settlement account are not those of the chosen NOSTRO account.'
 };
 export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={}}) {
  const core=new TradingRobotCore(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map(),indexService=new IndexServiceAuthenticator(pool,{env:core.secretEnv,fetcher:transferOptions.indexServiceFetcher||core.cryptoFetch});
@@ -381,6 +385,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    // The FinTerminal composer's drafts and its schema check (src/fin-terminal.mjs), for bank administrators.
    const finDraft=/^\/api\/fin-terminal\/drafts(?:\/([0-9a-f-]{36}))?$/.exec(path);
    if(req.method==='GET'&&finDraft)return send(res,200,finDraft[1]?{draft:await finTerminal.draft(actor,finDraft[1])}:{rows:await finTerminal.drafts(actor)});
+   if(req.method==='GET'&&path==='/api/fin-terminal/accounts')return send(res,200,{accounts:await finTerminal.accounts(actor)});
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
    if(path==='/api/fin-terminal/drafts')return send(res,200,{draft:await finTerminal.save(actor,body)});

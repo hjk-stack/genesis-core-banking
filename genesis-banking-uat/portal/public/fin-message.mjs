@@ -9,12 +9,12 @@ export const PRIORITIES={'HIGH/URGP':['HIGH','URGP'],'NORM/NURG':['NORM','NURG']
 export const SETTLEMENTS={'CLRG/TGT':['CLRG','TGT'],INDA:['INDA',''],INGA:['INGA','']};
 export const CHARGE_BEARERS=['SHAR','DEBT','CRED','SLEV'];
 export const FIELDS=Object.freeze(['messageType','businessMessageId','createdAt','senderBic','receiverBic','uetr','endToEndId','priority',
- 'currency','amount','valueDate','chargeBearer','settlement','debtorName','debtorIban','debtorAgentBic','creditorName','creditorIban',
+ 'currency','amount','valueDate','chargeBearer','settlement','settlementAccount','debtorName','debtorIban','debtorAgentBic','creditorName','creditorIban',
  'creditorAgentBic','intermediaryBic','intermediaryLei','ultimateDebtorName','ultimateDebtorLei','ultimateCreditorName',
  'ultimateCreditorLei','structuredReference','unstructuredRemittance','regulatoryCountry','regulatoryCode','regulatoryDetails']);
 // The longest each field may be: its element's own limit, the details ten Inf elements of 35.
 export const LIMITS=Object.freeze({messageType:15,businessMessageId:35,createdAt:35,senderBic:11,receiverBic:11,uetr:36,endToEndId:35,
- priority:9,currency:3,amount:25,valueDate:10,chargeBearer:4,settlement:8,debtorName:140,debtorIban:34,debtorAgentBic:11,creditorName:140,
+ priority:9,currency:3,amount:25,valueDate:10,chargeBearer:4,settlement:8,settlementAccount:34,debtorName:140,debtorIban:34,debtorAgentBic:11,creditorName:140,
  creditorIban:34,creditorAgentBic:11,intermediaryBic:11,intermediaryLei:20,ultimateDebtorName:140,ultimateDebtorLei:20,ultimateCreditorName:140,
  ultimateCreditorLei:20,structuredReference:35,unstructuredRemittance:140,regulatoryCountry:2,regulatoryCode:10,regulatoryDetails:359});
 
@@ -39,6 +39,9 @@ export function normalizeForm(input={}){
   const value=typeof input?.[field]==='string'?input[field].trim():'';
   form[field]=field==='regulatoryDetails'?value.replace(/\s+/g,' '):CODES.has(field)?value.replace(/\s+/g,'').toUpperCase():field==='uetr'?value.toLowerCase():value;
  }
+ // The settlement account (a NOSTRO) is an IBAN when it is one, else the bank's own account number as it was written.
+ const compact=form.settlementAccount.replace(/\s+/g,'').toUpperCase();
+ if(ibanValid(compact))form.settlementAccount=compact;
  return form;
 }
 
@@ -91,7 +94,7 @@ export function buildFinMessage(input){
   optional('RmtInf',[optional('Ustrd',f.unstructuredRemittance),optional('Strd',[optional('CdtrRefInf',f.structuredReference&&[node('Tp',[node('CdOrPrtry',[node('Cd','SCOR')])]),node('Ref',f.structuredReference)])])])]);
  const document=node('Document',[node('FIToFICstmrCdtTrf',[
   node('GrpHdr',[node('MsgId',f.businessMessageId),node('CreDtTm',f.createdAt),node('NbOfTxs','1'),
-   node('SttlmInf',[node('SttlmMtd',method),optional('ClrSys',[optional('Cd',clearing)])]),
+   node('SttlmInf',[node('SttlmMtd',method),optional('SttlmAcct',f.settlementAccount&&[node('Id',[ibanValid(f.settlementAccount)?node('IBAN',f.settlementAccount):node('Othr',[node('Id',f.settlementAccount)])])]),optional('ClrSys',[optional('Cd',clearing)])]),
    agent('InstgAgt',f.senderBic),agent('InstdAgt',f.receiverBic)]),transfer])],{attrs:{xmlns:namespace(f.messageType||PACS008)}});
  return '<?xml version="1.0" encoding="UTF-8"?>\n'+serialize(node('Envelope',[header,document]),0)+'\n';
 }
@@ -118,6 +121,7 @@ export function readFinMessage(xml,DOMParserImpl=globalThis.DOMParser){
   priority:pick(PRIORITIES,value(tx,'PmtTpInf','InstrPrty'),value(tx,'PmtTpInf','SvcLvl','Cd')),
   currency:amount?.getAttribute('Ccy')?.trim()||'',amount:amount?.textContent.trim()||'',valueDate:value(tx,'IntrBkSttlmDt'),chargeBearer:value(tx,'ChrgBr'),
   settlement:pick(SETTLEMENTS,value(group,'SttlmInf','SttlmMtd'),value(group,'SttlmInf','ClrSys','Cd'))||value(group,'SttlmInf','SttlmMtd'),
+  settlementAccount:value(group,'SttlmInf','SttlmAcct','Id','IBAN')||value(group,'SttlmInf','SttlmAcct','Id','Othr','Id'),
   debtorName:value(tx,'Dbtr','Nm'),debtorIban:value(tx,'DbtrAcct','Id','IBAN'),debtorAgentBic:value(tx,'DbtrAgt','FinInstnId','BICFI'),
   creditorName:value(tx,'Cdtr','Nm'),creditorIban:value(tx,'CdtrAcct','Id','IBAN'),creditorAgentBic:value(tx,'CdtrAgt','FinInstnId','BICFI'),
   intermediaryBic:value(tx,'IntrmyAgt1','FinInstnId','BICFI'),intermediaryLei:value(tx,'IntrmyAgt1','FinInstnId','LEI'),
