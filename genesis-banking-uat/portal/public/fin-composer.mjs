@@ -68,7 +68,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  async function listDrafts(){
   let rows;try{rows=(await request('GET','/api/fin-terminal/drafts'))?.rows;}catch{return;}
   if(!Array.isArray(rows))rows=[];
-  list.replaceChildren(choice('','New message'),...rows.map(row=>choice(row.draftId,[row.amount||'—',row.currency,'·',row.creditorName||'—','·',when(row.updatedAt),'·',row.schemaValid?'XSD ✓':'XSD ✗'].join(' '))));
+  list.replaceChildren(choice('','New message'),...rows.map(row=>choice(row.draftId,[row.schemaValid?'XSD ✓':'XSD ✗','·',row.amount||'—',row.currency,'·',row.creditorName||'—','·',when(row.updatedAt)].join(' '))));
   list.value=draft?.draftId||'';
  }
  // One action at a time; a refusal is shown with its reason and its field.

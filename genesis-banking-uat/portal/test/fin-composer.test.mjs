@@ -118,7 +118,7 @@ test('drafts: saved, saved again with its revision, listed, opened again - and a
   await page.press('[data-fin-save]');
   assert.equal(page.state(),'Draft saved · revision 1');assert.equal(page.verdict(),'XSD: PASSED');
   const list=page.$('[data-fin-drafts]'),draftId=list.value,uetr=page.field('uetr').value;
-  assert.match(draftId,/^[0-9a-f-]{36}$/);assert.match(list.selectedOptions[0].textContent,/^1250000\.00 EUR · Example Creditor SARL · .+ · XSD ✓$/);
+  assert.match(draftId,/^[0-9a-f-]{36}$/);assert.match(list.selectedOptions[0].textContent,/^XSD ✓ · 1250000\.00 EUR · Example Creditor SARL · .+$/);
   page.type('amount','2000.00');assert.equal(page.state(),'Draft · changes not saved');
   await page.press('[data-fin-save]');assert.equal(page.state(),'Draft saved · revision 2');
   await page.press('[data-fin-new]');
