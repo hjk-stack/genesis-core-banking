@@ -666,7 +666,8 @@ def existing_stripe_settings(current_env, known_secrets=()):
 
 
 # Requested by the bank owner: "Now activate now the ISO20022 under the new domain". The FinTerminal is a window of the staff
-# desk at bank.avispay.online, which admits only approved workstations by their client certificate (staff-workstation.mjs).
+# desk at bank.avispay.online. Certificate workstations keep their existing admission path;
+# signed browser workstation admission does not need an ingress change.
 # Azure's ingress hands that certificate to the bank only once it asks for one - "accept": a caller without one still reaches
 # the public bank - and only then may the bank read the forwarded header (BANK_DESK_MTLS_INGRESS); before, it could be forged.
 # The desk's channel secret and the FinTerminal's own certificate on port 8443 stay in Azure as the application's secrets
@@ -674,17 +675,47 @@ def existing_stripe_settings(current_env, known_secrets=()):
 DESK_INGRESS = 'azure-container-apps'
 DESK_SECRETS = (('BANK_DESK_CHANNEL_SECRET', 'bank-desk-channel-secret'), ('AVIS_CONNECTOR_LISTENER', 'avis-connector-listener'))
 CONTAINER_APPS_API = '2024-03-01'
+PROTECTED_BANK_HOST = 'banking.avis.exchange'
 
 
 def desk_ingress_ready(application):
-    return (application['properties']['configuration']['ingress'].get('clientCertificateMode') == 'accept'
+    return (str(application['properties']['configuration']['ingress'].get('clientCertificateMode', '')).lower() == 'accept'
             and application['properties'].get('provisioningState') == 'Succeeded')
 
 
 def private_desk_settings(application, known_secrets=()):
     """The application as it is once its ingress accepts client certificates, and the desk's environment bindings."""
+    ingress = application['properties']['configuration']['ingress']
+    known = {item['name'] for item in known_secrets}
+    bound = [setting + '=secretref:' + name for setting, name in DESK_SECRETS if name in known]
+    protected = any(str(domain.get('name', '')).lower().rstrip('.') == PROTECTED_BANK_HOST
+                    for domain in (ingress.get('customDomains') or []))
+    if protected:
+        # The owner explicitly excluded banking.avis.exchange. Client-certificate
+        # mode belongs to this entire app, so changing it also changes that host.
+        # Retain its exact ingress and bind only already-available desk secrets.
+        # A preconfigured certificate ingress remains usable; otherwise never
+        # enable trust in a caller-supplied forwarded certificate header.
+        # Do not turn off an existing certificate path just because an unrelated
+        # platform operation is still completing. Observe it without mutation;
+        # a changed ingress must be reviewed on a fresh deployment snapshot.
+        if application['properties'].get('provisioningState') != 'Succeeded':
+            for attempt in range(36):
+                current = app(APP)
+                if current['properties']['configuration']['ingress'] != ingress:
+                    raise RuntimeError('Shared bank ingress changed during deployment preparation')
+                if current['properties'].get('provisioningState') == 'Succeeded':
+                    application = current
+                    break
+                time.sleep(5)
+            else:
+                raise RuntimeError('Shared bank application is still provisioning')
+        ready = str(ingress.get('clientCertificateMode', '')).lower() in ('accept', 'require')
+        print('Preserved ingress shared with ' + PROTECTED_BANK_HOST)
+        print('Private desk secret bindings: ' + str(len(bound)) + ' of ' + str(len(DESK_SECRETS)))
+        return application, ['BANK_DESK_MTLS_INGRESS=' + (DESK_INGRESS if ready else ''), *bound]
     if not desk_ingress_ready(application):
-        if application['properties']['configuration']['ingress'].get('clientCertificateMode') != 'accept':
+        if str(application['properties']['configuration']['ingress'].get('clientCertificateMode', '')).lower() != 'accept':
             az('rest', '--method', 'PATCH', '--url',
                'https://management.azure.com' + application['id'] + '?api-version=' + CONTAINER_APPS_API,
                '--body', json.dumps({'properties': {'configuration': {'ingress': {'clientCertificateMode': 'accept'}}}}),
@@ -699,8 +730,6 @@ def private_desk_settings(application, known_secrets=()):
         else:
             raise RuntimeError('Bank ingress did not take client certificates')
         print('Bank ingress now accepts workstation client certificates')
-    known = {item['name'] for item in known_secrets}
-    bound = [setting + '=secretref:' + name for setting, name in DESK_SECRETS if name in known]
     print('Private desk secret bindings: ' + str(len(bound)) + ' of ' + str(len(DESK_SECRETS)))
     return application, ['BANK_DESK_MTLS_INGRESS=' + DESK_INGRESS, *bound]
 
