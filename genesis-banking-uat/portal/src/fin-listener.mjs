@@ -24,7 +24,7 @@ const PEER_ADDRESSES=`SELECT host(w.address) AS address,p.profile_id,c.credentia
  FROM avis_core_v2.fin_terminal_peer_addresses w JOIN avis_core_v2.bank_connector_profiles p USING(profile_id)
  JOIN avis_core_v2.platform_connectors c ON c.connector_code=p.profile_id JOIN avis_core_v2.external_cash_accounts a USING(cash_account_id)
  WHERE p.protocol='IP_TO_IP' AND c.is_enabled AND a.is_active`;
-const WINDOW='SELECT now() AS now,(SELECT open_until FROM avis_core_v2.fin_terminal_listener WHERE listener_id=1) AS open_until';
+const WINDOW='SELECT now() AS now,l.open_until,l.changed_at FROM (SELECT 1) one LEFT JOIN avis_core_v2.fin_terminal_listener l ON l.listener_id=1';
 // A session message on its way out (finished within the transport's 15 seconds; one older never finished).
 const SENDING=`SELECT 1 FROM avis_core_v2.fin_terminal_peer_messages WHERE direction='OUT' AND answer_to IS NULL AND status='SENDING'
  AND updated_at>=now()-interval '1 minute' LIMIT 1`;
@@ -46,11 +46,11 @@ export class FinListener{
   this.server=null;this.sockets=new Set();this.allowed=new Set();this.issuers=[];this.failure=null;this.queue=Promise.resolve();this.timer=null;this.watcher=null;this.stopped=false;
  }
  #administrator(actor){if(!actor?.admin)fault('FORBIDDEN',null,403);}
- async #window(){const row=(await this.pool.query(WINDOW)).rows[0];return {now:new Date(row.now),until:row.open_until?new Date(row.open_until):null,open:Boolean(row.open_until)&&new Date(row.open_until)>new Date(row.now)};}
+ async #window(){const row=(await this.pool.query(WINDOW)).rows[0];return {now:new Date(row.now),until:row.open_until?new Date(row.open_until):null,since:row.changed_at?new Date(row.changed_at):null,open:Boolean(row.open_until)&&new Date(row.open_until)>new Date(row.now)};}
  async status(actor){
   this.#administrator(actor);
   const window=await this.#window();
-  return {open:window.open,until:window.open?window.until.toISOString():null,now:window.now.toISOString(),port:this.port,
+  return {open:window.open,until:window.open?window.until.toISOString():null,since:window.open&&window.since?window.since.toISOString():null,now:window.now.toISOString(),port:this.port,
    listening:window.open&&this.server!==null,error:window.open&&!this.server?this.failure:null};
  }
  // Opened for a chosen time by a bank administrator, with the bank's certificate in place and a peer's address whitelisted.

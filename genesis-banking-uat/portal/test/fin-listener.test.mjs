@@ -92,7 +92,7 @@ after(async()=>{
 test('the port opens for a chosen time, with the bank\'s certificate in place and a peer\'s address whitelisted; administrators only',async()=>{
  for(const work of [()=>listener.status(guest),()=>listener.open(guest,{minutes:15}),()=>listener.close(guest),()=>peers.addAddress(guest,'EXAMPLE_PEER_A',{address:'127.0.0.1'})])
   await assert.rejects(work(),refused('FORBIDDEN',403));
- assert.deepEqual({...(await listener.status(admin)),now:undefined},{open:false,until:null,now:undefined,port:0,listening:false,error:null});
+ assert.deepEqual({...(await listener.status(admin)),now:undefined},{open:false,until:null,since:null,now:undefined,port:0,listening:false,error:null});
  await assert.rejects(listener.open(admin,{minutes:15}),refused('FIN_LISTENER_NO_PEER',409));
  // Single IP addresses, an IPv4 one written as itself; no ranges, names or zones.
  for(const address of ['not-an-address','127.0.0.0/8','localhost','fe80::1%eth0','',42])
@@ -108,8 +108,10 @@ test('the port opens for a chosen time, with the bank\'s certificate in place an
  const opened=await listener.open(admin,{minutes:15});
  assert.equal(opened.open,true);assert.equal(opened.listening,true);assert.equal(opened.error,null);
  const left=Date.parse(opened.until)-Date.parse(opened.now);assert.ok(left>14.9*60000&&left<=15*60000,String(left));
+ // Its running time counts from the opening.
+ const running=Date.parse(opened.now)-Date.parse(opened.since);assert.ok(running>=0&&running<5000,String(running));
  assert.ok(listener.boundPort()>0);
- const closed=await listener.close(admin);assert.deepEqual([closed.open,closed.listening,closed.until],[false,false,null]);assert.equal(listener.boundPort(),null);
+ const closed=await listener.close(admin);assert.deepEqual([closed.open,closed.listening,closed.until,closed.since],[false,false,null,null]);assert.equal(listener.boundPort(),null);
 });
 
 test('a whitelisted peer with its own certificate is answered over TLS 1.3: INIT_SESSION, HEARTBEAT and END_SESSION each with the bank\'s same event',async()=>{

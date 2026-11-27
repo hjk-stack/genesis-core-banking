@@ -51,7 +51,7 @@ export async function validateFinMessage(xml){
 // and Suspense Accounts selectors and the NOSTRO accounts and the Wallet scroller in crypto for booking the converted tokens" -
 // the Common and Suspense accounts of the Manual IP-Handler, the NOSTRO register, and the "+" wallets ("Add currency" in the
 // wallet scroller), "not to AG and AGi". Nothing is booked here: the choices are kept with the draft.
-const BOOKING=`SELECT a.account_id,a.owner_type,a.currency_code,b.abiq_iban,p.abiq_bic,p.institution_name,
+const BOOKING=`SELECT a.account_id,a.owner_type,a.currency_code,b.abiq_iban,p.abiq_bic,p.institution_name,a.available_balance::text AS balance,
  COALESCE(a.display_name,CASE WHEN a.owner_type='COMMON_POOL' THEN 'Common Account' ELSE 'Suspense Account' END) AS label
  FROM avis_core_v2.ledger_accounts a JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id
  JOIN avis_core_v2.abiq_network_participants p ON p.participant_code=b.participant_code
@@ -64,6 +64,13 @@ const WALLETS=`SELECT l.account_id,u.full_name,l.currency_code,l.network,a.name
  WHERE l.owner_type='USER' AND l.network IS NOT NULL AND l.wallet_scope='FUNDING' AND l.account_category='LIABILITY'
   AND l.wallet_visible IS NOT FALSE AND l.currency_code NOT IN ('AG','AGi')`;
 const ID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// The specification v3's "Final Settlement Ledgers": the core banking cash (AVISPay PLC's Common and Suspense accounts), the NOSTRO
+// correspondents and the bank's own wallets on the chains (its custody, the "Direct Institutional MPC Wallet"), each with the
+// balance its ledger account holds.
+const NOSTRO_LEDGERS=`SELECT c.cash_account_id,c.institution_name,c.bic_code,c.iban_or_account_no,c.currency_code,c.is_active,a.available_balance::text AS balance
+ FROM avis_core_v2.external_cash_accounts c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.ledger_account_id ORDER BY c.institution_name,c.currency_code,c.cash_account_id`;
+const CUSTODY=`SELECT currency_code,network,sum(available_balance)::text AS balance FROM avis_core_v2.ledger_accounts
+ WHERE owner_type='HOT_WALLET' AND wallet_scope='FUNDING' AND network IS NOT NULL GROUP BY currency_code,network ORDER BY currency_code,network`;
 // A NOSTRO account settles a transfer as its settlement account: the register keeps account numbers of up to 128 characters,
 // the message's account up to 34 (review finding) - a longer number is not offered.
 const settlementNumber=value=>normalizeForm({settlementAccount:String(value??'')}).settlementAccount;
@@ -210,6 +217,26 @@ export class FinTerminal{
    if(draftId!==null)await this.#opened(client,draftId,body.revision);
    return draftOf(await this.#keep(client,actor,draftId,{form,xml,valid,selection,direction}));
   });
+ }
+ // The specification v3's mode: ROBOTIC STP, an incoming credit taken and booked by the bank at once, or MANUAL INTERVENTION,
+ // held for a bank administrator.
+ async mode(actor,body){
+  this.#administrator(actor);
+  if(typeof body?.roboticStp!=='boolean')fault('INVALID_FIELD','roboticStp');
+  const row=(await this.pool.query('UPDATE avis_core_v2.fin_terminal_mode SET robotic_stp=$1,changed_by=$2,changed_at=now() WHERE mode_id=1 RETURNING robotic_stp',
+   [body.roboticStp,String(actor.id)])).rows[0];
+  return {roboticStp:row.robotic_stp};
+ }
+ async telemetry(actor){
+  this.#administrator(actor);
+  const mode=(await this.pool.query('SELECT robotic_stp FROM avis_core_v2.fin_terminal_mode WHERE mode_id=1')).rows[0];
+  const core=(await this.pool.query(BOOKING+' ORDER BY a.currency_code,a.owner_type,b.abiq_iban',[RECEIVING_OWNERS])).rows;
+  const nostro=(await this.pool.query(NOSTRO_LEDGERS)).rows,custody=(await this.pool.query(CUSTODY)).rows;
+  return {roboticStp:mode?.robotic_stp===true,ledgers:{
+   coreBanking:core.map(row=>({accountId:row.account_id,label:row.label,iban:row.abiq_iban,currency:row.currency_code,balance:row.balance})),
+   nostro:nostro.map(row=>({accountId:row.cash_account_id,institution:row.institution_name,bic:row.bic_code||'',account:row.iban_or_account_no,currency:row.currency_code,
+    active:row.is_active===true,balance:row.balance})),
+   wallets:custody.map(row=>({currency:row.currency_code,network:row.network,balance:row.balance}))}};
  }
  // Registered, an incoming transfer's message - one that passed both schemas, naming AVISPay PLC's chosen account as the creditor's
  // and the NOSTRO as the sender - is kept for good, and its money is booked at once: on the NOSTRO, where it arrived, and on the
