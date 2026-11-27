@@ -80,6 +80,21 @@ const CHOICES={bookingAccountId:'booking_account_id',nostroAccountId:'nostro_cas
 // Common or Suspense account as the debtor's and the NOSTRO as the receiver (INDA); an incoming one names that account as the
 // creditor's and the NOSTRO, where the money arrives, as the sender (INGA).
 const DIRECTIONS=['OUTGOING','INCOMING'];
+// Why a peer's credit transfer is not booked, as its status answer says it (pacs.002 RJCT): the ISO 20022 status reason code and
+// the bank's words for it.
+const REJECTED={
+ FIN_INCOMING_INVALID:{reason:'NARR',text:'The transfer does not pass as the FinTerminal writes it: its fields or check digits.'},
+ FIN_BOOKING_ACCOUNT:{reason:'AC03',text:'The creditor\'s IBAN is not an AVISPay PLC account in this currency.'},
+ FIN_CREDITOR_MISMATCH:{reason:'AC03',text:'The creditor\'s agent and the receiver are not the bank of the creditor\'s account.'},
+ FIN_NOSTRO_ACCOUNT:{reason:'NARR',text:'The bank holds no active NOSTRO account at this peer in this currency.'},
+ FIN_NOSTRO_SENDER_MISMATCH:{reason:'NARR',text:'Not settled INGA on the bank\'s NOSTRO account at this peer, sent by this peer.'},
+ FIN_UETR_DUPLICATE:{reason:'DUPL',text:'This UETR names another payment already.'}};
+// The bank's answer to a peer's transfer taken: booked on the NOSTRO and the core banking account (ACSC), or held for the operator
+// under MANUAL INTERVENTION, technically accepted (ACTC). A transfer is the same payment when every field but its message's own id
+// and creation time is the same.
+const booked=form=>({status:'ACSC',reason:null,text:'CORE_BANKING_&_NOSTRO:+'+form.amount+' '+form.currency});
+const HELD=Object.freeze({status:'ACTC',reason:null,text:'HELD FOR MANUAL INTERVENTION'});
+const PAYMENT_FIELDS=FIELDS.filter(field=>!['businessMessageId','createdAt'].includes(field));
 
 const draftOf=(row,full=true)=>({draftId:row.draft_id,revision:row.revision,uetr:row.uetr,messageType:row.message_type,
  amount:row.form.amount,currency:row.form.currency,creditorName:row.form.creditorName,debtorName:row.form.debtorName,schemaValid:row.schema_valid,
@@ -250,20 +265,69 @@ export class FinTerminal{
   if(!selection.bookingAccountId)fault('FIN_BOOKING_ACCOUNT','bookingAccountId',409);
   if(!selection.nostroAccountId)fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
   if(fieldProblems(form).length||!(await validateFinMessage(xml)).valid)fault('FIN_INCOMING_INVALID','xml');
-  return this.#transaction(async client=>{
-   if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
-   await this.#checkSelection(client,selection,form,'INCOMING');
-   if(draftId!==null)await this.#opened(client,draftId,body.revision);
-   // The NOSTRO's own ledger account: an asset of the bank at its correspondent, in the transfer's currency.
-   const nostro=(await client.query(`SELECT a.account_id FROM avis_core_v2.external_cash_accounts c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.ledger_account_id
-    WHERE c.cash_account_id=$1 AND c.is_active AND a.currency_code=$2 AND a.account_category='ASSET' AND a.network IS NULL AND a.wallet_scope='FUNDING'
-     AND a.owner_type IN ('CORRESPONDENT_NOSTRO','CENTRAL_BANK_RESERVE') FOR SHARE OF c`,[selection.nostroAccountId,form.currency])).rows[0];
-   if(!nostro)fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
-   const journalId=await new SovereignCore(null).post(client,actor,'fin-incoming:'+form.uetr,'FIN_INCOMING_BOOKED',form.businessMessageId,
-    [{accountId:nostro.account_id,direction:'DEBIT',amount:form.amount},{accountId:selection.bookingAccountId,direction:'CREDIT',amount:form.amount}]);
-   const row=await this.#keep(client,actor,draftId,{form,xml,valid:true,selection,direction:'INCOMING'},journalId);
-   await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_INCOMING_BOOKED',journalId]);
-   return draftOf(row);
-  });
+  return this.#transaction(async client=>draftOf(await this.#book(client,actor,{form,xml,selection,draftId,revision:body.revision})));
+ }
+ async #book(client,actor,{form,xml,selection,draftId=null,revision}){
+  if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
+  await this.#checkSelection(client,selection,form,'INCOMING');
+  if(draftId!==null)await this.#opened(client,draftId,revision);
+  // The NOSTRO's own ledger account: an asset of the bank at its correspondent, in the transfer's currency.
+  const nostro=(await client.query(`SELECT a.account_id FROM avis_core_v2.external_cash_accounts c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.ledger_account_id
+   WHERE c.cash_account_id=$1 AND c.is_active AND a.currency_code=$2 AND a.account_category='ASSET' AND a.network IS NULL AND a.wallet_scope='FUNDING'
+    AND a.owner_type IN ('CORRESPONDENT_NOSTRO','CENTRAL_BANK_RESERVE') FOR SHARE OF c`,[selection.nostroAccountId,form.currency])).rows[0];
+  if(!nostro)fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
+  const journalId=await new SovereignCore(null).post(client,actor,'fin-incoming:'+form.uetr,'FIN_INCOMING_BOOKED',form.businessMessageId,
+   [{accountId:nostro.account_id,direction:'DEBIT',amount:form.amount},{accountId:selection.bookingAccountId,direction:'CREDIT',amount:form.amount}]);
+  const row=await this.#keep(client,actor,draftId,{form,xml,valid:true,selection,direction:'INCOMING'},journalId);
+  await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_INCOMING_BOOKED',journalId]);
+  return row;
+ }
+ // Under MANUAL INTERVENTION a peer's transfer is checked as one registered and held for the operator: kept as an incoming draft
+ // on AVISPay PLC's account and the NOSTRO it names, nothing booked; the operator registers it in the composer.
+ async #hold(client,actor,{form,xml,selection}){
+  if(await this.#uetrTaken(client,form.uetr,null))fault('FIN_UETR_DUPLICATE','uetr',409);
+  await this.#checkSelection(client,selection,form,'INCOMING');
+  const row=await this.#keep(client,actor,null,{form,xml,valid:true,selection,direction:'INCOMING'});
+  await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_INCOMING_HELD',row.draft_id]);
+  return row;
+ }
+ // A transfer taken before is answered as it was - booked, or held - when every field that makes the payment is the same, from the
+ // same peer's NOSTRO; otherwise its UETR names another payment (review finding: not only the amount, currency and creditor).
+ async #replay(client,peer,form){
+  const before=(await client.query('SELECT form,direction,nostro_cash_account_id,registered_journal_id FROM avis_core_v2.fin_terminal_drafts WHERE uetr=$1',[form.uetr])).rows[0];
+  if(!before)return null;
+  if(before.direction!=='INCOMING'||before.nostro_cash_account_id!==peer.cash_account_id||PAYMENT_FIELDS.some(field=>(before.form[field]??'')!==form[field]))
+   return {status:'RJCT',...REJECTED.FIN_UETR_DUPLICATE};
+  return before.registered_journal_id?booked(form):HELD;
+ }
+ // A peer bank's credit transfer taken on the listening port (src/fin-peer.mjs), the FinTerminal specification v3's
+ // receive_ip2ip_pacs008 - "Auto-parses incoming credits, validates XSD, and returns pacs.002 (ACSC)" while ROBOTIC STP is active:
+ // booked at once as one registered by hand, on the bank's NOSTRO at that peer (its connector's clearing account) and on AVISPay
+ // PLC's account its creditor's IBAN names, in the transaction that keeps the message and the bank's answer. Under MANUAL
+ // INTERVENTION it is held for the operator, ACTC (review finding: the switch decides). One the bank cannot book is answered RJCT
+ // with the reason, nothing kept; the same transfer again is answered as before.
+ async receiveIncoming(client,peer,input){
+  let form;try{form=this.#form(input);}catch{return {status:'RJCT',...REJECTED.FIN_INCOMING_INVALID};}
+  // One delivery of a transfer at a time: the same transfer delivered twice at once is answered the second time as the first was
+  // (review finding).
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended('avis_core_v2:fin-incoming:'||$1,0))",[form.uetr]);
+  const before=await this.#replay(client,peer,form);if(before)return before;
+  const xml=buildFinMessage(form);
+  if(fieldProblems(form).length||!(await validateFinMessage(xml)).valid)return {status:'RJCT',...REJECTED.FIN_INCOMING_INVALID};
+  const account=(await client.query(BOOKING+' AND b.abiq_iban=$2 AND a.currency_code=$3 ORDER BY a.account_id LIMIT 1',[RECEIVING_OWNERS,form.creditorIban,form.currency])).rows[0];
+  if(!account)return {status:'RJCT',...REJECTED.FIN_BOOKING_ACCOUNT};
+  const robotic=(await client.query('SELECT robotic_stp FROM avis_core_v2.fin_terminal_mode WHERE mode_id=1')).rows[0]?.robotic_stp===true;
+  await client.query('SAVEPOINT fin_incoming');
+  try{
+   const actor={id:'listener:'+peer.profile_id},selection={bookingAccountId:account.account_id,nostroAccountId:peer.cash_account_id,tokenWalletId:null};
+   if(robotic)await this.#book(client,actor,{form,xml,selection});else await this.#hold(client,actor,{form,xml,selection});
+   await client.query('RELEASE SAVEPOINT fin_incoming');
+   return robotic?booked(form):HELD;
+  }catch(error){
+   await client.query('ROLLBACK TO SAVEPOINT fin_incoming');
+   const code=error.code==='23505'?'FIN_UETR_DUPLICATE':error.code;
+   if(!Object.hasOwn(REJECTED,code))throw error;
+   return {status:'RJCT',...REJECTED[code]};
+  }
  }
 }

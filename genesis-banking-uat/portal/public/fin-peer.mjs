@@ -15,7 +15,7 @@ const REASONS={NOT_ISO20022:'not an admi.004 or admi.002 message',SCHEMA:'it doe
  OTHER_EVENT:'not an answer to the message sent',OTHER_MESSAGE:'it refers to another message'};
 // Why a peer's own message was not taken; the bank answered it with a message reject saying so.
 const TAKEN={NOT_ISO20022:'not an ISO 20022 message',SCHEMA:'it does not pass its official schema',HEADER:'its header names other banks or another message',
- OTHER_EVENT:'another event than INIT, HBT or END'};
+ OTHER_EVENT:'another event than INIT, HBT or END',BATCH:'more than one credit transfer in one message'};
 const untaken=message=>message.error==='NOT_SUPPORTED'?'a '+message.type+' message is not taken on this connection':TAKEN[message.error]||message.error||'';
 // The stream is looked at again every few seconds while it is shown: another operator's messages come in too.
 const LOOK=5;
@@ -25,15 +25,18 @@ const failure=code=>{const http=/^BANK_HTTP_(\d{3})$/.exec(code||'');return http
 const duration=seconds=>[Math.floor(seconds/3600),Math.floor(seconds%3600/60),Math.floor(seconds%60)].map(part=>String(part).padStart(2,'0')).join(':');
 export function streamLine(message){
  const when='['+clock(message.at)+']',text=message.text?['·',message.text]:[],seq='(Seq #'+String(message.sequence).padStart(6,'0')+')';
- // What the bank sent: its own message, or its answer to a peer's message - the same event, or a refusal with its reason.
+ // What the bank sent: its own message, or its answer to a peer's message - the same event, a refusal with its reason, or a
+ // transfer's status (pacs.002: ACSC, or RJCT with its reason code).
  if(message.direction==='OUT'){
-  const answer=Boolean(message.answerTo),refusal=message.type==='admi.002.001.01';
-  return ['>>>',when,...(answer?['ANSWER']:[]),refusal?'REJECT':EVENTS[message.event]||message.event,SENT[message.status]||message.status,seq,
+  const answer=Boolean(message.answerTo),refusal=message.type==='admi.002.001.01',status=message.type==='pacs.002.001.10';
+  return ['>>>',when,...(answer?['ANSWER']:[]),refusal?'REJECT':status?['pacs.002',message.event,...message.parameters.slice(1)].join(' '):EVENTS[message.event]||message.event,
+   SENT[message.status]||message.status,seq,
    ...(message.status==='FAILED'?['·',failure(message.error)]:[]),...(message.status==='DELIVERED'&&!answer&&!message.answered?['· no answer message']:[]),
    ...(refusal?['·',message.event]:[]),...text].join(' ');
  }
- // A peer's own message on the listening port.
- if(!message.answerTo)return message.status==='RECEIVED'?['<<<',when,'PEER',EVENTS[message.event]||message.event,'RECEIVED',seq,...text].join(' ')
+ // A peer's own message on the listening port: a session event, or a credit transfer as the specification's stream writes it,
+ // "RECEIVED <amount> -> <settlement>".
+ if(!message.answerTo)return message.status==='RECEIVED'?['<<<',when,'PEER',...(message.type==='pacs.008.001.08'?['pacs.008']:[EVENTS[message.event]||message.event,'RECEIVED']),seq,...text].join(' ')
   :['<<<',when,'PEER MESSAGE NOT READ',seq,'·',untaken(message)].join(' ');
  // What the peer said: its event, or its refusal with the message it names. Said, but not of the message sent, it does not count.
  const said=message.type==='admi.002.001.01'?[message.type,message.event,...text,...(message.parameters[0]?['(ref '+message.parameters[0]+')']:[])]

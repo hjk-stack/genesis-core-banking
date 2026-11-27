@@ -11,7 +11,7 @@ import {PGlite} from '@electric-sql/pglite';
 import pg from 'pg';
 import {migrate} from '../src/migrate.mjs';
 import {AccountManagement} from '../src/account-management.mjs';
-import {FinPeers,buildSessionMessage,readPeerAnswer} from '../src/fin-peer.mjs';
+import {FinPeers,buildSessionMessage,readPeerAnswer,buildPaymentStatus} from '../src/fin-peer.mjs';
 import {FinListener} from '../src/fin-listener.mjs';
 import {ABIQ_ISSUER} from '../src/avispay-core-accounts.mjs';
 import {connectorCredentials,frame} from '../src/payment-transport.mjs';
@@ -159,8 +159,13 @@ test('refused before any message is read: an address not whitelisted, no certifi
 test('a message the bank does not take is refused with a message reject naming it, and the reason',async()=>{
  await peers.addAddress(admin,'EXAMPLE_PEER_A',{address:'127.0.0.1'});await listener.open(admin,{minutes:15});
  const other=fromPeer('INIT',{id:'PEERMSGOTHER'}).replace('<EvtCd>INIT</EvtCd>','<EvtCd>XYZ</EvtCd>');
+ // A credit transfer is taken (step 1c) when it comes from the peer to the bank: this one is the bank's own, to the peer. A payment
+ // status is not taken.
+ const ours=exampleForm(),status=buildPaymentStatus({localBic:PEER_A,peerBic:BANK,businessMessageId:'PEERSTATUS0001',at:new Date(),original:'PEERMSG0001',
+  endToEndId:'NOTPROVIDED',uetr:randomUUID(),status:'ACSC'});
  for(const [message,reason,reference] of [['HELLO','NOT_ISO20022','NONE'],[fromPeer('INIT',{from:'OTHRDEFFXXX',id:'PEERMSGHEADER'}),'HEADER','PEERMSGHEADER'],
-  [fromPeer('INIT').replace('<EvtCd>INIT</EvtCd>','<EvtCd>TOOLONG</EvtCd>'),'SCHEMA','NONE'],[other,'OTHER_EVENT','PEERMSGOTHER'],[buildFinMessage(exampleForm()),'NOT_SUPPORTED','NONE']]){
+  [fromPeer('INIT').replace('<EvtCd>INIT</EvtCd>','<EvtCd>TOOLONG</EvtCd>'),'SCHEMA','NONE'],[other,'OTHER_EVENT','PEERMSGOTHER'],[buildFinMessage(ours),'HEADER',ours.businessMessageId],
+  [status,'NOT_SUPPORTED','NONE']]){
   const {answers}=await exchange([message]);
   const read=await readPeerAnswer(answers[0],{localBic:PEER_A,peerBic:BANK,event:'INIT',businessMessageId:reference});
   assert.deepEqual([read.status,read.type,read.code],['NAK','admi.002.001.01',reason],reason);
@@ -169,7 +174,7 @@ test('a message the bank does not take is refused with a message reject naming i
   assert.deepEqual([answer.direction,answer.status,answer.message_type,answer.event_code,answer.event_parameters],['OUT','DELIVERED','admi.002.001.01',reason,[reference]]);
   assert.equal((await peers.messages(admin,'EXAMPLE_PEER_A')).link.state,'NO_SESSION');
  }
- assert.equal((await rows()).at(-2).message_type,'pacs.008.001.08');
+ assert.deepEqual((await rows()).slice(-4).filter(row=>row.direction==='IN').map(row=>row.message_type),['pacs.008.001.08','pacs.002.001.10']);
  await listener.close(admin);
 });
 
