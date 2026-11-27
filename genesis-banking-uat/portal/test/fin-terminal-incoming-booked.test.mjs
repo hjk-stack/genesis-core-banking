@@ -61,4 +61,11 @@ test('an incoming transfer registered on the suspense before migration 057 is bo
   ['1250000.00','1250000.00','0.00','0.00']);
  const journal=(await pool.query('SELECT event_type,reference_id,actor_id FROM avis_core_v2.ledger_journals WHERE idempotency_key=$1',['fin-incoming-booked:'+form.uetr])).rows[0];
  assert.deepEqual(journal,{event_type:'FIN_INCOMING_BOOKED',reference_id:form.businessMessageId,actor_id:'migration:057'});
+ // Its draft points to the journal that booked it, as one registered from now on does, and is kept as it is; the journal that
+ // registered it on the suspense stays in the ledger (review finding).
+ const draft=(await pool.query(`SELECT j.idempotency_key,j.event_type FROM avis_core_v2.fin_terminal_drafts d
+  JOIN avis_core_v2.ledger_journals j ON j.journal_id=d.registered_journal_id WHERE d.uetr=$1`,[form.uetr])).rows[0];
+ assert.deepEqual(draft,{idempotency_key:'fin-incoming-booked:'+form.uetr,event_type:'FIN_INCOMING_BOOKED'});
+ assert.equal((await pool.query('SELECT event_type FROM avis_core_v2.ledger_journals WHERE idempotency_key=$1',['fin-incoming:'+form.uetr])).rows[0].event_type,'FIN_INCOMING_REGISTERED');
+ await assert.rejects(pool.query('UPDATE avis_core_v2.fin_terminal_drafts SET revision=revision+1 WHERE uetr=$1',[form.uetr]),/FIN_DRAFT_REGISTERED/);
 });
