@@ -79,20 +79,53 @@ test('the terminal window is never larger than two thirds of any screen',()=>{
  assert.equal(finTerminalWindowFeatures(),'popup=yes,width=960,height=600,left=240,top=150');
 });
 
+// The bank's pages and its terminal talk over a channel of the browser's (Node's own here, let go after each test).
+const channels=new Set();
+class Channel extends BroadcastChannel{constructor(name){super(name);channels.add(this);}close(){channels.delete(this);super.close();}}
+const letChannelsGo=()=>{for(const channel of [...channels])channel.close();};
+const settle=()=>new Promise(resolve=>setTimeout(resolve,50));
 async function terminalPage(session){
  const html=await readFile(new URL('../public/fin-terminal.html',import.meta.url),'utf8');
- const dom=new JSDOM(html,{url:'https://bank.example/fin-terminal'}),asked=[];
- const fetcher=async(...args)=>{asked.push(args);return session===null?{ok:false,status:401,json:async()=>({})}:{ok:true,json:async()=>session};};
- const terminal=await startFinTerminal({root:dom.window.document,fetcher});
- return {dom,doc:dom.window.document,asked,terminal};
+ const dom=new JSDOM(html,{url:'https://bank.example/fin-terminal'}),asked=[],state={session,closed:0};
+ const fetcher=async(...args)=>{asked.push(args);return state.session===null?{ok:false,status:401,json:async()=>({})}:{ok:true,json:async()=>state.session};};
+ const windowApi={BroadcastChannel:Channel,addEventListener:(...args)=>dom.window.addEventListener(...args),close(){state.closed++;}};
+ const terminal=await startFinTerminal({root:dom.window.document,fetcher,windowApi});
+ return {dom,doc:dom.window.document,asked,terminal,state,hidden:()=>dom.window.document.querySelector('[data-fin-terminal]').hidden,close(){letChannelsGo();dom.window.close();}};
 }
 
 test('the terminal shows itself to a signed-in bank administrator only',async()=>{
  for(const [session,shown] of [[{admin:true,username:'operator'},true],[{admin:false,username:'customer'},false],[null,false]]){
   const t=await terminalPage(session);try{
    assert.equal(t.asked[0][0],'/api/session');assert.equal(t.asked[0][1].credentials,'same-origin');
-   assert.equal(t.doc.querySelector('[data-fin-terminal]').hidden,!shown);
-  }finally{t.dom.window.close();}
+   assert.equal(t.hidden(),!shown);
+   // Never shown: nothing to close.
+   assert.equal(t.state.closed,0);
+  }finally{t.close();}
+ }
+});
+
+test('a terminal the bank page lost its handle on with a reload closes when the bank signs out (Codex review finding, P2)',async()=>{
+ const t=await terminalPage({admin:true});try{
+  // The bank page reloaded: a new switch with no handle on the open terminal.
+  const page=new JSDOM('<!doctype html><body><div id="view">'+finTerminalControls()+'</div></body>',{url:'https://bank.example/#payments'});
+  const controller=createFinTerminalSwitch({root:page.window.document,windowApi:{BroadcastChannel:Channel,screen,open:assert.fail,setInterval:assert.fail,clearInterval(){}}});
+  controller.bind(page.window.document.querySelector('#view'));
+  // Signed in again with the reload: the terminal checks and stays as it is.
+  controller.close();await settle();
+  assert.equal(t.hidden(),false);assert.equal(t.state.closed,0);
+  // Signed out (the session ended first): the terminal closes.
+  t.state.session=null;controller.close();await settle();
+  assert.equal(t.hidden(),true);assert.equal(t.state.closed,1);
+  page.window.close();
+ }finally{t.close();}
+});
+
+test('a workspace changed to a customer, or a sign-in ended while the terminal was in the background, closes the terminal when it comes forward',async()=>{
+ for(const session of [{admin:false,username:'customer workspace'},null]){
+  const t=await terminalPage({admin:true});try{
+   t.state.session=session;t.dom.window.dispatchEvent(new t.dom.window.Event('focus'));await settle();
+   assert.equal(t.hidden(),true);assert.equal(t.state.closed,1);
+  }finally{t.close();}
  }
 });
 
@@ -106,7 +139,7 @@ test('the terminal has its two screens, the FIN composer first, chosen by a clic
   tabs[0].dispatchEvent(new t.dom.window.KeyboardEvent('keydown',{key:'End',bubbles:true}));assert.deepEqual(screens.map(screen=>screen.hidden),[true,false]);
   // Only what is real: no connection or peer is shown before the connector exists.
   assert.doesNotMatch(t.doc.body.textContent,/CONNECTED|mTLS|Peer IP|ACK/i);
- }finally{t.dom.window.close();}
+ }finally{t.close();}
 });
 
 test('the bank serves the terminal window, its program and its style from its own address under its own policy',async()=>{

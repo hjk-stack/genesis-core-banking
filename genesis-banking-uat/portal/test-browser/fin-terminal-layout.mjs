@@ -6,7 +6,7 @@ import {chromium} from 'playwright';
 
 // Requested by the bank owner: "That must be a further SWITCH to be opened in the payments in sovereign admin", the
 // FinTerminal ISO 20022 in its own window, "Dark blue and orange is OK".
-let server,browser,base;
+let server,browser,base,signedIn=true;
 before(async()=>{
  const appHtml=await readFile(new URL('../index.html',import.meta.url),'utf8');
  server=http.createServer(async(req,res)=>{
@@ -14,8 +14,11 @@ before(async()=>{
   res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; frame-src 'self' blob:; frame-ancestors 'none'");
   if(path==='/admin'){res.setHeader('content-type','text/html');return res.end(appHtml);}
   if(path==='/fin-terminal'){res.setHeader('content-type','text/html');return res.end(await readFile(new URL('../public/fin-terminal.html',import.meta.url)));}
-  if(path==='/api/session'){res.setHeader('content-type','application/json');return res.end(JSON.stringify({admin:true,canSwitchWorkspace:false,username:'Fixture operator',csrf:'fixture-csrf'}));}
-  if(path==='/api/logout'||path.startsWith('/api/views/')){res.setHeader('content-type','application/json');return res.end(JSON.stringify(path==='/api/logout'?{}:{rows:[]}));}
+  res.setHeader('content-type','application/json');
+  if(path==='/api/session'){if(!signedIn){res.statusCode=401;return res.end(JSON.stringify({code:'UNAUTHORIZED'}));}return res.end(JSON.stringify({admin:true,canSwitchWorkspace:false,username:'Fixture operator',csrf:'fixture-csrf'}));}
+  if(path==='/api/logout'){signedIn=false;return res.end('{}');}
+  if(path.startsWith('/api/views/'))return res.end(JSON.stringify({rows:[]}));
+  res.removeHeader('content-type');
   if(/^\/[a-z][a-z0-9-]*\.(mjs|css)$/.test(path)){
    try{res.setHeader('content-type',path.endsWith('.css')?'text/css':'text/javascript');return res.end(await readFile(new URL('../public'+path,import.meta.url)));}catch{res.writeHead(404);return res.end();}
   }
@@ -28,7 +31,7 @@ before(async()=>{
 after(async()=>{await browser?.close();await new Promise(resolve=>server?.close(resolve));});
 
 for(const width of [390,1440])test('the Payments switch opens the FinTerminal in its own window, dark blue with orange, at '+width+'px',async()=>{
- const context=await browser.newContext({viewport:{width,height:1000}}),page=await context.newPage(),errors=[];
+ signedIn=true;const context=await browser.newContext({viewport:{width,height:1000}}),page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push(error.message));context.on('page',tab=>tab.on('pageerror',error=>errors.push(error.message)));
  try{
   await page.goto(base+'/admin#payments');
@@ -56,5 +59,19 @@ for(const width of [390,1440])test('the Payments switch opens the FinTerminal in
   const [again]=await Promise.all([context.waitForEvent('page'),button.click()]);await again.waitForURL(base+'/fin-terminal');await again.close();
   await page.waitForFunction(()=>document.querySelector('[data-fin-terminal-switch]')?.dataset.state==='CLOSED');
   assert.deepEqual(errors,[]);
+ }finally{await context.close();}
+});
+
+test('a terminal open while its bank page is reloaded stays as it is, and closes when the bank signs out (Codex review finding, P2)',async()=>{
+ signedIn=true;const context=await browser.newContext({viewport:{width:1440,height:1000}}),page=await context.newPage(),errors=[];
+ page.on('pageerror',error=>errors.push(error.message));
+ try{
+  await page.goto(base+'/admin#payments');const button=page.locator('[data-fin-terminal-switch]');await button.waitFor();
+  const [terminal]=await Promise.all([context.waitForEvent('page'),button.click()]);await terminal.locator('[data-fin-terminal]').waitFor();
+  await page.reload();await page.locator('[data-fin-terminal-switch]').waitFor();
+  // The reloaded page has no handle on the terminal; the terminal checked its sign-in and stays.
+  await page.waitForTimeout(300);assert.equal(terminal.isClosed(),false);assert.equal(await terminal.locator('[data-fin-terminal]').isVisible(),true);
+  await Promise.all([terminal.waitForEvent('close',{timeout:5000}),page.locator('#signout').click()]);
+  await page.locator('#signin').waitFor({state:'visible'});assert.deepEqual(errors,[]);
  }finally{await context.close();}
 });

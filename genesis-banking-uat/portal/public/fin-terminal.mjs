@@ -1,3 +1,5 @@
+import {FIN_TERMINAL_CHANNEL} from './fin-terminal-switch.mjs';
+
 // The FinTerminal window opened by its switch on the Payments page (fin-terminal-switch.mjs). It shares the bank's sign-in
 // and shows itself to a signed-in bank administrator only; its address opened by anyone else stays empty.
 export async function administrator(fetcher=fetch){
@@ -5,7 +7,7 @@ export async function administrator(fetcher=fetch){
  catch{return false;}
 }
 
-export async function startFinTerminal({root=document,fetcher=fetch}={}){
+export async function startFinTerminal({root=document,fetcher=fetch,windowApi=root.defaultView}={}){
  const terminal=root.querySelector('[data-fin-terminal]'),tabs=[...root.querySelectorAll('[data-fin-screen-tab]')];
  const show=name=>{
   for(const tab of tabs){const on=tab.dataset.finScreenTab===name;tab.setAttribute('aria-selected',String(on));tab.tabIndex=on?0:-1;}
@@ -19,8 +21,19 @@ export async function startFinTerminal({root=document,fetcher=fetch}={}){
    show(tabs[at].dataset.finScreenTab);tabs[at].focus();
   };
  }
- terminal.hidden=!(await administrator(fetcher));
- return {show};
+ // Its sign-in is checked again whenever the bank signs in, out or changes workspace (fin-terminal-switch.mjs announces it,
+ // from any of its pages) and whenever the terminal comes forward; a terminal whose administrator sign-in has ended closes.
+ let checks=0,shown=false;
+ async function check(){
+  const serial=++checks,admitted=await administrator(fetcher);if(serial!==checks)return;
+  terminal.hidden=!admitted;
+  if(admitted){shown=true;return;}
+  if(shown)try{windowApi.close();}catch{}
+ }
+ try{const channel=new windowApi.BroadcastChannel(FIN_TERMINAL_CHANNEL);channel.onmessage=({data})=>{if(data?.type==='session-changed')void check();};}catch{}
+ windowApi.addEventListener('focus',()=>void check());
+ await check();
+ return {show,check};
 }
 
 if(typeof document!=='undefined'&&document.querySelector('[data-fin-terminal]'))void startFinTerminal();

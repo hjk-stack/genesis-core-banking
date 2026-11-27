@@ -3,6 +3,7 @@
 // this bank (/fin-terminal) sharing its sign-in.
 export const FIN_TERMINAL_PATH='/fin-terminal';
 export const FIN_TERMINAL_WINDOW='avis-fin-terminal';
+export const FIN_TERMINAL_CHANNEL='avis-fin-terminal-session';
 
 export function finTerminalControls(){
  return '<section class="panel ip-admin-controls fin-terminal-controls" data-fin-terminal-controls aria-label="FinTerminal administrator controls">'+
@@ -49,7 +50,10 @@ export function createFinTerminalSwitch({root=document,windowApi=root.defaultVie
   if(isOpen())watch();
   paint();
  }
- // Signing out or changing the workspace closes the terminal with the session it was opened in.
- function close(){shut();error('');}
+ // Signing out or changing the workspace closes the terminal with the session it was opened in. A terminal this page lost
+ // its handle on with a reload is told as well: it checks its sign-in again and closes once that has ended (Codex review
+ // finding, P2).
+ function announce(){try{const channel=new windowApi.BroadcastChannel(FIN_TERMINAL_CHANNEL);channel.postMessage({type:'session-changed'});channel.close();}catch{}}
+ function close(){shut();error('');announce();}
  return {bind,close};
 }
