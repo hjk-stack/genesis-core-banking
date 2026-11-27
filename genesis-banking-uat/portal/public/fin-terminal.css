@@ -1,9 +1,9 @@
 /* FinTerminal ISO 20022: the specification's dark blue with orange, as the bank owner approved ("Dark blue and orange is OK"). */
-:root{color-scheme:dark;--fin-ground:#0a1220;--fin-panel:#101b2e;--fin-line:#1f2d45;--fin-text:#e6edf7;--fin-muted:#8fa0b8;--fin-orange:#f59f0b}
+:root{color-scheme:dark;--fin-ground:#0a1220;--fin-panel:#101b2e;--fin-line:#1f2d45;--fin-text:#e6edf7;--fin-muted:#8fa0b8;--fin-orange:#f59f0b;--fin-right:#34d399;--fin-wrong:#f87171}
 *{box-sizing:border-box}
 html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-text);font:14px/1.45 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
 [hidden]{display:none!important}
-.fin-terminal{display:flex;flex-direction:column;min-height:100vh}
+.fin-terminal{display:flex;flex-direction:column;height:100vh}
 .fin-terminal-bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px 24px;padding:12px 18px;background:var(--fin-panel);border-bottom:1px solid var(--fin-line)}
 .fin-terminal-bar h1{margin:0;font-size:16px;font-weight:650;letter-spacing:.01em;white-space:nowrap}
 .fin-terminal-screens{display:flex;gap:6px;min-width:0;overflow-x:auto;scrollbar-width:none}
@@ -11,5 +11,47 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
 .fin-terminal-screens button:hover{color:var(--fin-text)}
 .fin-terminal-screens button[aria-selected=true]{border-color:var(--fin-orange);color:var(--fin-orange);background:rgba(245,159,11,.08)}
 .fin-terminal-screens button:focus-visible{outline:2px solid var(--fin-orange);outline-offset:2px}
-.fin-terminal-screen{flex:1;margin:16px;border:1px solid var(--fin-line);border-radius:10px;background:var(--fin-panel)}
+.fin-terminal-screen{flex:1;min-height:0;margin:16px;border:1px solid var(--fin-line);border-radius:10px;background:var(--fin-panel)}
 @media(max-width:640px){.fin-terminal-bar{padding:10px 12px}.fin-terminal-screen{margin:10px}}
+/* Screen 1, the composer: the form on the left, its XML on the right, the actions under both - the specification's picture. */
+.fin-composer{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr);grid-template-rows:minmax(0,1fr) auto;gap:12px;margin:12px;border:0;background:none;overflow:hidden}
+.fin-form{grid-column:1;grid-row:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:12px;padding-right:2px}
+.fin-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:12px}
+.fin-panel{display:grid;gap:7px;align-content:start;min-width:0;margin:0;padding:8px 12px 12px;border:1px solid var(--fin-line);border-radius:8px;background:var(--fin-panel)}
+.fin-panel legend{padding:0 4px;font-size:13px;font-weight:650}
+.fin-panel-wide{grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));column-gap:16px}
+.fin-panel label{display:grid;grid-template-columns:minmax(96px,38%) minmax(0,1fr);align-items:center;gap:8px;font-size:12.5px;color:var(--fin-muted)}
+.fin-composer input,.fin-composer select,.fin-composer textarea{width:100%;min-width:0;padding:6px 8px;border:1px solid var(--fin-line);border-radius:6px;background:var(--fin-ground);color:var(--fin-text);font:inherit;font-size:13px}
+.fin-composer input:focus,.fin-composer select:focus,.fin-composer textarea:focus{outline:none;border-color:var(--fin-orange);box-shadow:0 0 0 1px var(--fin-orange)}
+.fin-composer [aria-invalid=true]{border-color:var(--fin-wrong);box-shadow:0 0 0 1px var(--fin-wrong)}
+.fin-composer input[readonly]{color:var(--fin-muted)}
+.fin-composer .fin-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.fin-with-button,.fin-pair{display:flex;gap:6px;min-width:0}
+.fin-pair input{flex:1}
+.fin-with-button button{flex:0 0 32px;border:1px solid var(--fin-line);border-radius:6px;background:none;color:var(--fin-orange);font:inherit;font-size:15px;cursor:pointer}
+.fin-panel textarea{min-height:64px;resize:vertical}
+.fin-xml{grid-column:2;grid-row:1;display:flex;flex-direction:column;gap:8px;min-height:0;min-width:0;padding:10px 12px;border:1px solid var(--fin-line);border-radius:8px;background:var(--fin-panel)}
+.fin-xml h2{margin:0;font-size:13px;font-weight:650;color:var(--fin-orange)}
+.fin-xml textarea{flex:1;min-height:240px;resize:none;overflow:auto;white-space:pre;font-size:12px;line-height:1.5;color:#cfe0f5;tab-size:2}
+.fin-status{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;margin:0;font-size:12px;color:var(--fin-muted)}
+[data-fin-xsd]{font-weight:650}
+[data-fin-xsd][data-state=passed]{color:var(--fin-right)}
+[data-fin-xsd][data-state=failed],[data-fin-xsd][data-state=broken],[data-fin-xsd][data-state=error]{color:var(--fin-wrong)}
+.fin-errors{max-height:140px;overflow:auto;margin:0;padding:0 0 0 18px;font-size:12px;color:var(--fin-wrong)}
+.fin-actions{grid-column:1/-1;grid-row:2;display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px}
+.fin-drafts{display:flex;flex:1 1 260px;align-items:center;gap:8px;max-width:480px;min-width:0;margin-right:auto;font-size:12.5px;color:var(--fin-muted)}
+.fin-actions button{padding:8px 14px;border:1px solid var(--fin-line);border-radius:7px;background:var(--fin-panel);color:var(--fin-text);font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.fin-actions button:hover{border-color:var(--fin-orange)}
+.fin-actions .fin-primary{border-color:var(--fin-orange);background:var(--fin-orange);color:#1a1205}
+.fin-composer button:disabled,.fin-composer select:disabled{opacity:.55;cursor:progress}
+.fin-composer button:focus-visible{outline:2px solid var(--fin-orange);outline-offset:2px}
+/* A phone or a narrow window: one column, the page scrolls, the actions stay at hand. */
+@media(max-width:900px){
+ .fin-terminal{height:auto;min-height:100vh}
+ .fin-composer{grid-template-columns:minmax(0,1fr);grid-template-rows:none;overflow:visible}
+ .fin-form,.fin-xml,.fin-actions{grid-column:1;grid-row:auto}
+ .fin-form{overflow:visible}
+ .fin-xml textarea{flex:none;height:360px}
+ .fin-actions{position:sticky;bottom:0;padding:10px 0;background:var(--fin-ground)}
+}
+@media(max-width:480px){.fin-panel label{grid-template-columns:minmax(0,1fr);gap:3px}.fin-drafts{flex-basis:100%;max-width:none}}
