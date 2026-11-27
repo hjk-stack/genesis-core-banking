@@ -7,6 +7,7 @@ import {PGlite} from '@electric-sql/pglite';
 import pg from 'pg';
 import {migrate} from '../src/migrate.mjs';
 import {WorkstationAdmission} from '../src/workstation-admission.mjs';
+import {FinAccess} from '../src/fin-access.mjs';
 import {createBankServer} from '../server.mjs';
 import {createFinAccess} from '../public/fin-access.mjs';
 
@@ -119,6 +120,15 @@ test('4-Eyes starts off and only the owner switches it, the switch showing the o
  assert.deepEqual((await pool.query("SELECT operation FROM avis_core_v2.operation_audit WHERE operation LIKE 'FIN_FOUR_EYES%' ORDER BY audit_id")).rows.map(row=>row.operation),['FIN_FOUR_EYES_ON','FIN_FOUR_EYES_OFF']);
 });
 
+// Review finding: the switch and its audit line go together - a switch that cannot be audited does not switch.
+test('a 4-Eyes switch that cannot be audited does not switch',async()=>{
+ const refuseAudit=query=>(text,...rest)=>/operation_audit/.test(String(text))?Promise.reject(new Error('audit refused')):query(text,...rest);
+ const failing={query:refuseAudit((...args)=>pool.query(...args)),connect:async()=>{const client=await pool.connect();return {...client,query:refuseAudit((...args)=>client.query(...args))};}};
+ const before=(await new FinAccess(pool).state(owner)).fourEyes;
+ await assert.rejects(new FinAccess(failing).fourEyes(admin,owner,{on:!before.on}),/audit refused/);
+ assert.deepEqual((await new FinAccess(pool).state(owner)).fourEyes,before);
+});
+
 test('avis.land\'s admission answer names the administrator and their FinTerminal access; anything else is dropped',async()=>{
  const grant={principal:'portal:officer',deviceId:'device-example',approvalId:randomUUID(),generation:randomUUID(),expiresAt:new Date(Date.now()+600000).toISOString(),statusCapability:'example.capability'};
  const answering=body=>new WorkstationAdmission(pool,{fetcher:async()=>({ok:true,redirected:false,headers:{get:()=>null},body:[Buffer.from(JSON.stringify(body))]})});
@@ -130,6 +140,11 @@ test('avis.land\'s admission answer names the administrator and their FinTermina
  assert.equal((await answering(status).active(grant)).finTerminal,false);
  assert.equal((await answering({...status,finTerminal:true}).active(grant)).finTerminal,false);
  assert.equal((await answering({...status,finTerminal:'true',name:'Example Officer'}).active(grant)).finTerminal,false);
+ // Only spaces are no name (review finding); spaces around a name are not kept.
+ for(const name of ['   ','\u00a0\t '])assert.equal((await answering({...status,finTerminal:true,name}).active(grant)).finTerminal,false);
+ assert.deepEqual(await answering({...status,finTerminal:true,name:'  Example Officer ',finTerminalAdministrators:[{name:'  '},{name:' Example Owner ',owner:true}]}).active(grant),
+  {principal:'portal:officer',name:'Example Officer',owner:false,finTerminal:true,administrators:[{name:'Example Owner',owner:true}]});
+ await assert.rejects(new FinAccess(pool).state({...officer,name:'  '}),e=>e.code==='FIN_TERMINAL_ACCESS');
  await assert.rejects(answering({...status,active:false,finTerminal:true,name:'Example Officer'}).active(grant),e=>e.code==='BANK_WORKSTATION_REQUIRED');
 });
 

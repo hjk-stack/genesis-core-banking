@@ -20,12 +20,13 @@ const bindFields=['principal','deviceId','approvalId','generation'];
 const sameBinding=(a,b)=>object(a)&&object(b)&&bindFields.every(key=>a[key]===b[key]);
 // The person avis.land knows behind an admission, for the FinTerminal (src/fin-access.mjs): their name, whether they are the owner,
 // whether the owner gave them FinTerminal access in avis.land's User access management, and everyone who has it, by name.
-const named=value=>typeof value==='string'&&value.length>0&&[...value].length<=80&&!/[\x00-\x1f\x7f]/.test(value);
+// A name is a name only with something in it besides spaces (review finding).
+const nameOf=value=>{const name=typeof value==='string'?value.trim():'';return name&&[...name].length<=80&&!/[\x00-\x1f\x7f]/.test(name)?name:'';};
 function person(current,grant){
  const administrators=(Array.isArray(current.finTerminalAdministrators)?current.finTerminalAdministrators:[])
-  .filter(entry=>object(entry)&&named(entry.name)).slice(0,40).map(entry=>({name:entry.name,owner:entry.owner===true}));
- return {principal:grant.principal,name:named(current.name)?current.name:'',owner:current.owner===true,
-  finTerminal:current.finTerminal===true&&named(current.name),administrators};
+  .filter(entry=>object(entry)&&nameOf(entry.name)).slice(0,40).map(entry=>({name:nameOf(entry.name),owner:entry.owner===true}));
+ const name=nameOf(current.name);
+ return {principal:grant.principal,name,owner:current.owner===true,finTerminal:current.finTerminal===true&&Boolean(name),administrators};
 }
 
 // Reject duplicate cookies instead of allowing parser order to select authority.

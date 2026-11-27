@@ -8,7 +8,7 @@ import {migrate} from '../src/migrate.mjs';
 import {AccountManagement} from '../src/account-management.mjs';
 import {cryptoLedgerAccount} from '../src/crypto/rolling-ledger.mjs';
 import {createBankServer} from '../server.mjs';
-import {exampleForm} from '../test/helpers/fin-example.mjs';
+import {exampleForm,finTerminalOwner} from '../test/helpers/fin-example.mjs';
 
 // Requested by the bank owner with the FinTerminal ISO 20022 specification, screen 1 "FIN - ISO 20022 Composer", in the
 // dark blue and orange they approved; checked on a phone (also in the two-thirds window the Payments switch opens there),
@@ -28,7 +28,7 @@ before(async()=>{
  nostro=await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example NOSTRO',bic:'EXMPCHZZXXX',accountNumber:'NOSTRO-EXAMPLE-1',currency:'EUR'},randomUUID());
  const holder=(await bank.openCustomer(admin,{fullName:'Example Holder',accountType:'PERSONAL',currencies:['EUR']},randomUUID())).userId;
  wallet=await cryptoLedgerAccount(pool,{userId:holder,currency:'USDC',network:'ETHEREUM'});await cryptoLedgerAccount(pool,{userId:holder,currency:'AG',network:'ETHEREUM'});
- server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false});
+ server=createBankServer({pool,authenticate:async()=>admin,finTerminalAccess:async()=>finTerminalOwner,secureCookies:false});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base='http://127.0.0.1:'+server.address().port;
  browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
  await mkdir(new URL('../test-results/',import.meta.url),{recursive:true});

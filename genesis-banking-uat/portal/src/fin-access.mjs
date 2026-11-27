@@ -24,7 +24,7 @@ export class FinAccess {
  constructor(pool){this.pool=pool;}
 
  // Only an administrator given FinTerminal access - avis.land's answer for this sign-in.
- person(person){if(person?.finTerminal!==true||typeof person.name!=='string'||!person.name||typeof person.principal!=='string')fault('FIN_TERMINAL_ACCESS',null,403);return person;}
+ person(person){if(person?.finTerminal!==true||typeof person.name!=='string'||!person.name.trim()||typeof person.principal!=='string')fault('FIN_TERMINAL_ACCESS',null,403);return person;}
 
  async state(person){
   const you=this.person(person);
@@ -75,8 +75,16 @@ export class FinAccess {
   const who=this.person(person);
   if(who.owner!==true)fault('FIN_FOUR_EYES',null,403);
   if(typeof body?.on!=='boolean')fault('INVALID_FIELD','on');
-  await this.pool.query('UPDATE avis_core_v2.fin_terminal_mode SET four_eyes=$1,four_eyes_changed_by=$2,four_eyes_changed_at=now() WHERE mode_id=1',[body.on,who.name]);
-  await this.pool.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),body.on?'FIN_FOUR_EYES_ON':'FIN_FOUR_EYES_OFF','4-Eyes']);
+  // The switch and its audit line together (review finding): two switches at once are taken one after the other, and a switch
+  // that cannot be audited does not switch.
+  const client=await this.pool.connect();
+  try{
+   await client.query('BEGIN');
+   await client.query('UPDATE avis_core_v2.fin_terminal_mode SET four_eyes=$1,four_eyes_changed_by=$2,four_eyes_changed_at=now() WHERE mode_id=1',[body.on,who.name]);
+   await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),body.on?'FIN_FOUR_EYES_ON':'FIN_FOUR_EYES_OFF','4-Eyes']);
+   await client.query('COMMIT');
+  }catch(failure){await client.query('ROLLBACK').catch(()=>{});throw failure;}
+  finally{client.release?.();}
   return this.state(who);
  }
 }
