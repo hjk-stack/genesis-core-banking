@@ -239,6 +239,37 @@ test('Accounts: a Common or Suspense account and a NOSTRO account write the mess
  }finally{page.close();}
 });
 
+// The bank owner: "We now register an incoming transfer so AVISPay PLC is the receiver".
+test('Incoming: the chosen account is the creditor and the NOSTRO\'s bank the sender (INGA); registered, the transfer is kept as it is',async()=>{
+ const page=await composer();try{
+  const select=name=>page.$('[data-fin-choice="'+name+'"]'),turn=page.$('[data-fin-direction]'),register=page.$('[data-fin-register]'),save=page.$('[data-fin-save]');
+  const values=names=>names.map(name=>page.field(name).value);
+  await until(()=>select('bookingAccountId').options.length>1,'the accounts');
+  assert.deepEqual([turn.value,register.hidden],['OUTGOING',true]);
+  page.fill(exampleForm());page.pick('bookingAccountId',commonEur.id);page.pick('nostroAccountId',nostroEur.id);
+  const account=(await new FinTerminal(pool).accounts(admin)).bookingAccounts.find(item=>item.accountId===commonEur.id);
+  // Turned to incoming, the chosen accounts go to the other side; what they wrote as the debtor's is emptied for the sender's own.
+  turn.value='INCOMING';turn.dispatchEvent(new page.dom.window.Event('change',{bubbles:true}));
+  assert.equal(register.hidden,false);
+  assert.deepEqual(values(['creditorName','creditorIban','creditorAgentBic','receiverBic']),[account.institution,account.iban,account.bic,account.bic]);
+  assert.deepEqual(values(['senderBic','settlement','settlementAccount']),['EXMPCHZZXXX','INGA','NOSTRO-EXAMPLE-1']);
+  assert.deepEqual(values(['debtorName','debtorIban','debtorAgentBic']),['','','']);
+  assert.deepEqual([select('bookingAccountId').value,select('nostroAccountId').value],[commonEur.id,nostroEur.id]);
+  page.fill({debtorName:'Example Debtor GmbH',debtorIban:exampleForm().debtorIban,debtorAgentBic:'EXMPDEFFXXX'});
+  await page.press('[data-fin-register]');
+  assert.deepEqual([page.state(),page.verdict()],['Incoming registered · awaiting NOSTRO statement','XSD: PASSED']);
+  assert.deepEqual([register.hidden,save.hidden,turn.disabled],[true,true,true]);
+  const list=page.$('[data-fin-drafts]'),draftId=list.value;
+  assert.match(list.selectedOptions[0].textContent,/^XSD ✓ · Incoming registered · 1250000\.00 EUR · Example Debtor GmbH · /);
+  // A new message is outgoing again; the registered transfer opens as it was kept.
+  await page.press('[data-fin-new]');
+  assert.deepEqual([turn.value,turn.disabled,register.hidden,save.hidden],['OUTGOING',false,true,false]);
+  await page.choose(draftId);
+  assert.deepEqual([turn.value,page.state(),register.hidden,save.hidden],['INCOMING','Incoming registered · awaiting NOSTRO statement',true,true]);
+  assert.deepEqual(values(['creditorIban','senderBic','settlement']),[account.iban,'EXMPCHZZXXX','INGA']);
+ }finally{page.close();}
+});
+
 test('the bank serves the composer\'s programs from its own address under its own policy',async()=>{
  for(const file of ['fin-composer.mjs','fin-message.mjs']){
   const response=await fetch(base+'/'+file);assert.equal(response.status,200,file);assert.match(response.headers.get('content-type'),/^text\/javascript/);

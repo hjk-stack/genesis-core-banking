@@ -24,6 +24,7 @@
 <div class="fin-row">
 <fieldset class="fin-panel"><legend>Business Application Header (head.001.001.02)</legend>
 <label><span>Message Type</span><select data-fin-field="messageType"><option value="pacs.008.001.08">pacs.008.001.08 – FI-to-FI Customer Credit Transfer</option></select></label>
+<label><span>Direction</span><select data-fin-direction><option value="OUTGOING">Outgoing</option><option value="INCOMING">Incoming</option></select></label>
 <label><span>Sender BIC</span><input class="fin-code" data-fin-field="senderBic" maxlength="11" spellcheck="false"></label>
 <label><span>Receiver BIC</span><input class="fin-code" data-fin-field="receiverBic" maxlength="11" spellcheck="false"></label>
 <label><span>Auto-generated UETR</span><span class="fin-with-button"><input class="fin-code" data-fin-field="uetr" readonly spellcheck="false"><button type="button" data-fin-new-uetr aria-label="New UETR" title="New UETR">↻</button></span></label>
@@ -88,6 +89,7 @@
 <button type="button" data-fin-new>New</button>
 <button type="button" data-fin-save>Save Draft</button>
 <button type="button" class="fin-primary" data-fin-validate>Validate XML</button>
+<button type="button" class="fin-primary" data-fin-register hidden>Register incoming</button>
 </footer>
 </section>
 <section class="fin-terminal-screen" role="tabpanel" id="fin-screen-ip" aria-labelledby="fin-tab-ip" data-fin-screen="ip" hidden></section>
