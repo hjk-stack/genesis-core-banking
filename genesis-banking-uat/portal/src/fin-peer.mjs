@@ -119,10 +119,13 @@ export async function readPeerMessage(xml,{localBic,peerBic,own=[]}){
  if(header?!sameBank(header.Fr?.FIId?.FinInstnId?.BICFI,peerBic)||!bank||header.MsgDefIdr!==type:type===PACS008)
   return {status:'UNREAD',type,businessMessageId:header?.BizMsgIdr||null,reason:'HEADER',to:bank};
  if(type===PACS008){
+  // One credit transfer per message (review finding: a batch's other transfers would go unanswered).
+  const credit=message.Document.FIToFICstmrCdtTrf;
+  if(Array.isArray(credit.CdtTrfTxInf)||credit.GrpHdr.NbOfTxs!=='1')return {status:'UNREAD',type,businessMessageId:header.BizMsgIdr||null,reason:'BATCH',to:bank};
   // Its status answer names it by its own message id (GrpHdr MsgId), which the header's need not repeat.
   const {form}=readFinMessage(xml,ServerDOMParser);
   return {status:'RECEIVED',type,businessMessageId:header.BizMsgIdr,code:null,parameters:[form.uetr],text:'RECEIVED '+form.amount+' '+form.currency,to:bank,transfer:form,
-   original:message.Document.FIToFICstmrCdtTrf.GrpHdr.MsgId};
+   original:credit.GrpHdr.MsgId};
  }
  // The bank answers as the peer named it: by the connector's BIC or by its ABIQ code.
  const notified=message.Document.SysEvtNtfctn.EvtInf;
@@ -134,7 +137,8 @@ export async function readPeerMessage(xml,{localBic,peerBic,own=[]}){
 const ANSWERS={INIT:'WELCOME ACCEPTED // SESSION READY',HEARTBEAT:'HEARTBEAT ACCEPTED',END:'SESSION CLOSED'};
 const REFUSALS={NOT_ISO20022:'Not an ISO 20022 message.',SCHEMA:'The message does not pass its official schema.',
  HEADER:'The business application header names other banks or another message.',OTHER_EVENT:'Session events taken: INIT, HBT and END.',
- NOT_SUPPORTED:'Only system event notifications (admi.004.001.02) and credit transfers (pacs.008.001.08) are taken on this connection.'};
+ NOT_SUPPORTED:'Only system event notifications (admi.004.001.02) and credit transfers (pacs.008.001.08) are taken on this connection.',
+ BATCH:'One credit transfer per message is taken (NbOfTxs 1).'};
 
 // The IP addresses a peer bank connects from, whitelisted for the listening port: single addresses, an IPv4 one as itself.
 export const plainAddress=value=>{const text=String(value??'').trim(),mapped=/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(text);return mapped?mapped[1]:text.toLowerCase();};
@@ -292,7 +296,7 @@ export class FinPeers{
      xml:buildReject({...head,reference:read.businessMessageId||'NONE',reason:read.reason,description:REFUSALS[read.reason]})};
    if(!(await passes(answer.xml,answer.type)))fault('FIN_MESSAGE_INVALID');
    // As the specification's stream writes it: "RECEIVED <amount> -> <settlement>".
-   const text=settled?read.text+' -> '+(settled.status==='ACSC'?settled.text:'RJCT '+settled.reason):read.text;
+   const text=settled?read.text+' -> '+(settled.status==='RJCT'?'RJCT '+settled.reason:settled.text):read.text;
    await client.query(`INSERT INTO avis_core_v2.fin_terminal_peer_messages(message_id,profile_id,direction,message_type,business_message_id,event_code,event_parameters,event_text,status,error_code,content)
     VALUES($1,$2,'IN',$3,$4,$5,$6,$7,$8,$9,$10)`,[messageId,peer.profile_id,read.type||null,read.businessMessageId||null,read.code||null,read.parameters||[],text||null,read.status,read.reason||null,received]);
    await client.query(`INSERT INTO avis_core_v2.fin_terminal_peer_messages(message_id,profile_id,direction,answer_to,message_type,business_message_id,event_code,event_parameters,event_text,status,content,created_by)
