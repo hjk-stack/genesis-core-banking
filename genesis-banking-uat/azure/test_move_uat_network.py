@@ -6,8 +6,10 @@ import itertools
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -113,6 +115,8 @@ class FakeAzure:
         self.pull = pull
         self.databases = {'genesis-fineract-uat-example': firewall, 'genesis-banking-pg-example': False}
         self.fail, self.calls, self.puts, self.network = fail or set(), [], [], {}
+        # True: an az that keeps a value given as @file as it is, instead of reading the file.
+        self.literal = False
 
     @staticmethod
     def error(code):
@@ -145,6 +149,18 @@ class FakeAzure:
             return None
         if args[:3] == ('containerapp', 'hostname', 'bind'):
             return None
+        if args[:3] in (('containerapp', 'secret', 'set'), ('containerapp', 'secret', 'remove')):
+            store = self.secrets[args[args.index('-n') + 1]]
+            if args[2] == 'remove':
+                store[:] = [item for item in store if item['name'] != args[args.index('--secret-names') + 1]]
+                return None
+            name, value = args[args.index('--secrets') + 1].split('=', 1)
+            if value.startswith('@') and not self.literal:
+                self.secret_file, self.secret_mode = value[1:], stat.S_IMODE(os.stat(value[1:]).st_mode)
+                with open(value[1:]) as handle:
+                    value = handle.read().rstrip('\n')
+            store[:] = [item for item in store if item['name'] != name] + [{'name': name, 'value': value}]
+            return [{'name': item['name']} for item in store]
         raise AssertionError('unexpected az call: ' + repr(args))
 
     def net(self, args):
@@ -220,7 +236,7 @@ class FakeAzure:
         raise AssertionError('unexpected Azure call: ' + method + ' ' + path)
 
     def writes(self):
-        return [call for call in self.calls if call[0] != 'rest' and any(word in call for word in ('create', 'update', 'delete', 'add', 'bind'))
+        return [call for call in self.calls if call[0] != 'rest' and any(word in call for word in ('create', 'update', 'delete', 'add', 'bind', 'set', 'remove'))
                 or call[0] == 'rest' and call[2] in ('put', 'delete', 'patch')]
 
 
@@ -473,6 +489,65 @@ class MoveTests(unittest.TestCase):
         self.assertEqual(bind[bind.index('--validation-method') + 1], 'HTTP')
         self.assertEqual([move.apex(name) for name in ('avis.exchange', 'example.co.uk', 'banking.avis.exchange', 'bank.example.co.uk', 'bank.avispay.online')],
                          [True, True, False, False, False])
+
+    def test_listener_needs_the_moved_bank_under_its_own_name(self):
+        azure = FakeAzure()
+        self.assertIn('FAILED: The bank app is not in the new environment yet: run apply first.', self.run_move('listener', azure, expect_exit=True))
+        self.run_move('apply', azure)
+        self.assertIn('FAILED: bank.avispay.online is not bound to the bank app yet: bind it first.', self.run_move('listener', azure, expect_exit=True))
+        self.assertFalse([call for call in azure.calls if call[:2] == ('containerapp', 'secret')])
+
+    def test_listener_makes_the_certificate_of_8443_once_into_the_bank_s_secret_and_never_shows_its_key(self):
+        # The bank owner: "First register the 8443 ports", then "lets just register a new environment".
+        azure = FakeAzure()
+        self.run_move('apply', azure)
+        self.run_move('bind', azure, hostname='bank.avispay.online')
+        text = self.run_move('listener', azure)
+        sets = [call for call in azure.calls if call[:3] == ('containerapp', 'secret', 'set')]
+        self.assertEqual([call[3:8] for call in sets], [('-g', move.RG, '-n', move.BANK, '--secrets')])
+        # The value comes from a private file, never from the command line, and the file is gone after.
+        self.assertTrue(sets[0][8].startswith('avis-connector-listener=@'))
+        self.assertEqual(azure.secret_mode, 0o600)
+        self.assertFalse(os.path.exists(os.path.dirname(azure.secret_file)))
+        made = json.loads(next(item['value'] for item in azure.secrets[move.BANK] if item['name'] == 'avis-connector-listener'))
+        self.assertIn('-----BEGIN PRIVATE KEY-----', made['key'])
+        # Nothing in the output is encoded but the public certificate: no form of the key can be there.
+        self.assertNotIn('PRIVATE KEY', text)
+        self.assertEqual(re.findall(r'[A-Za-z0-9+/=]{40,}', text.replace(made['cert'], '')), [])
+        # A certificate for bank.avispay.online that a TLS server takes with its key; its public part and fingerprint are
+        # in the run's summary for the peer banks.
+        facts = subprocess.run(['openssl', 'x509', '-noout', '-fingerprint', '-sha256', '-ext', 'subjectAltName,basicConstraints'],
+                               input=made['cert'], capture_output=True, text=True, check=True).stdout
+        self.assertIn('DNS:bank.avispay.online', facts)
+        self.assertIn('CA:FALSE', facts)
+        fingerprint = facts.split('Fingerprint=')[1].split()[0]
+        self.assertIn('Made: the certificate of port 8443, CN = bank.avispay.online, valid to ', text)
+        self.assertIn('SHA-256 ' + fingerprint + '.', text)
+        self.assertIn('```\n' + made['cert'] + '```', text)
+        for name in ('cert', 'key'):
+            Path(self.tmp, name + '.pem').write_text(made[name])
+        move.ssl.SSLContext(move.ssl.PROTOCOL_TLS_SERVER).load_cert_chain(str(Path(self.tmp, 'cert.pem')), str(Path(self.tmp, 'key.pem')))
+        # Run again: the certificate peer banks trust is never replaced, only shown again.
+        before = len(azure.calls)
+        text = self.run_move('listener', azure)
+        self.assertFalse([call for call in azure.calls[before:] if call[:2] == ('containerapp', 'secret')])
+        self.assertIn('The certificate of port 8443 is in place already (CN = bank.avispay.online, valid to ', text)
+        self.assertIn('SHA-256 ' + fingerprint + '): nothing changed.', text)
+        self.assertIn('```\n' + made['cert'] + '```', text)
+
+    def test_a_listener_certificate_that_did_not_arrive_as_made_is_taken_out_and_another_secret_is_left_alone(self):
+        azure = FakeAzure()
+        self.run_move('apply', azure)
+        self.run_move('bind', azure, hostname='bank.avispay.online')
+        azure.literal = True
+        self.assertIn('FAILED: The certificate of port 8443 did not arrive in Azure as made; it was taken out again.',
+                      self.run_move('listener', azure, expect_exit=True))
+        self.assertNotIn('avis-connector-listener', [item['name'] for item in azure.secrets[move.BANK]])
+        azure.secrets[move.BANK].append({'name': 'avis-connector-listener', 'value': 'example-not-a-certificate'})
+        before = len(azure.calls)
+        self.assertIn('FAILED: The secret avis-connector-listener is on the bank app but holds no listening certificate: nothing changed.',
+                      self.run_move('listener', azure, expect_exit=True))
+        self.assertFalse([call for call in azure.calls[before:] if call[:2] == ('containerapp', 'secret')])
 
     def test_an_azure_error_shows_its_codes_never_the_command_or_the_answer(self):
         error = move.AzureError(('containerapp', 'secret', 'set', '-g', 'rg', '--secrets', 'name=example-stripe-key-value'),

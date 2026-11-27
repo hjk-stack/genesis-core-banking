@@ -7,15 +7,17 @@ name: GENESIS banking test server network (port 8443)
 #   apply - makes the network, its fixed outgoing address and the environment, moves the apps and opens 8443, and
 #           gives the DNS records ChatGPT sets for each custom domain (the bank owner: "ChatGPT does the DNS").
 #   bind  - binds a custom domain (hostname) to the moved bank app once its DNS points there.
+#   listener - makes the certificate port 8443 shows to peer banks, once, straight into the bank app's secret
+#           avis-connector-listener (never shown); the next bank deploy binds it as AVIS_CONNECTOR_LISTENER.
 on:
   pull_request:
     paths: ['genesis-banking-uat/azure/move-uat-network.py', 'genesis-banking-uat/azure/test_move_uat_network.py', '.github/workflows/uat-network.yml']
   workflow_dispatch:
     inputs:
       mode:
-        description: 'plan = read and report only; apply = make the network and move the test server; bind = bind a custom domain to the moved bank app'
+        description: 'plan = read and report only; apply = make the network and move the test server; bind = bind a custom domain to the moved bank app; listener = make the certificate of port 8443, once'
         type: choice
-        options: [plan, apply, bind]
+        options: [plan, apply, bind, listener]
         default: plan
       hostname:
         description: 'bind only: the custom domain whose DNS points to the moved bank app'

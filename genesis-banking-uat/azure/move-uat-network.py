@@ -16,12 +16,17 @@ DNS").
          each custom domain.
   bind   binds a custom domain to the bank's app in the new environment, with a certificate Azure manages, once its
          DNS points there.
+  listener  makes the certificate port 8443 shows to peer banks, once: its private key goes straight into the bank
+         app's secret avis-connector-listener (the next bank deploy binds it as AVIS_CONNECTOR_LISTENER), its public
+         part into the run's summary for the peer banks.
 
 Secret values are read only to carry them over, and are never printed.
 """
 import json
 import os
 import re
+import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -38,6 +43,12 @@ EGRESS_IP, NAT = 'genesis-banking-uat-egress', 'genesis-banking-uat-nat'
 PROFILE = 'Consumption'
 BANK = 'genesis-banking-uat'
 FIN_PORT = 8443
+# The bank owner: "First register the 8443 ports", then "lets just register a new environment". Azure's managed
+# certificate ends at port 443 and can't be taken out, so port 8443 (passed through to the FinTerminal) shows one of
+# the bank's own, under the bank's name ("The sovereign bank will be now bank.avispay.online").
+LISTENER_SECRET = 'avis-connector-listener'
+LISTENER_HOST = 'bank.avispay.online'
+LISTENER_DAYS = 365
 # An app that pulls its images with an identity of its own gets a new one when it moves, without the old one's right
 # to pull (the plan's finding): it pulls with the test server's own pull identity (deploy-uat.sh) where that one may
 # pull from the registry, or else with the registry login the test server's other apps pull with (deploy-uat.sh's
@@ -107,6 +118,20 @@ def arm(method, path, version, body=None):
 
 def missing(error):
     return bool({'ResourceNotFound', 'NotFound', 'ManagedEnvironmentNotFound', 'ResourceGroupNotFound'} & set(error.codes))
+
+
+def openssl(*args, data=None):
+    result = subprocess.run(['openssl', *args], input=data, capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError('openssl ' + args[0] + ' failed.')
+    return result.stdout
+
+
+def certificate(pem):
+    """A certificate's public facts: whom it is for, its end and its SHA-256 fingerprint."""
+    facts = dict(line.split('=', 1) for line in openssl('x509', '-noout', '-subject', '-enddate', '-fingerprint', '-sha256',
+                                                       data=pem).splitlines() if '=' in line)
+    return facts['subject'] + ', valid to ' + facts['notAfter'] + ', SHA-256 ' + facts['sha256 Fingerprint']
 
 
 def versions():
@@ -236,7 +261,7 @@ def describe(kind, resource):
 
 class Move:
     def __init__(self, mode, out=print):
-        self.mode, self.out, self.report = mode, out, []
+        self.mode, self.out, self.report, self.public = mode, out, [], ''
         self.subscription = az('account', 'show', '--query', 'id')
         self.api = versions()
         self.group = '/subscriptions/' + self.subscription + '/resourceGroups/' + RG
@@ -607,14 +632,66 @@ class Move:
            '--validation-method', 'HTTP' if apex(hostname) else 'CNAME')
         self.say('Bound: https://' + hostname + ' on ' + BANK + ', with a certificate Azure manages.')
 
+    def listener(self):
+        """The certificate port 8443 shows to peer banks, made once for the bank's name: its private key goes from a
+        private folder straight into the bank app's secret (az reads a value given as @file from that file) and is
+        never shown. One already there is never replaced: peer banks trust it."""
+        path, version = self.path('app', BANK), self.version('app')
+        app = arm('get', path, version)
+        new = self.environment(NEW_ENV)
+        if not new or environment_of(app) != new['id'].lower():
+            raise Refused('The bank app is not in the new environment yet: run apply first.')
+        if LISTENER_HOST not in [str(domain.get('name')).lower() for domain in ingress_of(app).get('customDomains') or []]:
+            raise Refused(LISTENER_HOST + ' is not bound to the bank app yet: bind it first.')
+
+        def held():
+            return next((item for item in (arm('post', path + '/listSecrets', version, {}) or {}).get('value') or []
+                         if str(item.get('name')).lower() == LISTENER_SECRET), None)
+        there = held()
+        if there is not None:
+            try:
+                pem = json.loads(there.get('value') or '')['cert']
+                facts = certificate(pem)
+            except (ValueError, KeyError, TypeError, RuntimeError):
+                raise Refused('The secret ' + LISTENER_SECRET + ' is on the bank app but holds no listening certificate: nothing changed.')
+            self.public = pem
+            self.say('The certificate of port ' + str(FIN_PORT) + ' is in place already (' + facts + '): nothing changed.')
+            return
+        folder = tempfile.mkdtemp(prefix='uat-listener-')
+        try:
+            key, cert, value = (os.path.join(folder, name) for name in ('key.pem', 'cert.pem', 'listener.json'))
+            openssl('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-days', str(LISTENER_DAYS),
+                    '-subj', '/CN=' + LISTENER_HOST, '-addext', 'subjectAltName=DNS:' + LISTENER_HOST,
+                    '-addext', 'basicConstraints=critical,CA:FALSE', '-addext', 'keyUsage=critical,digitalSignature',
+                    '-addext', 'extendedKeyUsage=serverAuth,clientAuth', '-keyout', key, '-out', cert)
+            ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(cert, key)
+            with open(cert) as handle:
+                pem = handle.read()
+            with open(key) as handle:
+                made = json.dumps({'cert': pem, 'key': handle.read()}, separators=(',', ':'))
+            with open(os.open(value, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as handle:
+                handle.write(made)
+            az('containerapp', 'secret', 'set', '-g', RG, '-n', BANK, '--secrets', LISTENER_SECRET + '=@' + value)
+        finally:
+            shutil.rmtree(folder)
+        if (held() or {}).get('value') != made:
+            az('containerapp', 'secret', 'remove', '-g', RG, '-n', BANK, '--secret-names', LISTENER_SECRET)
+            raise RuntimeError('The certificate of port ' + str(FIN_PORT) + ' did not arrive in Azure as made; it was taken out again.')
+        self.public = pem
+        self.say('Made: the certificate of port ' + str(FIN_PORT) + ', ' + certificate(pem) + '.')
+        self.say('Its private key went only into the secret ' + LISTENER_SECRET + ' of ' + BANK + '; the next bank deploy binds it as'
+                 ' AVIS_CONNECTOR_LISTENER. Peer banks get the public certificate below.')
+
 
 def main(mode, hostname=''):
-    if mode not in ('plan', 'apply', 'bind'):
-        raise SystemExit('mode must be plan, apply or bind')
+    if mode not in ('plan', 'apply', 'bind', 'listener'):
+        raise SystemExit('mode must be plan, apply, bind or listener')
     move = Move(mode)
     try:
         if mode == 'bind':
             move.bind(hostname.strip().lower())
+        elif mode == 'listener':
+            move.listener()
         else:
             state = move.survey()
             move.plan(state)
@@ -627,7 +704,8 @@ def main(mode, hostname=''):
         summary = os.environ.get('GITHUB_STEP_SUMMARY')
         if summary:
             with open(summary, 'a') as handle:
-                handle.write('### Test server network (' + mode + ')\n\n' + '\n'.join('- ' + line for line in move.report) + '\n')
+                handle.write('### Test server network (' + mode + ')\n\n' + '\n'.join('- ' + line for line in move.report) + '\n'
+                             + ('\n```\n' + move.public + '```\n' if move.public else ''))
 
 
 if __name__ == '__main__':
