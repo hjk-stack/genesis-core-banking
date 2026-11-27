@@ -65,7 +65,29 @@ async function resumeExchange(){
  await render();if(serial!==sessionEpoch||!intent)return;
  try{if(intent.side)await portfolioManager.fromExchange(intent);if(serial===sessionEpoch)exchangeIntent=null;}catch(e){if(serial===sessionEpoch&&location.hash==='#portfolio')pageError(e);}
 }
-$('#login-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,button=form.querySelector('button');button.disabled=true;form.querySelector('.form-error').textContent='';try{signedIn(await api('login',Object.fromEntries(new FormData(form))));form.reset();}catch(err){form.querySelector('.form-error').textContent=err.message;}finally{button.disabled=false;}});
+$('#login-form').addEventListener('submit',async event=>{
+ event.preventDefault();
+ const form=event.currentTarget, button=form.querySelector('button'), message=form.querySelector('.form-error');
+ button.disabled=true;message.textContent='';
+ let image;
+ try{
+  let result=await api('login',Object.fromEntries(new FormData(form)));
+  form.reset();
+  if(result.qr){
+   image=document.createElement('img');image.width=image.height=220;
+   image.alt='Scan this code on your phone to approve this workstation';image.src=result.qr;
+   message.before(image);message.textContent='Scan with your phone to approve this workstation.';
+   const expires=Date.parse(result.expiresAt);
+   do{
+    await new Promise(resolve=>setTimeout(resolve,3000));
+    if(!(Date.now()<expires))throw new Error('The QR code expired. Sign in again.');
+    result=await api('login/mobile',{});
+   }while(result.pending);
+  }
+  message.textContent='';await signedIn(result);
+ }catch(err){message.textContent=err.message;}
+ finally{image?.remove();button.disabled=false;}
+});
 $('#signout').onclick=async()=>{
  const epoch=sessionEpoch;
  try{await api('logout',{});if(epoch===sessionEpoch)signedOut();}
