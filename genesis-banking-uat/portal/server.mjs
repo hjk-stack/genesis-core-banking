@@ -37,6 +37,7 @@ import {FinPeers} from './src/fin-peer.mjs';
 import {FinListener} from './src/fin-listener.mjs';
 
 import {isStaffHost, workstationFingerprint, contactIncubator} from './src/staff-workstation.mjs';
+import {isStaffAccessDocument,sendStaffAccessPage} from './src/staff-access-page.mjs';
 const digest=v=>createHash('sha256').update(v).digest('hex');
 // A session-bound token stays valid across tabs and is renewed at every login.
 // The random HttpOnly session secret cannot be recovered from this digest.
@@ -518,7 +519,9 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
   }catch(e){
    const code=e.code==='23505'?'DUPLICATE_RECORD':['23503','22P02'].includes(e.code)?'INVALID_REFERENCE':messages[e.code]?e.code:messages[e.message]?e.message:'REQUEST_FAILED';
    console.error(JSON.stringify({requestId,code,diagnosticCode:e.code||e.message?.slice(0,100)}));
-   send(res,e.status||(['DUPLICATE_RECORD','IDEMPOTENCY_CONFLICT'].includes(code)?409:code==='REQUEST_FAILED'?500:422),{code,field:e.field,message:messages[code],requestId});
+   const status=e.status||(['DUPLICATE_RECORD','IDEMPOTENCY_CONFLICT'].includes(code)?409:code==='REQUEST_FAILED'?500:422);
+   if(status===403&&code==='BANK_WORKSTATION_REQUIRED'&&isStaffAccessDocument(req))return sendStaffAccessPage(res);
+   send(res,status,{code,field:e.field,message:messages[code],requestId});
   }
  });
  // Expiry is authoritative on each read/write and swept independently so pending

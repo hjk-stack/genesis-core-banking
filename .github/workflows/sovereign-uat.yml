@@ -91,6 +91,7 @@ jobs:
             genesis-banking-uat/portal/test-results/checkout-ip-*.png
             genesis-banking-uat/portal/test-results/nostro-clearing-*.png
             genesis-banking-uat/portal/test-results/nostro-statements-*.png
+            genesis-banking-uat/portal/test-results/bank-access-*.png
           if-no-files-found: ignore
           retention-days: 7
   deploy:
