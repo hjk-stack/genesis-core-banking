@@ -9,8 +9,9 @@ job of the test server move into it under their own names, with their settings a
 and the old environment stay as they are.
 
   plan   reads the test server and says what apply would do; changes nothing.
-  apply  makes the network and the environment, moves the apps one by one - an app that does not come up in the
-         new environment is put back as it was - and opens port 8443 on the bank's app.
+  apply  makes the network and the environment, moves the apps one by one and opens port 8443 on the bank's app.
+         If an app does not come up in the new environment, or the bank does not answer there, everything moved
+         in that run is put back in the old environment as it was.
 
 Secret values are read only to carry them over, and are never printed.
 """
@@ -355,33 +356,48 @@ class Move:
                 and properties.get('runningStatus') not in ('Stopped', 'Suspended')
         return ready
 
-    def carry(self, kind, resource, environment):
+    def carry(self, kind, resource, environment, done):
         """One app or job into the new environment under its own name. Its body for there - and the one to put it
-        back with - is made before anything is deleted; an app that does not come up there is put back as it was."""
+        back with, kept in done - is made before anything is deleted."""
         name, path, version = resource['name'], self.path(kind, resource['name']), self.version(kind)
         secrets = (arm('post', path + '/listSecrets', version, {}) or {}).get('value') or []
         target = body_for(resource, secrets, environment['id'], PROFILE, FIN_PORT if kind == 'app' and name == BANK else None)
         back = body_for(resource, secrets, properties_of(resource).get('environmentId') or properties_of(resource).get('managedEnvironmentId'),
                         properties_of(resource).get('workloadProfileName'))
-        delete = ['containerapp', *(['job'] if kind == 'job' else []), 'delete', '-g', RG, '-n', name, '--yes']
-        az(*delete)
-        try:
-            arm('put', path, version, target)
-            moved = self.settled(path, version, self.running(kind))
-        except Exception as error:
-            self.say('Not moved: ' + kind + ' ' + name + ' (' + str(error) + '); it is put back as it was.')
-            try:
-                az(*delete)
-            except AzureError:
-                pass
-            arm('put', path, version, back)
-            self.settled(path, version, self.running(kind))
-            self.say('Put back: ' + kind + ' ' + name + ' runs in ' + OLD_ENV + ' as before.')
-            raise
+        done.append((kind, name, back))
+        az(*self.delete(kind, name))
+        arm('put', path, version, target)
+        moved = self.settled(path, version, self.running(kind))
         self.say('Moved: ' + kind + ' ' + name + (' at ' + str(ingress_of(moved).get('fqdn')) if ingress_of(moved).get('fqdn') else ''))
         for domain in ingress_of(resource).get('customDomains') or []:
             self.say('Custom domain ' + str(domain.get('name')) + ' on ' + name + ': to be bound again on the new environment.')
         return moved
+
+    @staticmethod
+    def delete(kind, name):
+        return ['containerapp', *(['job'] if kind == 'job' else []), 'delete', '-g', RG, '-n', name, '--yes']
+
+    def restore(self, done):
+        """Everything moved in this run goes back to the old environment as it was, the last first: the apps call one
+        another by their short names (the bank calls http://genesis-fineract-uat), which reach only within one
+        environment (review finding), so the test server is whole again where it was."""
+        failed = []
+        for kind, name, back in reversed(done):
+            path, version = self.path(kind, name), self.version(kind)
+            try:
+                try:
+                    az(*self.delete(kind, name))
+                except AzureError as error:
+                    if not missing(error):
+                        raise
+                arm('put', path, version, back)
+                self.settled(path, version, self.running(kind))
+                self.say('Put back: ' + kind + ' ' + name + ' runs in ' + OLD_ENV + ' as before.')
+            except Exception as error:
+                failed.append(name)
+                self.say('NOT put back: ' + kind + ' ' + name + ' (' + str(error) + ').')
+        if failed:
+            raise RuntimeError('Could not put back: ' + ', '.join(failed) + '.')
 
     def open_port(self, resource):
         """Port 8443 on the bank's app (already there when the app was moved in this run)."""
@@ -417,13 +433,21 @@ class Move:
         self.say('Environment ' + NEW_ENV + ' ready: addresses *.' + str(properties.get('defaultDomain'))
                  + ', incoming address ' + str(properties.get('staticIp')) + ', outgoing address ' + str(egress) + '.')
         bank = next((item for kind, item in state['moved'] if kind == 'app' and item['name'] == BANK), None)
-        for kind, item in state['here']:
-            moved = self.carry(kind, item, environment)
-            if kind == 'app' and item['name'] == BANK:
-                bank = moved
-        bank = self.open_port(bank)
-        self.say('Port ' + str(FIN_PORT) + ' open to the outside on ' + BANK + '.')
-        self.check(bank)
+        done = []
+        try:
+            for kind, item in state['here']:
+                moved = self.carry(kind, item, environment, done)
+                if kind == 'app' and item['name'] == BANK:
+                    bank = moved
+            bank = self.open_port(bank)
+            self.say('Port ' + str(FIN_PORT) + ' open to the outside on ' + BANK + '.')
+            self.check(bank)
+        except Exception as error:
+            # An app that does not come up in the new environment, or a bank that does not answer there: all that
+            # moved in this run goes back.
+            self.say('Not moved (' + str(error) + '): what moved in this run goes back as it was.')
+            self.restore(done)
+            raise
         self.say('The old environment ' + OLD_ENV + ' stays, empty, until the owner says to delete it.')
 
 

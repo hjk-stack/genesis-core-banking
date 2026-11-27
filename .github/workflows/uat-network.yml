@@ -17,6 +17,11 @@ on:
         default: plan
 permissions:
   contents: read
+# A run that changes the test server never runs together with its maintenance (uat-stack.yml, the same group;
+# review finding), nor with a bank deploy (the move job's own group below).
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && 'genesis-banking-uat' || format('uat-network-{0}', github.ref) }}
+  cancel-in-progress: false
 jobs:
   verify:
     runs-on: ubuntu-24.04
@@ -29,7 +34,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    # Never while the bank app is being deployed.
+    # Never while the bank app is being deployed (sovereign-uat.yml's deploy, the same group).
     concurrency:
       group: avispay-existing-uat-application
       cancel-in-progress: false

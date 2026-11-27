@@ -288,21 +288,46 @@ class MoveTests(unittest.TestCase):
         self.assertIn('Moved already: app ' + move.BANK, again)
         self.assertEqual(len(azure.writes()), before + 1, 'only the subnet is set again')
 
-    def test_an_app_that_does_not_come_up_in_the_new_environment_is_put_back_as_it_was_and_the_move_stops(self):
-        azure = FakeAzure(fail={('genesis-fineract-uat', move.NEW_ENV)})
-        text = self.run_move('apply', azure, expect_exit=True)
-        back = azure.puts[-1]
-        self.assertEqual(back[0], 'genesis-fineract-uat')
-        self.assertEqual(back[1]['properties']['environmentId'], ENVS + move.OLD_ENV)
-        self.assertNotIn('workloadProfileName', back[1]['properties'])
-        self.assertEqual(back[1]['properties']['configuration']['secrets'], [{'name': 'db-password', 'value': SECRET_VALUES[0]}])
-        self.assertIn('Not moved: app genesis-fineract-uat (Azure rest failed: InvalidParameterValueInContainerTemplate); it is put back as it was.', text)
-        self.assertIn('Put back: app genesis-fineract-uat runs in genesis-banking-uat-env as before.', text)
-        self.assertEqual(azure.apps['genesis-fineract-uat']['properties']['environmentId'], ENVS + move.OLD_ENV)
-        # The apps after it were not touched.
-        for name in ('genesis-iso-sandbox-uat', 'genesis-mifos-uat', move.BANK):
-            self.assertEqual(azure.apps[name]['properties']['environmentId'], ENVS + move.OLD_ENV)
-        self.assertNotIn('Port 8443 open', text)
+    def test_an_app_that_does_not_come_up_in_the_new_environment_puts_back_all_that_moved_in_the_run(self):
+        # Review finding: the bank calls Fineract by its short name, which reaches only within one environment - the
+        # bank alone put back, with Fineract moved before it, would be cut off. Everything moved in the run goes back.
+        names = ['genesis-fineract-migrate', 'genesis-fineract-uat', 'genesis-iso-sandbox-uat', 'genesis-mifos-uat', move.BANK]
+        for failing in ('genesis-fineract-uat', move.BANK):
+            with self.subTest(failing=failing):
+                azure = FakeAzure(fail={(failing, move.NEW_ENV)})
+                text = self.run_move('apply', azure, expect_exit=True)
+                moved = names[:names.index(failing) + 1]
+                backs = azure.puts[len(moved):]
+                self.assertEqual([name for name, _ in backs], list(reversed(moved)))
+                for name, body in backs:
+                    self.assertEqual(body['properties']['environmentId'], ENVS + move.OLD_ENV)
+                    self.assertNotIn('workloadProfileName', body['properties'])
+                    self.assertIn('Put back: ' + ('job ' if name.endswith('migrate') else 'app ') + name + ' runs in genesis-banking-uat-env as before.', text)
+                self.assertEqual(dict(backs)['genesis-fineract-uat']['properties']['configuration']['secrets'], [{'name': 'db-password', 'value': SECRET_VALUES[0]}])
+                self.assertIn('Not moved (Azure rest failed: InvalidParameterValueInContainerTemplate): what moved in this run goes back as it was.', text)
+                # The whole test server is where it was: every app and the job in the old environment, none in the new.
+                for resource in list(azure.apps.values()) + list(azure.jobs.values()):
+                    self.assertEqual(resource['properties']['environmentId'], ENVS + move.OLD_ENV, resource['name'])
+                self.assertEqual(set(azure.apps) | set(azure.jobs), set(names))
+                self.assertNotIn('Port 8443 open', text)
+
+    def test_a_bank_that_does_not_answer_at_its_new_address_puts_everything_back(self):
+        class Starting(Ready):
+            def read(self, size=-1):
+                return json.dumps({'status': 'starting'}).encode()
+        azure = FakeAzure()
+        with patch.object(move, 'WAIT', 0), patch.object(move.urllib.request, 'urlopen', Starting):
+            output, summary = io.StringIO(), Path(self.tmp) / 'summary.md'
+            with patch.object(move, 'az', azure), patch.object(move.time, 'sleep', lambda seconds: None), \
+                    patch.dict(os.environ, {'GITHUB_STEP_SUMMARY': str(summary)}), contextlib.redirect_stdout(output), self.assertRaises(SystemExit):
+                move.main('apply')
+        text = output.getvalue()
+        self.assertIn('Port 8443 open to the outside on genesis-banking-uat.', text)
+        self.assertIn('Not moved (The bank app did not answer ready at its new address.): what moved in this run goes back as it was.', text)
+        for resource in list(azure.apps.values()) + list(azure.jobs.values()):
+            self.assertEqual(resource['properties']['environmentId'], ENVS + move.OLD_ENV, resource['name'])
+        for value in SECRET_VALUES:
+            self.assertNotIn(value, text)
 
     def test_what_the_move_can_not_carry_over_stops_it_before_any_change(self):
         cases = {
