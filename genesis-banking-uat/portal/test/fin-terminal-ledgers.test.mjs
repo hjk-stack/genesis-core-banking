@@ -1,7 +1,10 @@
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {readFile} from 'node:fs/promises';
+import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {execFileSync} from 'node:child_process';
 import {JSDOM} from 'jsdom';
 import {PGlite} from '@electric-sql/pglite';
 import pg from 'pg';
@@ -10,6 +13,7 @@ import {AccountManagement} from '../src/account-management.mjs';
 import {SovereignCore} from '../src/core.mjs';
 import {cryptoLedgerAccount} from '../src/crypto/rolling-ledger.mjs';
 import {FinTerminal} from '../src/fin-terminal.mjs';
+import {FinPeers} from '../src/fin-peer.mjs';
 import {createBankServer} from '../server.mjs';
 import {startFinTerminal} from '../public/fin-terminal.mjs';
 import {uptime,balance} from '../public/fin-settlement.mjs';
@@ -20,7 +24,7 @@ import {exampleForm} from './helpers/fin-example.mjs';
 // INTERVENTION switch and the listening port's running time, and Screen B's "Final Settlement Ledgers" - the core banking cash,
 // the NOSTRO correspondent and the bank's own wallets on the chains, each with its balance.
 const admin={id:'fin-ledgers-admin',username:'fin-ledgers',admin:true},guest={id:'guest',admin:false};
-let pool,db,fin,server,base,cookie,csrf,suspense,nostro;
+let pool,db,dir,fin,server,base,cookie,csrf,suspense,nostro;
 before(async()=>{
  if(process.env.TEST_DATABASE_URL){const url=new URL(process.env.TEST_DATABASE_URL);assert.equal(url.pathname,'/avispay_ci');
   pool=new pg.Pool({connectionString:url.href});await pool.query('DROP SCHEMA IF EXISTS avis_core_v2 CASCADE');}
@@ -41,12 +45,21 @@ before(async()=>{
  const wallet=await cryptoLedgerAccount(pool,{userId:holder,currency:'USDC',network:'ETHEREUM'});
  await new SovereignCore(pool).post(pool,admin,'example-deposit:'+randomUUID(),'CRYPTO_WALLET_DEPOSIT','0xexample',
   [{accountId:custody,direction:'DEBIT',amount:'2500.123456'},{accountId:wallet,direction:'CREDIT',amount:'2500.123456'}]);
- server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false});
+ // The bank's listening port with its own certificate (made here for this test), and a peer whitelisted for it.
+ dir=await mkdtemp(join(tmpdir(),'avis-fin-ledgers-'));
+ execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-days','1','-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost,IP:127.0.0.1',
+  '-keyout',join(dir,'bank.key'),'-out',join(dir,'bank.pem')],{stdio:'ignore'});
+ const own={cert:await readFile(join(dir,'bank.pem'),'utf8'),key:await readFile(join(dir,'bank.key'),'utf8')};
+ await bank.registerBankConnector(admin,{profileId:'EXAMPLE_PEER',name:'EXAMPLE-GW',cashAccountId:nostro.id,protocol:'IP_TO_IP',localBic:'EXMPGB2LXXX',peerBic:'EXMPDEFFXXX',
+  endpoint:'tls://localhost:1',credentialReference:'AVIS_CONNECTOR_PEER'},randomUUID());
+ await new FinPeers(pool).addAddress(admin,'EXAMPLE_PEER',{address:'127.0.0.1'});
+ server=createBankServer({pool,authenticate:async()=>admin,secureCookies:false,
+  transferOptions:{finListener:{env:{AVIS_CONNECTOR_LISTENER:JSON.stringify(own)},port:0,host:'127.0.0.1',poll:3600000}}});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base='http://127.0.0.1:'+server.address().port;
  const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:admin.username,password:'fixture'})});
  assert.equal(login.status,200);cookie=login.headers.get('set-cookie').split(';')[0];csrf=(await login.json()).csrf;
 });
-after(async()=>{await new Promise(resolve=>server.close(resolve));if(db)await db.close();else await pool.end();});
+after(async()=>{await new Promise(resolve=>server.close(resolve));if(dir)await rm(dir,{recursive:true,force:true});if(db)await db.close();else await pool.end();});
 
 test('the mode starts manual and only a bank administrator switches it',async()=>{
  assert.equal((await fin.telemetry(admin)).roboticStp,false);
@@ -69,16 +82,19 @@ test('the ledgers: AVISPay PLC\'s account, the NOSTRO and the bank\'s own wallet
  assert.deepEqual([uptime(0),uptime(65),uptime(3600*26+61)],['00:00:00','00:01:05','26:01:01']);
 });
 
-test('over HTTP and in the terminal: the switch, the running port time and the ledgers',async()=>{
+test('over HTTP and in the terminal: the switch, the running port time while the port listens, and the ledgers',async()=>{
  const telemetry=await (await fetch(base+'/api/fin-terminal/telemetry',{headers:{cookie}})).json();
- assert.deepEqual([telemetry.roboticStp,telemetry.listener.open,telemetry.listener.since,telemetry.listener.port],[false,false,null,8443]);
+ // The listener in this test takes any free port; the terminal shows the bank's 8443.
+ assert.deepEqual([telemetry.roboticStp,telemetry.listener.open,telemetry.listener.since,telemetry.listener.port],[false,false,null,0]);
  const post=(body,token=csrf)=>fetch(base+'/api/fin-terminal/mode',{method:'POST',headers:{origin:base,cookie,'content-type':'application/json',...(token?{'x-csrf-token':token}:{})},body:JSON.stringify(body)});
  assert.equal((await post({roboticStp:true},null)).status,403);
  assert.deepEqual(await (await post({roboticStp:true})).json(),{roboticStp:true});
  assert.deepEqual(await (await post({roboticStp:false})).json(),{roboticStp:false});
- // The port opened 65 seconds ago, for a quarter of an hour.
- await pool.query(`INSERT INTO avis_core_v2.fin_terminal_listener(listener_id,open_until,changed_by,changed_at) VALUES(1,now()+interval '14 minutes',$1,now()-interval '65 seconds')
-  ON CONFLICT(listener_id) DO UPDATE SET open_until=EXCLUDED.open_until,changed_at=EXCLUDED.changed_at`,[admin.id]);
+ // The port opened for a quarter of an hour and listening, 65 seconds ago.
+ const listen=open=>fetch(base+'/api/fin-terminal/listener',{method:'POST',headers:{origin:base,cookie,'content-type':'application/json','x-csrf-token':csrf},
+  body:JSON.stringify(open?{open:true,minutes:15}:{open:false})}).then(response=>response.json());
+ assert.deepEqual([(await listen(true)).listening],[true]);
+ await pool.query("UPDATE avis_core_v2.fin_terminal_listener SET changed_at=now()-interval '65 seconds' WHERE listener_id=1");
  const html=await readFile(new URL('../public/fin-terminal.html',import.meta.url),'utf8');
  const dom=new JSDOM(html,{url:base+'/fin-terminal'}),doc=dom.window.document;
  try{
@@ -95,9 +111,14 @@ test('over HTTP and in the terminal: the switch, the running port time and the l
   stp.click();
   await until(()=>stp.dataset.state==='ACTIVE','the switch');
   assert.deepEqual([stp.textContent,stp.getAttribute('aria-pressed'),(await fin.telemetry(admin)).roboticStp],['ROBOTIC STP: ACTIVE','true',true]);
+   stp.click();await until(()=>stp.dataset.state==='LOCKED','the switch back');
   // Closed, the port shows so.
-  await pool.query('UPDATE avis_core_v2.fin_terminal_listener SET open_until=NULL WHERE listener_id=1');
-  stp.click();await until(()=>stp.dataset.state==='LOCKED','the switch back');
+  assert.deepEqual([(await listen(false)).open],[false]);
+  await until(()=>clock.dataset.state==='CLOSED','the port closed');assert.equal(clock.textContent,'○ Port 8443 closed');
+  // A port opened that this server does not listen on is not shown listening (review finding).
+  await pool.query("UPDATE avis_core_v2.fin_terminal_listener SET open_until=now()+interval '10 minutes' WHERE listener_id=1");
+  try{await until(()=>clock.dataset.state==='FAILED','the port not listening');assert.match(clock.textContent,/^○ Port 8443 not listening/);}
+  finally{await pool.query('UPDATE avis_core_v2.fin_terminal_listener SET open_until=NULL WHERE listener_id=1');}
  }finally{dom.window.close();}
  const closed=await (await fetch(base+'/api/fin-terminal/telemetry',{headers:{cookie}})).json();
  assert.deepEqual([closed.listener.open,closed.listener.since],[false,null]);

@@ -15,12 +15,14 @@ export function balance(value,decimals=2){
 export function createFinSettlement({root=document,request,view=root.defaultView||globalThis}){
  const stp=root.querySelector('[data-fin-stp]'),clock=root.querySelector('[data-fin-uptime]');if(!stp||!clock)return null;
  const lists=Object.fromEntries([...root.querySelectorAll('[data-fin-ledger]')].map(list=>[list.dataset.finLedger,list]));
- let robotic=false,since=null,skew=0,port=8443,busy=false,host='';
+ let robotic=false,since=null,skew=0,port=8443,busy=false,host='',failure=null;
  // The terminal's own address, read once: a window being closed has none any more.
  try{host=view.location?.hostname||'';}catch{}
  function paintStp(){stp.dataset.state=robotic?'ACTIVE':'LOCKED';stp.setAttribute('aria-pressed',String(robotic));stp.textContent=robotic?'ROBOTIC STP: ACTIVE':'MANUAL INTERVENTION: LOCKED';}
- // The running time counts on the server's clock, whatever this computer's says.
+ // The running time counts on the server's clock, whatever this computer's says. A port opened that this server could not bind
+ // says so, with why (review finding: it does not listen).
  function paintClock(){
+  if(failure!==null){clock.dataset.state='FAILED';clock.textContent='○ Port '+port+' not listening'+(failure?' · '+failure:'');return;}
   if(since===null){clock.dataset.state='CLOSED';clock.textContent='○ Port '+port+' closed';return;}
   clock.dataset.state='LISTENING';clock.textContent='● AUTO-LISTENING: '+uptime((Date.now()+skew-since)/1000)+' · mTLS 1.3 · '+host+':'+port;
  }
@@ -36,7 +38,8 @@ export function createFinSettlement({root=document,request,view=root.defaultView
  async function refresh(){
   let data;try{data=await request('GET','/api/fin-terminal/telemetry');}catch{return;}
   robotic=data?.roboticStp===true;port=Number(data?.listener?.port)||port;
-  since=data?.listener?.open&&data.listener.since?Date.parse(data.listener.since):null;
+  const listener=data?.listener,open=listener?.open===true,listening=open&&listener.listening===true;
+  since=listening&&listener.since?Date.parse(listener.since):null;failure=open&&!listening?String(listener.error||''):null;
   const server=Date.parse(data?.listener?.now);if(Number.isFinite(server))skew=server-Date.now();
   paintStp();paintClock();paintLedgers(data?.ledgers);
  }
