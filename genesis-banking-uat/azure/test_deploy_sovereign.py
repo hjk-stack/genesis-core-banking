@@ -794,3 +794,64 @@ class FrontendReleaseIntegrityTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'source checksum mismatch: /treasury-source.mjs'):
             deploy.verify_deployed_frontend(Opener(), 'https://example.azurecontainerapps.io', release)
 
+
+
+class PrivateDeskSettingsTests(unittest.TestCase):
+    # The bank owner: "Now activate now the ISO20022 under the new domain" - the staff desk at bank.avispay.online.
+    APP_ID = '/subscriptions/example/resourceGroups/genesis-banking-rg/providers/Microsoft.App/containerApps/genesis-banking-uat'
+
+    def application(self, mode=None, state='Succeeded'):
+        ingress = {'fqdn': 'genesis-banking-uat.example.azurecontainerapps.io', 'targetPort': 8080}
+        if mode:
+            ingress['clientCertificateMode'] = mode
+        return {'id': self.APP_ID, 'properties': {'provisioningState': state, 'configuration': {'ingress': ingress}}}
+
+    def test_ingress_asks_for_client_certificates_before_the_bank_may_read_them(self):
+        calls, shown = [], iter([self.application('accept', 'InProgress'), self.application('accept')])
+        def azure(*args):
+            calls.append(args)
+            return next(shown) if args[:2] == ('containerapp', 'show') else None
+        with patch.object(deploy, 'az', side_effect=azure), patch.object(deploy.time, 'sleep') as sleep, \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            application, env = deploy.private_desk_settings(self.application('ignore'), [])
+        sleep.assert_called_once_with(5)
+        patch_call = calls[0]
+        self.assertEqual(patch_call[:3], ('rest', '--method', 'PATCH'))
+        self.assertEqual(patch_call[patch_call.index('--url') + 1],
+                         'https://management.azure.com' + self.APP_ID + '?api-version=' + deploy.CONTAINER_APPS_API)
+        self.assertEqual(json.loads(patch_call[patch_call.index('--body') + 1]),
+                         {'properties': {'configuration': {'ingress': {'clientCertificateMode': 'accept'}}}})
+        self.assertEqual([call[:2] for call in calls[1:]], [('containerapp', 'show')] * 2)
+        self.assertEqual(application['properties']['configuration']['ingress']['clientCertificateMode'], 'accept')
+        self.assertEqual(env, ['BANK_DESK_MTLS_INGRESS=azure-container-apps'])
+        self.assertIn('Private desk secret bindings: 0 of 2', output.getvalue())
+
+    def test_an_ingress_that_does_not_take_client_certificates_stops_before_the_bank_trusts_the_header(self):
+        shows = []
+        def azure(*args):
+            if args[:2] == ('containerapp', 'show'):
+                shows.append(args)
+                return self.application()
+        with patch.object(deploy, 'az', side_effect=azure), patch.object(deploy.time, 'sleep'), \
+                contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, 'did not take client certificates'):
+                deploy.private_desk_settings(self.application(), [])
+        self.assertEqual(len(shows), 36)
+
+    def test_existing_desk_secrets_are_bound_by_name_without_reading_or_printing_them(self):
+        known = [{'name': 'bank-desk-channel-secret'}, {'name': 'avis-connector-listener'}, {'name': 'avispay-db-password'}]
+        with patch.object(deploy, 'az') as azure, contextlib.redirect_stdout(io.StringIO()) as output:
+            application, env = deploy.private_desk_settings(self.application('accept'), known)
+        azure.assert_not_called()
+        self.assertEqual(application, self.application('accept'))
+        self.assertEqual(env, ['BANK_DESK_MTLS_INGRESS=azure-container-apps',
+                               'BANK_DESK_CHANNEL_SECRET=secretref:bank-desk-channel-secret',
+                               'AVIS_CONNECTOR_LISTENER=secretref:avis-connector-listener'])
+        self.assertIn('Private desk secret bindings: 2 of 2', output.getvalue())
+
+    def test_release_binds_the_desk_and_preserves_the_ingress_as_it_is_after_the_change(self):
+        source = Path(deploy.__file__).read_text()
+        main_body = source[source.index('def main():'):]
+        self.assertLess(main_body.index('known_secrets = az('), main_body.index('private_desk_settings(before, known_secrets)'))
+        self.assertLess(main_body.index('before, desk = private_desk_settings('), main_body.index("stage = 'application update'"))
+        self.assertIn('env += desk', main_body)
