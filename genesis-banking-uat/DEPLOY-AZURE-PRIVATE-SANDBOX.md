@@ -7,7 +7,7 @@ The public `banking.avis.exchange` tile launcher remains unchanged. The Azure Co
 ## Preconditions
 
 - Cloud Shell Bash signed into the intended subscription.
-- Resource group `genesis-banking-rg`, Container Apps environment `genesis-banking-uat-env`, Azure Container Registry `genesisbankingacr` already exist.
+- Resource group `genesis-banking-rg`, Container Apps environment `genesis-banking-uat-net`, Azure Container Registry `genesisbankingacr` already exist.
 - Repo cloned locally, from repository root.
 - Privileged Azure access to build an image, create an app, and assign only the needed `AcrPull` role.
 - No financial data, customer data, production keys, or real payment instructions in this test.
@@ -17,7 +17,7 @@ The public `banking.avis.exchange` tile launcher remains unchanged. The Azure Co
 ```bash
 set -euo pipefail
 RG=genesis-banking-rg
-ENV=genesis-banking-uat-env
+ENV=genesis-banking-uat-net
 ACR=genesisbankingacr
 APP=genesis-iso-sandbox-uat
 IMAGE=genesis-iso-sandbox:uat-1

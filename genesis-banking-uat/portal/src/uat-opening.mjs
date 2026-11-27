@@ -10,7 +10,7 @@ const currencies=['EUR','USD','GBP','CHF'];
 const holders=[{id:'1',name:'AVISPay PLC',role:'INSTITUTION',currencies:['EUR','USD','GBP']},{id:'2',name:'Frontend user',role:'CUSTOMER',currencies:['EUR','USD','GBP']},{id:'3',name:'AVISPay PLC',role:'CUSTOMER',currencies:['CHF']}];
 export async function applyAuthorizedUatOpening(pool,env=process.env){
  if(env.CONTAINER_APP_NAME!=='genesis-banking-uat'||
-    env.CONTAINER_APP_ENV_DNS_SUFFIX!=='orangemushroom-9faae382.italynorth.azurecontainerapps.io'||
+    env.CONTAINER_APP_ENV_DNS_SUFFIX!=='purplepebble-81c147aa.italynorth.azurecontainerapps.io'||
     env.PGDATABASE!=='fineract_default')fault('UAT_OPENING_TARGET_MISMATCH');
  const core=new SovereignCore(pool),request={requestId:OPENING_REQUEST,amount:'1000',currencies,holders};
  return core.operation(actor,'AUTHORIZED_UAT_OPENING',request,OPENING_REQUEST,async(db,k)=>{

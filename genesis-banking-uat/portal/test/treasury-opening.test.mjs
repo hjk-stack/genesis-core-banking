@@ -6,7 +6,7 @@ import {bookTreasuryOpening,readTreasuryOpening,consolidateTreasuryCrypto,verify
 import {CryptoWorkspace} from '../src/crypto-workspace.mjs';
 
 let db,pool;
-const env={CONTAINER_APP_NAME:'genesis-banking-uat',CONTAINER_APP_ENV_DNS_SUFFIX:'orangemushroom-9faae382.italynorth.azurecontainerapps.io',PGDATABASE:'fineract_default'};
+const env={CONTAINER_APP_NAME:'genesis-banking-uat',CONTAINER_APP_ENV_DNS_SUFFIX:'purplepebble-81c147aa.italynorth.azurecontainerapps.io',PGDATABASE:'fineract_default'};
 before(async()=>{db=new PGlite();pool={query:(...args)=>db.query(...args),connect:async()=>({query:(...args)=>db.query(...args),exec:s=>db.exec(s),release(){}})};const c=await pool.connect();await migrate(c);c.release();});
 after(async()=>{await db.close();});
 test('wrong UAT target cannot write positions',async()=>{

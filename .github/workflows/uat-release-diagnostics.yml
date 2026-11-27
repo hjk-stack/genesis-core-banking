@@ -21,13 +21,13 @@ jobs:
         shell: bash
         run: |
           set -u
-          host=genesis-banking-uat.orangemushroom-9faae382.italynorth.azurecontainerapps.io
+          host=genesis-banking-uat.purplepebble-81c147aa.italynorth.azurecontainerapps.io
           echo "### UAT remote release probe" >> "$GITHUB_STEP_SUMMARY"
           echo "Host: $host"
           getent ahosts "$host" || true
           python3 - <<'PY'
           import json, ssl, urllib.error, urllib.request, socket
-          host="genesis-banking-uat.orangemushroom-9faae382.italynorth.azurecontainerapps.io"
+          host="genesis-banking-uat.purplepebble-81c147aa.italynorth.azurecontainerapps.io"
           print("dns start", flush=True)
           try: print("DNS", socket.getaddrinfo(host,443)[0][4], flush=True)
           except Exception as e: print("DNS ERROR",repr(e),flush=True)

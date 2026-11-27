@@ -43,7 +43,7 @@ concurrency:
 env:
   FINERACT_VERSION: '1.15.0'
   RG: genesis-banking-rg
-  ENV_NAME: genesis-banking-uat-env
+  ENV_NAME: genesis-banking-uat-net
   ACR_NAME: genesisbankingacr
   PG_SERVER: genesis-fineract-uat-24a900e4
 

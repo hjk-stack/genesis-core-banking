@@ -14,7 +14,7 @@ export const TREASURY_POSITIONS=Object.freeze([
 const OPERATOR={id:'owner-instruction:helmut:treasury-opening-54',admin:true};
 export async function bookTreasuryOpening(pool,env=process.env){
  if(env.CONTAINER_APP_NAME!=='genesis-banking-uat'||
-    env.CONTAINER_APP_ENV_DNS_SUFFIX!=='orangemushroom-9faae382.italynorth.azurecontainerapps.io'||
+    env.CONTAINER_APP_ENV_DNS_SUFFIX!=='purplepebble-81c147aa.italynorth.azurecontainerapps.io'||
     env.PGDATABASE!=='fineract_default')fault('TREASURY_TARGET_MISMATCH');
  const core=new SovereignCore(pool),input={requestId:TREASURY_REQUEST,ownerUserId:'1',positions:TREASURY_POSITIONS};
  return core.operation(OPERATOR,'TREASURY_OPENING_POSITIONS',input,TREASURY_REQUEST,async db=>{
@@ -51,7 +51,7 @@ export async function bookTreasuryOpening(pool,env=process.env){
 export const TREASURY_WALLET_CONSOLIDATION='avispay-agi-ag-wallet-consolidation-2026-11-16';
 export async function consolidateTreasuryCrypto(pool,env=process.env){
  if(env.CONTAINER_APP_NAME!=='genesis-banking-uat'||
-    env.CONTAINER_APP_ENV_DNS_SUFFIX!=='orangemushroom-9faae382.italynorth.azurecontainerapps.io'||
+    env.CONTAINER_APP_ENV_DNS_SUFFIX!=='purplepebble-81c147aa.italynorth.azurecontainerapps.io'||
     env.PGDATABASE!=='fineract_default')fault('TREASURY_TARGET_MISMATCH');
  const core=new SovereignCore(pool);
  return core.operation(OPERATOR,'TREASURY_CRYPTO_WALLET_CONSOLIDATION',
