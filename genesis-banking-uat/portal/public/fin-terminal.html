@@ -7,6 +7,17 @@
 <button type="button" role="tab" id="fin-tab-ip" aria-controls="fin-screen-ip" aria-selected="false" tabindex="-1" data-fin-screen-tab="ip">2 · Interbank Direct IP-to-IP Composer</button>
 </div></header>
 <section class="fin-terminal-screen fin-composer" role="tabpanel" id="fin-screen-fin" aria-labelledby="fin-tab-fin" data-fin-screen="fin" data-fin-composer>
+<section class="fin-peer" aria-labelledby="fin-peer-title" data-fin-peer>
+<h2 id="fin-peer-title">Peer Server Handshake &amp; Direct IP Interaction — NODE: <span data-fin-peer-node>—</span></h2>
+<p class="fin-peer-link" role="status" data-fin-peer-link data-state="NOT_CONNECTED">Peer link: NOT CONNECTED</p>
+<div class="fin-peer-out">
+<label><span>Peer Server</span><select data-fin-peer-server disabled><option value="">No peer server registered</option></select></label>
+<label><span>Outgoing Welcome / Session Message (Transmitted to Peer Server)</span><textarea class="fin-code" data-fin-peer-text maxlength="1000" rows="3" spellcheck="false"></textarea></label>
+<div class="fin-peer-send"><select data-fin-peer-event aria-label="Session message"><option value="INIT">INIT_SESSION / READY</option><option value="HEARTBEAT">HEARTBEAT</option><option value="END">END_SESSION</option></select><button type="button" data-fin-peer-send disabled>Send to Peer Server</button></div>
+<p class="fin-peer-problem" role="alert" data-fin-peer-problem hidden></p>
+</div>
+<div class="fin-peer-in"><h3 id="fin-peer-stream-title">Peer Server Response / ACK Stream</h3><ol class="fin-code fin-peer-stream" aria-labelledby="fin-peer-stream-title" data-fin-peer-stream></ol></div>
+</section>
 <form class="fin-form" data-fin-form autocomplete="off" novalidate>
 <div class="fin-row">
 <fieldset class="fin-panel"><legend>Business Application Header (head.001.001.02)</legend>

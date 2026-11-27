@@ -14,8 +14,8 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
 .fin-terminal-screen{flex:1;min-height:0;margin:16px;border:1px solid var(--fin-line);border-radius:10px;background:var(--fin-panel)}
 @media(max-width:640px){.fin-terminal-bar{padding:10px 12px}.fin-terminal-screen{margin:10px}}
 /* Screen 1, the composer: the form on the left, its XML on the right, the actions under both - the specification's picture. */
-.fin-composer{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr);grid-template-rows:minmax(0,1fr) auto;gap:12px;margin:12px;border:0;background:none;overflow:hidden}
-.fin-form{grid-column:1;grid-row:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:12px;padding-right:2px}
+.fin-composer{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr);grid-template-rows:auto minmax(0,1fr) auto;gap:12px;margin:12px;border:0;background:none;overflow:hidden}
+.fin-form{grid-column:1;grid-row:2;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:12px;padding-right:2px}
 .fin-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:12px}
 .fin-panel{display:grid;gap:7px;align-content:start;min-width:0;margin:0;padding:8px 12px 12px;border:1px solid var(--fin-line);border-radius:8px;background:var(--fin-panel)}
 .fin-panel legend{padding:0 4px;font-size:13px;font-weight:650}
@@ -30,7 +30,7 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
 .fin-pair input{flex:1}
 .fin-with-button button{flex:0 0 32px;border:1px solid var(--fin-line);border-radius:6px;background:none;color:var(--fin-orange);font:inherit;font-size:15px;cursor:pointer}
 .fin-panel textarea{min-height:64px;resize:vertical}
-.fin-xml{grid-column:2;grid-row:1;display:flex;flex-direction:column;gap:8px;min-height:0;min-width:0;padding:10px 12px;border:1px solid var(--fin-line);border-radius:8px;background:var(--fin-panel)}
+.fin-xml{grid-column:2;grid-row:2;display:flex;flex-direction:column;gap:8px;min-height:0;min-width:0;padding:10px 12px;border:1px solid var(--fin-line);border-radius:8px;background:var(--fin-panel)}
 .fin-xml h2{margin:0;font-size:13px;font-weight:650;color:var(--fin-orange)}
 .fin-xml textarea{flex:1;min-height:240px;resize:none;overflow:auto;white-space:pre;font-size:12px;line-height:1.5;color:#cfe0f5;tab-size:2}
 .fin-status{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;margin:0;font-size:12px;color:var(--fin-muted)}
@@ -38,20 +38,40 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
 [data-fin-xsd][data-state=passed]{color:var(--fin-right)}
 [data-fin-xsd][data-state=failed],[data-fin-xsd][data-state=broken],[data-fin-xsd][data-state=error]{color:var(--fin-wrong)}
 .fin-errors{max-height:140px;overflow:auto;margin:0;padding:0 0 0 18px;font-size:12px;color:var(--fin-wrong)}
-.fin-actions{grid-column:1/-1;grid-row:2;display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px}
+.fin-actions{grid-column:1/-1;grid-row:3;display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px}
 .fin-drafts{display:flex;flex:1 1 260px;align-items:center;gap:8px;max-width:480px;min-width:0;margin-right:auto;font-size:12.5px;color:var(--fin-muted)}
 .fin-actions button{padding:8px 14px;border:1px solid var(--fin-line);border-radius:7px;background:var(--fin-panel);color:var(--fin-text);font:inherit;font-size:13px;font-weight:600;cursor:pointer}
 .fin-actions button:hover{border-color:var(--fin-orange)}
 .fin-actions .fin-primary{border-color:var(--fin-orange);background:var(--fin-orange);color:#1a1205}
 .fin-composer button:disabled,.fin-composer select:disabled{opacity:.55;cursor:progress}
 .fin-composer button:focus-visible{outline:2px solid var(--fin-orange);outline-offset:2px}
+/* Screen A's peer panel above the composer: the session message on the left, the peer server's answers on the right - the
+   specification's picture, its stream green on black as a terminal writes. */
+.fin-peer{grid-column:1/-1;grid-row:1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"title title" "link link" "out in";gap:6px 16px;padding:10px 12px 12px;border:1px solid var(--fin-line);border-radius:8px;background:var(--fin-panel)}
+.fin-peer h2{grid-area:title;margin:0;font-size:13px;font-weight:650;overflow-wrap:anywhere}
+.fin-peer-link{grid-area:link;margin:0;font-size:12px;font-weight:600;color:var(--fin-muted);overflow-wrap:anywhere}
+.fin-peer-link[data-state=READY]{color:var(--fin-right)}
+.fin-peer-link[data-state=REFUSED]{color:var(--fin-wrong)}
+.fin-peer-out{grid-area:out;display:grid;gap:7px;align-content:start;min-width:0}
+.fin-peer-out label{display:grid;gap:4px;font-size:12.5px;color:var(--fin-muted)}
+.fin-peer-out textarea{resize:vertical}
+.fin-peer-send{display:flex;flex-wrap:wrap;gap:8px}
+.fin-composer .fin-peer-send select{flex:1 1 150px;width:auto}
+.fin-peer-send button{flex:1 0 auto;padding:7px 14px;border:1px solid var(--fin-orange);border-radius:7px;background:var(--fin-orange);color:#1a1205;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.fin-peer-problem{margin:0;font-size:12px;color:var(--fin-wrong)}
+.fin-peer-in{grid-area:in;display:flex;flex-direction:column;gap:4px;min-width:0}
+.fin-peer-in h3{margin:0;font-size:12.5px;font-weight:400;color:var(--fin-muted)}
+.fin-peer-stream{flex:1;min-height:110px;max-height:170px;overflow:auto;margin:0;padding:8px 10px;list-style:none;border:1px solid var(--fin-line);border-radius:6px;background:#04080f;color:var(--fin-right);font-size:11.5px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+.fin-peer-stream [data-direction=out]{color:#cfe0f5}
+.fin-peer-stream [data-status=failed],.fin-peer-stream [data-status=uncertain],.fin-peer-stream [data-status=nak],.fin-peer-stream [data-status=unread]{color:var(--fin-wrong)}
 /* A phone or a narrow window: one column, the page scrolls, the actions stay at hand. */
 @media(max-width:900px){
  .fin-terminal{height:auto;min-height:100vh}
  .fin-composer{grid-template-columns:minmax(0,1fr);grid-template-rows:none;overflow:visible}
- .fin-form,.fin-xml,.fin-actions{grid-column:1;grid-row:auto}
+ .fin-peer,.fin-form,.fin-xml,.fin-actions{grid-column:1;grid-row:auto}
  .fin-form{overflow:visible}
  .fin-xml textarea{flex:none;height:360px}
  .fin-actions{position:sticky;bottom:0;padding:10px 0;background:var(--fin-ground)}
 }
+@media(max-width:640px){.fin-peer{grid-template-columns:minmax(0,1fr);grid-template-areas:"title" "link" "out" "in"}}
 @media(max-width:480px){.fin-panel label{grid-template-columns:minmax(0,1fr);gap:3px}.fin-drafts{flex-basis:100%;max-width:none}}
