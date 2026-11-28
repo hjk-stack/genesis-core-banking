@@ -48,13 +48,14 @@ for(const width of [260,390,820,1440])test('the composer on '+(width<500?'a phon
   for(const [name,value] of Object.entries(exampleForm()))if(!['uetr','businessMessageId','createdAt','settlementAccount','mandateId','mandateSignatureDate'].includes(name))await (SELECTS.has(name)?field(name).selectOption(value):field(name).fill(value));
   assert.deepEqual(await page.locator('[data-fin-mandate]').isVisible(),false);
   assert.match(await xml.inputValue(),/<Nm>Example Creditor SARL<\/Nm>/);assert.match(await xml.inputValue(),/<IntrBkSttlmAmt Ccy="EUR">1250000\.00<\/IntrBkSttlmAmt>/);
-  // The accounts: the Common account is the debtor's, the NOSTRO account settles the transfer, the "+" wallet is kept.
+  // The accounts: the Common account is the debtor's, the NOSTRO account settles the transfer - never writing the Receiver BIC (the
+  // bank owner: "the nostro is selected by the currency not by the BIC") - and the "+" wallet is kept.
   const choice=name=>page.locator('[data-fin-choice="'+name+'"]');
   await page.waitForFunction(()=>document.querySelector('[data-fin-choice="tokenWalletId"]').options.length>1);
   assert.deepEqual(await choice('tokenWalletId').locator('option').allTextContents(),['—','Example Holder · USDC · ETHEREUM']);
   await choice('bookingAccountId').selectOption(common.id);await choice('nostroAccountId').selectOption(nostro.id);await choice('tokenWalletId').selectOption(wallet);
   assert.deepEqual([await field('debtorIban').inputValue(),await field('receiverBic').inputValue(),await field('settlement').inputValue(),await field('settlementAccount').inputValue()],
-   [common.abiqIban,'EXMPCHZZXXX','INDA','NOSTRO-EXAMPLE-1']);
+   [common.abiqIban,'SMPLFRPPXXX','INDA','NOSTRO-EXAMPLE-1']);
   // The XML writes the form.
   await xml.fill((await xml.inputValue()).replace('>1250000.00<','>990.50<'));
   await page.waitForFunction(()=>document.querySelector('[data-fin-field="amount"]').value==='990.50');

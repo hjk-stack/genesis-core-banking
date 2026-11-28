@@ -104,7 +104,7 @@ test('a peer server registered with its certificate login: its login only in Key
  const peer=result.peers.find(item=>item.profileId===result.profileId);
  assert.deepEqual(peer,{profileId:result.profileId,name:'Example Peer Bank',protocol:'IP_TO_IP',address:'127.0.0.1:'+tlsServer.address().port,transport:'TLS',
   localBic:OWN_BIC,peerBic:PEER_BIC,currency:null,addresses:['127.0.0.1']});
- // Its bank by its BIC, no NOSTRO: a transfer settles through the NOSTRO chosen with it, or the one its message names.
+ // Its bank by its BIC, no NOSTRO: a transfer settles through the NOSTRO chosen with it, or the bank's in its currency.
  assert.deepEqual((await pool.query('SELECT cash_account_id,peer_bic FROM avis_core_v2.bank_connector_profiles WHERE profile_id=$1',[result.profileId])).rows[0],
   {cash_account_id:null,peer_bic:PEER_BIC});
  // The login went to Key Vault with the bank app's own identity - and nowhere else: the database names it only.

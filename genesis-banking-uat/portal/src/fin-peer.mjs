@@ -304,7 +304,8 @@ export class FinPeers{
  // sender service and first login) the data gets stored in a drop down for reuse". Its bank by its BIC, its type and its address
  // become a connector, its IP address is whitelisted for the listening port, and its login goes to Azure Key Vault only
  // (src/peer-vault.mjs) - first, so that nothing is registered without it. No NOSTRO: the bank owner, "the nostro account is the
- // job of the incoming transfer registration" - a transfer settles through the NOSTRO chosen with it, or the one its message names.
+ // job of the incoming transfer registration" - a transfer settles through the NOSTRO chosen with it; one that arrives is booked on
+ // the bank's NOSTRO in its currency.
  async register(actor,body){
   this.#administrator(actor);
   const name=typeof body?.name==='string'?body.name.trim():'';

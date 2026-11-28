@@ -489,8 +489,12 @@ test('Screen 1\'s Transact: closed until the message passes Validate XML with it
   const offered=(selector,value)=>[...doc.querySelectorAll(selector+' option')].some(option=>option.value===value);
   await until(()=>offered('[data-fin-choice="nostroAccountId"]',nostro.id)&&offered('[data-fin-peer-server]','EXAMPLE_TLS_PEER'),'the accounts and the peer servers');
   assert.deepEqual([transact.hidden,transact.disabled,transact.textContent],[false,true,'Transact']);
-  pick('[data-fin-peer-server]','EXAMPLE_TLS_PEER');pick('[data-fin-choice="bookingAccountId"]',account.accountId);pick('[data-fin-choice="nostroAccountId"]',nostro.id);
-  for(const [name,value] of Object.entries({senderBic:BANK,amount:'40.00',creditorName:'Example Creditor SARL',creditorIban:BENEFICIARY,creditorAgentBic:PEER}))type(name,value);
+  // The NOSTRO in euros is chosen by default (the bank owner: "the nostro is selected by the currency not by the BIC and default we
+  // are using Tunisia"); the Sender and the Receiver BIC are the Peer Server's banks, written as they are.
+  await until(()=>$('[data-fin-choice="nostroAccountId"]').value===nostro.id,'the default NOSTRO');
+  pick('[data-fin-peer-server]','EXAMPLE_TLS_PEER');pick('[data-fin-choice="bookingAccountId"]',account.accountId);
+  assert.deepEqual([field('receiverBic').value,field('settlement').value,field('settlementAccount').value],['','INDA','NOSTRO-EXAMPLE-1']);
+  for(const [name,value] of Object.entries({senderBic:BANK,receiverBic:PEER,amount:'40.00',creditorName:'Example Creditor SARL',creditorIban:BENEFICIARY,creditorAgentBic:PEER}))type(name,value);
   assert.equal(transact.disabled,true,'not before Validate XML');
   $('[data-fin-validate]').click();await until(()=>$('[data-fin-xsd]').textContent==='XSD: PASSED'&&!transact.disabled,'the check');
   // Changed after its check: closed again until it is checked again.
@@ -692,7 +696,7 @@ test('a settled Debit is booked against what it was sent with: its wallet hidden
  }
 });
 
-test('Screen 1\'s Debit: the message type and the mandate go with it, the accounts write the creditor\'s side and the debtor\'s bank; Transact sends it once and the message is closed',async()=>{
+test('Screen 1\'s Debit: the message type and the mandate go with it, the accounts write the creditor\'s side and the clearing through the NOSTRO; Transact sends it once and the message is closed',async()=>{
  const {server,base,cookie}=await signIn(()=>owner),html=await readFile(new URL('../public/fin-terminal.html',import.meta.url),'utf8');
  const dom=new JSDOM(html,{url:base+'/fin-terminal'}),doc=dom.window.document,asked=[];
  try{
@@ -710,8 +714,8 @@ test('Screen 1\'s Debit: the message type and the mandate go with it, the accoun
   pick('[data-fin-direction]','DEBIT');
   assert.deepEqual([field('messageType').value,mandate.hidden,transact.hidden,transact.disabled],['pacs.003.001.08',false,false,true]);
   assert.deepEqual(['debtorName','debtorIban','debtorAgentBic','creditorName','creditorIban','creditorAgentBic','receiverBic','settlement','settlementAccount'].map(name=>field(name).value),
-   ['','','',account.institution,account.iban,account.bic,PEER,'INDA','NOSTRO-EXAMPLE-1']);
-  for(const [name,value] of Object.entries({senderBic:BANK,amount:'25.00',debtorName:'Example Debtor GmbH',debtorIban:DEBTOR,debtorAgentBic:PEER,
+   ['','','',account.institution,account.iban,account.bic,'','INDA','NOSTRO-EXAMPLE-1']);
+  for(const [name,value] of Object.entries({senderBic:BANK,receiverBic:PEER,amount:'25.00',debtorName:'Example Debtor GmbH',debtorIban:DEBTOR,debtorAgentBic:PEER,
    mandateId:'MANDATE-EXAMPLE-0002',mandateSignatureDate:'2026-10-02'}))type(name,value);
   assert.match($('[data-fin-xml]').value,/<FIToFICstmrDrctDbt>[\s\S]*<MndtId>MANDATE-EXAMPLE-0002<\/MndtId>\s*<DtOfSgntr>2026-10-02<\/DtOfSgntr>/);
   $('[data-fin-validate]').click();await until(()=>$('[data-fin-xsd]').textContent==='XSD: PASSED'&&!transact.disabled,'the check');

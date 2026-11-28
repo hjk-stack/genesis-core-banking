@@ -166,7 +166,7 @@ test('under MANUAL INTERVENTION a peer\'s transfer is held for the operator and 
   const [answer]=await exchange([message]);
   assert.deepEqual([value(answer,'TxSts'),value(answer,'OrgnlUETR'),value(answer,'Cd')],['ACTC',form.uetr,undefined]);
   assert.deepEqual(await balances(),before);
-  // Kept as an incoming draft on AVISPay PLC's account and the NOSTRO it names, not registered.
+  // Kept as an incoming draft on AVISPay PLC's account and the bank's NOSTRO in euros, not registered.
   const held=(await fin.drafts(admin)).find(item=>item.uetr===form.uetr),opened=await fin.draft(admin,held.draftId);
   assert.deepEqual([held.direction,held.registered,held.updatedBy],['INCOMING',false,'listener:EXAMPLE_PEER']);
   assert.deepEqual(opened.selection,{bookingAccountId:suspense.id,nostroAccountId:nostro.id,tokenWalletId:null});
@@ -183,43 +183,57 @@ test('under MANUAL INTERVENTION a peer\'s transfer is held for the operator and 
  }finally{await robotic(true);}
 });
 
-// The bank owner: "Remove from the Peer register the NOSTRO account as the nostro account is the job of the incoming transfer
-// registration", and "attention could be received many other currencies".
-test('a transfer in another currency is booked on the bank\'s NOSTRO it names in that currency and on AVISPay PLC\'s account in it',async()=>{
- const bank=new AccountManagement(pool,{directory:{env:{}}});
- const cash=await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example Peer Bank',bic:PEER,accountNumber:'NOSTRO-EXAMPLE-USD',currency:'USD'},randomUUID());
- const opened=(await bank.openAccount(admin,{accountType:'SUSPENSE',fullName:'AVISPay PLC',currencies:['USD']},randomUUID())).managedAccounts[0];
- const dollars=(await fin.accounts(admin)).bookingAccounts.find(item=>item.accountId===opened.id);
- const ledger=(await pool.query('SELECT ledger_account_id FROM avis_core_v2.external_cash_accounts WHERE cash_account_id=$1',[cash.id])).rows[0].ledger_account_id;
- const form=transfer({currency:'USD',amount:'5000.00',settlementAccount:'NOSTRO-EXAMPLE-USD',receiverBic:dollars.bic,creditorIban:dollars.iban,creditorAgentBic:dollars.bic});
+// The bank owner: "the nostro is selected by the currency not by the BIC and default we are using Tunisia", and "attention could be
+// received many other currencies".
+const cashAccount=(institutionName,bic,accountNumber,currency)=>new AccountManagement(pool,{directory:{env:{}}}).registerCashAccount(admin,
+ {institutionType:'CORRESPONDENT_BANK',institutionName,bic,accountNumber,currency},randomUUID());
+const ledgerOf=async cash=>(await pool.query('SELECT ledger_account_id FROM avis_core_v2.external_cash_accounts WHERE cash_account_id=$1',[cash.id])).rows[0].ledger_account_id;
+// AVISPay PLC's account in another currency, as the terminal lists it.
+const openIn=async currency=>{
+ const opened=(await new AccountManagement(pool,{directory:{env:{}}}).openAccount(admin,{accountType:'SUSPENSE',fullName:'AVISPay PLC',currencies:[currency]},randomUUID())).managedAccounts[0];
+ return (await fin.accounts(admin)).bookingAccounts.find(item=>item.accountId===opened.id);
+};
+const toAccount=(holder,overrides)=>transfer({receiverBic:holder.bic,creditorIban:holder.iban,creditorAgentBic:holder.bic,...overrides});
+
+test('a transfer in another currency is booked on the bank\'s NOSTRO in that currency - whatever it says of its settlement - and on AVISPay PLC\'s account in it',async()=>{
+ const cash=await cashAccount('Example Peer Bank',PEER,'NOSTRO-EXAMPLE-USD','USD'),dollars=await openIn('USD');
+ const form=toAccount(dollars,{currency:'USD',amount:'5000.00',settlementAccount:'PEER-OWN-ACCOUNT-7'});
  const before=await balances(),[answer]=await exchange([buildFinMessage(form)]);
  assert.deepEqual([value(answer,'TxSts'),value(answer,'OrgnlUETR')],['ACSC',form.uetr]);
- assert.deepEqual([await balance(ledger),await balance(opened.id),await balances()],['5000.00','5000.00',before]);
- const draft=(await pool.query('SELECT booking_account_id,nostro_cash_account_id FROM avis_core_v2.fin_terminal_drafts WHERE uetr=$1',[form.uetr])).rows[0];
- assert.deepEqual(draft,{booking_account_id:opened.id,nostro_cash_account_id:cash.id});
+ assert.deepEqual([await balance(await ledgerOf(cash)),await balance(dollars.accountId),await balances()],['5000.00','5000.00',before]);
+ const draft=(await pool.query('SELECT booking_account_id,nostro_cash_account_id,form FROM avis_core_v2.fin_terminal_drafts WHERE uetr=$1',[form.uetr])).rows[0];
+ assert.deepEqual([draft.booking_account_id,draft.nostro_cash_account_id,draft.form.settlementAccount],[dollars.accountId,cash.id,'PEER-OWN-ACCOUNT-7']);
  await delivered();assert.equal((await rows()).at(-1).event_text,'CORE_BANKING_&_NOSTRO:+5000.00 USD');
 });
 
-test('a transfer naming no NOSTRO of the bank - another settlement account, or not settled INGA - is held for Register incoming and answered ACTC; the operator registers it on the NOSTRO chosen there',async()=>{
- const before=await balances(),forms=[transfer({settlementAccount:'NOSTRO-OTHER-9'}),transfer({settlement:'INDA'})];
- for(const form of forms){
-  const [answer]=await exchange([buildFinMessage(form)]);
-  assert.deepEqual([value(answer,'TxSts'),value(answer,'OrgnlUETR'),value(answer,'Cd')],['ACTC',form.uetr,undefined]);
-  await delivered();assert.equal((await rows()).at(-1).event_text,'HELD FOR MANUAL INTERVENTION');
- }
- assert.deepEqual(await balances(),before);
- // Kept on AVISPay PLC's account without a NOSTRO; delivered again, held still.
- const held=(await fin.drafts(admin)).find(item=>item.uetr===forms[0].uetr),opened=await fin.draft(admin,held.draftId);
- assert.deepEqual([held.direction,held.registered,opened.selection],['INCOMING',false,{bookingAccountId:suspense.id,nostroAccountId:null,tokenWalletId:null}]);
- assert.equal(value((await exchange([buildFinMessage(forms[0])]))[0],'TxSts'),'ACTC');await delivered();
- // Register incoming: the NOSTRO chosen writes its account into the message (fin-composer.mjs), and the transfer is booked on it.
- const registered=await fin.register(admin,{form:{...opened.form,settlementAccount:'NOSTRO-EXAMPLE-1'},selection:{...opened.selection,nostroAccountId:nostro.id},
-  draftId:opened.draftId,revision:opened.revision});
- assert.equal(registered.registered,true);
- assert.deepEqual(await balances(),before.map(figure=>(Number(figure)+1250000).toFixed(2)));
+test('with no NOSTRO of the bank in its currency, or several and none at the Tunisian bank, a transfer is held for Register incoming and answered ACTC; of several, the Tunisian one books it',async()=>{
+ const francs=await openIn('CHF'),inFrancs=toAccount(francs,{currency:'CHF',amount:'700.00'});
+ const [held]=await exchange([buildFinMessage(inFrancs)]);
+ assert.deepEqual([value(held,'TxSts'),value(held,'OrgnlUETR'),value(held,'Cd')],['ACTC',inFrancs.uetr,undefined]);
+ await delivered();assert.equal((await rows()).at(-1).event_text,'HELD FOR MANUAL INTERVENTION');
+ const kept=(await fin.drafts(admin)).find(item=>item.uetr===inFrancs.uetr),opened=await fin.draft(admin,kept.draftId);
+ assert.deepEqual([kept.direction,kept.registered,opened.selection],['INCOMING',false,{bookingAccountId:francs.accountId,nostroAccountId:null,tokenWalletId:null}]);
+ // Two NOSTRO accounts in euros, none at the Tunisian bank: held; the operator registers it on the NOSTRO chosen, and delivered again
+ // it is answered as booked.
+ const london=await cashAccount('Example London NOSTRO','EXMPGB2LXXX','NOSTRO-EXAMPLE-GB','EUR');
+ let tunis=null;
+ try{
+  const before=await balances(),euros=transfer();
+  assert.equal(value((await exchange([buildFinMessage(euros)]))[0],'TxSts'),'ACTC');await delivered();assert.deepEqual(await balances(),before);
+  const waiting=await fin.draft(admin,(await fin.drafts(admin)).find(item=>item.uetr===euros.uetr).draftId);
+  assert.equal(waiting.selection.nostroAccountId,null);
+  assert.equal((await fin.register(admin,{form:waiting.form,selection:{...waiting.selection,nostroAccountId:nostro.id},draftId:waiting.draftId,revision:waiting.revision})).registered,true);
+  assert.deepEqual(await balances(),before.map(figure=>(Number(figure)+1250000).toFixed(2)));
+  assert.equal(value((await exchange([buildFinMessage(euros)]))[0],'TxSts'),'ACSC');await delivered();
+  // A third, at the Tunisian bank: it books what arrives in euros.
+  tunis=await cashAccount('Example Tunis NOSTRO','EXMPTNTTXXX','NOSTRO-EXAMPLE-TN','EUR');
+  const atTunis=await balances(),booked=transfer({amount:'300.00'});
+  assert.equal(value((await exchange([buildFinMessage(booked)]))[0],'TxSts'),'ACSC');await delivered();
+  assert.deepEqual([await balance(await ledgerOf(tunis)),await balance(nostro.ledger),await balance(suspense.id)],['300.00',atTunis[0],(Number(atTunis[1])+300).toFixed(2)]);
+ }finally{await pool.query('UPDATE avis_core_v2.external_cash_accounts SET is_active=false WHERE cash_account_id=ANY($1::uuid[])',[[london.id,tunis?.id].filter(Boolean)]);}
 });
 
-test('a peer server registered without a NOSTRO, as the FinTerminal\'s register keeps it: its IP address is whitelisted, and its transfer is booked on the NOSTRO it names',async()=>{
+test('a peer server registered without a NOSTRO, as the FinTerminal\'s register keeps it: its IP address is whitelisted, and its transfer is booked on the NOSTRO of its currency',async()=>{
  await pool.query(`INSERT INTO avis_core_v2.platform_connectors(connector_code,display_name,is_enabled,endpoint_url,credential_reference)
   VALUES('EXAMPLE_BIC_PEER','EXAMPLE-BIC',true,'tls://localhost:1','AVIS_CONNECTOR_PEER')`);
  await pool.query("INSERT INTO avis_core_v2.bank_connector_profiles(profile_id,cash_account_id,protocol,local_bic,peer_bic,operations) VALUES('EXAMPLE_BIC_PEER',NULL,'IP_TO_IP',$1,$2,'{}')",[BANK,PEER]);
@@ -229,16 +243,5 @@ test('a peer server registered without a NOSTRO, as the FinTerminal\'s register 
  assert.deepEqual(await balances(),before.map(figure=>(Number(figure)+700).toFixed(2)));
  const draft=(await pool.query('SELECT created_by,nostro_cash_account_id FROM avis_core_v2.fin_terminal_drafts WHERE uetr=$1',[form.uetr])).rows[0];
  assert.deepEqual(draft,{created_by:'listener:EXAMPLE_BIC_PEER',nostro_cash_account_id:nostro.id});
- const answered=()=>until(async()=>(await pool.query("SELECT count(*)::int AS n FROM avis_core_v2.fin_terminal_peer_messages WHERE status='SENDING'")).rows[0].n===0,'the answers delivered');
- await answered();
- // A NOSTRO the register keeps without its bank's BIC is named only by the peer registered with it before: from another peer the
- // transfer is held for Register incoming.
- await pool.query('UPDATE avis_core_v2.external_cash_accounts SET bic_code=NULL WHERE cash_account_id=$1',[nostro.id]);
- try{
-  const at=await balances(),other=transfer({amount:'800.00'}),own=transfer({amount:'900.00'});
-  assert.equal(value((await exchange([buildFinMessage(other)],'127.0.0.2'))[0],'TxSts'),'ACTC');
-  assert.equal(value((await exchange([buildFinMessage(own)]))[0],'TxSts'),'ACSC');
-  assert.deepEqual(await balances(),at.map(figure=>(Number(figure)+900).toFixed(2)));
-  await answered();
- }finally{await pool.query('UPDATE avis_core_v2.external_cash_accounts SET bic_code=$2 WHERE cash_account_id=$1',[nostro.id,PEER]);}
+ await until(async()=>(await pool.query("SELECT count(*)::int AS n FROM avis_core_v2.fin_terminal_peer_messages WHERE status='SENDING'")).rows[0].n===0,'the answers delivered');
 });
