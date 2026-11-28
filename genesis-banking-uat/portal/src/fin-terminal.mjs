@@ -215,10 +215,12 @@ export class FinTerminal{
    tokenWallets:wallets.map(row=>({accountId:row.account_id,holder:row.full_name,currency:row.currency_code,network:row.network,name:row.name||row.currency_code}))
   };
  }
- // A UETR already given to another draft, an IP-to-IP transfer or a bank payment is refused.
+ // A UETR already given to another draft, an IP-to-IP transfer or a bank payment is refused. A transacted draft's own wire is its own
+ // (review finding: reopened, it showed as a duplicate of itself); it is not sent again (#opened).
  async #uetrTaken(db,uetr,draftId){
   return (await db.query(`SELECT 1 FROM avis_core_v2.fin_terminal_drafts WHERE uetr=$1 AND draft_id IS DISTINCT FROM $2::uuid
-   UNION ALL SELECT 1 FROM avis_core_v2.fin_terminal_wires WHERE uetr=$1
+   UNION ALL SELECT 1 FROM avis_core_v2.fin_terminal_wires w WHERE w.uetr=$1
+    AND w.reserve_journal_id IS DISTINCT FROM (SELECT registered_journal_id FROM avis_core_v2.fin_terminal_drafts WHERE draft_id=$2::uuid)
    UNION ALL SELECT 1 FROM avis_core_v2.interbank_ip_transfers WHERE uetr=$1
    UNION ALL SELECT 1 FROM avis_core_v2.payment_requests WHERE uetr=$1 LIMIT 1`,[uetr,draftId])).rows.length>0;
  }
