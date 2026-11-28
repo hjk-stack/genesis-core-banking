@@ -384,38 +384,39 @@ export class FinTerminal{
   await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_INCOMING_CONVERTED',journalId]);
   return {row:{...row,converted_asset:wallet.currency_code,converted_quantity:quantity,converted_hash:hash},asset:wallet.currency_code,quantity,hash};
  }
- // The live rate a Debit's money is converted at into the wallet chosen, quoted when it is sent: an amount that converts to no
+ // The wallet chosen for a Debit's money and the live rate it is converted at, quoted when it is sent: an amount that converts to no
  // token is refused before it leaves.
  async debitQuote(tokenWalletId,form){
   const wallet=await this.#wallet(this.pool,tokenWalletId),quote=await this.#rate(form.currency,wallet);
   if(!/[1-9]/.test(convertedQuantity(form.amount,quote.rate)))fault('FIN_CONVERT_QUANTITY','amount',409);
-  return quote;
+  return {wallet,quote};
  }
  // Sent, a Debit's message is kept for good as the draft it was written in, closed by its debit (src/fin-peer.mjs, transact): never
- // changed or sent again. Nothing is booked before the debtor's bank answered (bookDebit).
+ // changed or sent again. Nothing is booked before the debtor's bank answered (bookDebit); the NOSTRO's ledger account is kept with it.
  async keepDebit(client,actor,{form,xml,selection,draftId,revision}){
   if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
   await this.#checkSelection(client,selection,form,'DEBIT');
   if(draftId!==null)await this.#opened(client,draftId,revision);
-  return (await this.#keep(client,actor,draftId,{form,xml,valid:true,selection,direction:'DEBIT'})).draft_id;
+  const nostro=await this.#nostroLedger(client,selection.nostroAccountId,form.currency);
+  if(!nostro)fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
+  return {draftId:(await this.#keep(client,actor,draftId,{form,xml,valid:true,selection,direction:'DEBIT'})).draft_id,nostroLedger:nostro.account_id};
  }
  // Settled by the debtor's bank, a Debit's money is the bank's - the bank owner: "A transaction does either book the message monies
  // to our common account and the physical clearing to our NOSTRO selected or convert the monies by all connected gateways into a
  // coin and books the coin into the chosen wallet" - as an incoming transfer is booked: on the NOSTRO and the chosen account, or
- // converted into the chosen wallet at the rate quoted when it was sent. Its draft keeps the journal.
+ // converted into the chosen wallet at the rate quoted when it was sent. Booked against what it was sent with, the NOSTRO's ledger
+ // account and the wallet as they were then (review finding: the money the debtor's bank collected is booked even when the wallet
+ // or the NOSTRO changed since). Its draft keeps the journal.
  async bookDebit(client,actor,debit){
   const form=normalizeForm((await client.query('SELECT form FROM avis_core_v2.fin_terminal_drafts WHERE draft_id=$1',[debit.draft_id])).rows[0].form);
   let journalId;
   if(debit.token_wallet_account_id){
-   const wallet=await this.#wallet(client,debit.token_wallet_account_id),quote={rate:String(debit.rate),source:debit.rate_source,observedAt:new Date(debit.rate_observed_at)};
+   const wallet={account_id:debit.token_wallet_account_id,currency_code:debit.asset,network:debit.network,full_name:debit.wallet_holder,public_address:debit.wallet_address};
+   const quote={rate:String(debit.rate),source:debit.rate_source,observedAt:new Date(debit.rate_observed_at)};
    const tokens=await this.#tokens(client,actor,{key:'fin-debit:'+debit.uetr,event:'FIN_DEBIT_CONVERTED',form,wallet,quote});
    journalId=tokens.journalId;await this.#converted(client,actor,{form,draftId:debit.draft_id,wallet,quote,...tokens,mode:'MANUAL'});
-  }else{
-   const nostro=await this.#nostroLedger(client,debit.nostro_cash_account_id,debit.currency_code);
-   if(!nostro)fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
-   journalId=await new SovereignCore(null).post(client,actor,'fin-debit:'+debit.uetr,'FIN_DEBIT_BOOKED',form.businessMessageId,
-    [{accountId:nostro.account_id,direction:'DEBIT',amount:debit.amount},{accountId:debit.booking_account_id,direction:'CREDIT',amount:debit.amount}]);
-  }
+  }else journalId=await new SovereignCore(null).post(client,actor,'fin-debit:'+debit.uetr,'FIN_DEBIT_BOOKED',form.businessMessageId,
+   [{accountId:debit.nostro_ledger_account_id,direction:'DEBIT',amount:debit.amount},{accountId:debit.booking_account_id,direction:'CREDIT',amount:debit.amount}]);
   await client.query('UPDATE avis_core_v2.fin_terminal_drafts SET registered_journal_id=$2,registered_at=now(),registered_by=$3,revision=revision+1,updated_at=now() WHERE draft_id=$1',
    [debit.draft_id,journalId,String(actor.id)]);
   await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',

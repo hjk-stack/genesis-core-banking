@@ -527,7 +527,7 @@ test('Debit: the direct debit goes to the debtor\'s bank\'s Peer Server under th
   debtorAccount:DEBTOR,mandateId:'MANDATE-EXAMPLE-0001',wallet:false,fourEyes:false,checkers:[]});
  assert.deepEqual(await debitJournals(order.form.uetr),['FIN_DEBIT_BOOKED']);
  const row=await debit(order.form.uetr);
- assert.deepEqual([row.sent_by,row.sent_by_name,row.mandate_id,row.booked_journal_id===null],[admin.id,owner.name,'MANDATE-EXAMPLE-0001',false]);
+ assert.deepEqual([row.sent_by,row.sent_by_name,row.mandate_id,row.booked_journal_id===null,row.nostro_ledger_account_id],[admin.id,owner.name,'MANDATE-EXAMPLE-0001',false,nostro.ledger]);
  // What was sent and the debtor's bank's answer, in the stream.
  const [out,answer]=result.messages;
  assert.deepEqual([out.direction,out.type,out.status,out.parameters,out.text,answer.answerTo,answer.type,answer.status,answer.event],
@@ -565,7 +565,8 @@ test('Debit into a "+" wallet: settled, its money is converted at the rate quote
  assert.deepEqual([result.debit.status,result.debit.wallet],['SETTLED',true]);
  assert.deepEqual(moved(start,await money()),{account:'0.00',nostro:'0.00',held:'0.00',suspense:'0.00'});
  const row=await debit(order.form.uetr);
- assert.deepEqual([row.token_wallet_account_id,String(row.rate),row.rate_source],[wallet,'1.000000000000000000','MiCA 1:1']);
+ assert.deepEqual([row.token_wallet_account_id,String(row.rate),row.rate_source,row.asset,row.network,row.wallet_holder,row.wallet_address],
+  [wallet,'1.000000000000000000','MiCA 1:1','EURC','SOLANA','Example Wallet Holder','ExampleSolanaDebitAddress3333333333333333']);
  assert.deepEqual((await pool.query(`SELECT asset,network,rate_source,quantity::numeric(38,4)::text AS quantity,mode,journal_id=$2 AS booked FROM avis_core_v2.fin_terminal_conversions
   WHERE uetr=$1`,[order.form.uetr,row.booked_journal_id])).rows,[{asset:'EURC',network:'SOLANA',rate_source:'MiCA 1:1',quantity:'299.8500',mode:'MANUAL',booked:true}]);
  assert.equal((await pool.query('SELECT available_balance::numeric(38,4)::text AS b FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[wallet])).rows[0].b,'299.8500');
@@ -588,7 +589,11 @@ test('a Debit refused by the debtor\'s bank, not taken or not answered books not
  reply=()=>null;
  const silent=await peers.transact(admin,owner,'EXAMPLE_TLS_PEER',debited());
  assert.deepEqual([silent.debit.status,silent.messages[0].text],['HELD','DEBIT 300.00 EUR <- '+DEBTOR+' · not settled, nothing booked']);
- for(const item of [declined,unsent,silent])assert.deepEqual([(await debit(item.debit.uetr)).booked_journal_id,await debitJournals(item.debit.uetr)],[null,[]]);
+ // A status naming another kind of message - a credit transfer - is not the Debit's (review finding): not settled.
+ reply=xml=>status(xml,'ACSC');
+ const misnamed=await peers.transact(admin,owner,'EXAMPLE_TLS_PEER',debited());
+ assert.deepEqual([misnamed.debit.status,misnamed.messages[1].status,misnamed.messages[1].error],['HELD','UNREAD','OTHER_MESSAGE']);
+ for(const item of [declined,unsent,silent,misnamed])assert.deepEqual([(await debit(item.debit.uetr)).booked_journal_id,await debitJournals(item.debit.uetr)],[null,[]]);
  assert.deepEqual(moved(start,await money()),{account:'0.00',nostro:'0.00',held:'0.00',suspense:'0.00'});
  // The bank's database failed after the debtor's bank settled: the answer is kept, and the Debit is finished - once - at the next Transact.
  reply=xml=>debitStatus(xml,'ACSC');
@@ -632,6 +637,35 @@ test('a Debit sends and books nothing without its debtor, their account or the m
   assert.deepEqual([checked.debit.status,checked.debit.fourEyes,checked.debit.checkers.length],['SETTLED',true,2]);
  }finally{await access.fourEyes(admin,owner,{on:false});}
  assert.deepEqual(moved(start,await money()),{account:'9.00',nostro:'9.00',held:'0.00',suspense:'0.00'});
+});
+
+test('a settled Debit is booked against what it was sent with: its wallet hidden or without its address, or its NOSTRO closed since, the money its bank collected is still booked (review finding)',async()=>{
+ received.length=0;reply=xml=>debitStatus(xml,'ACSC');
+ const wallet=await eurcWallet(),terminal=peers.terminal,start=await money();
+ const {user_id:holder,wallet_visible:visible}=(await pool.query('SELECT user_id,wallet_visible FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[wallet])).rows[0];
+ const tokens=async()=>(await pool.query('SELECT available_balance::numeric(38,4)::text AS b FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[wallet])).rows[0].b;
+ const loaded=await tokens(),toWallet=debited({amount:'40.00'},{tokenWalletId:wallet}),toAccount=debited({amount:'60.00'});
+ // Both settled by the debtor's bank; the bank's database failed before they were booked.
+ terminal.bookDebit=async()=>{throw new Error('database gone');};
+ try{for(const order of [toWallet,toAccount])await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',order),/database gone/);}
+ finally{delete terminal.bookDebit;}
+ // Meanwhile the wallet is hidden and without a receiving address, and the NOSTRO is closed.
+ await pool.query('UPDATE avis_core_v2.ledger_accounts SET wallet_visible=false WHERE account_id=$1',[wallet]);
+ await pool.query('UPDATE avis_core_v2.user_deposit_addresses SET is_primary=false WHERE user_id=$1',[holder]);
+ await pool.query('UPDATE avis_core_v2.external_cash_accounts SET is_active=false WHERE cash_account_id=$1',[nostro.id]);
+ try{
+  await pool.query("UPDATE avis_core_v2.fin_terminal_debits SET updated_at=now()-interval '2 minutes' WHERE uetr=ANY($1::uuid[])",[[toWallet.form.uetr,toAccount.form.uetr]]);
+  // The next Execute & Dispatch - through another Peer Server - finishes them first, as they were sent.
+  await assert.rejects(peers.dispatch(admin,owner,'EXAMPLE_USD_PEER',wire()),refused('FIN_WIRE_NOSTRO',409));
+  assert.deepEqual([(await debit(toWallet.form.uetr)).status,(await debit(toAccount.form.uetr)).status],['SETTLED','SETTLED']);
+  assert.deepEqual([await debitJournals(toWallet.form.uetr),await debitJournals(toAccount.form.uetr)],[['FIN_DEBIT_CONVERTED'],['FIN_DEBIT_BOOKED']]);
+  assert.equal((Number(await tokens())-Number(loaded)).toFixed(4),'39.9800');
+  assert.deepEqual(moved(start,await money()),{account:'60.00',nostro:'60.00',held:'0.00',suspense:'0.00'});
+ }finally{
+  await pool.query('UPDATE avis_core_v2.external_cash_accounts SET is_active=true WHERE cash_account_id=$1',[nostro.id]);
+  await pool.query('UPDATE avis_core_v2.user_deposit_addresses SET is_primary=true WHERE user_id=$1',[holder]);
+  await pool.query('UPDATE avis_core_v2.ledger_accounts SET wallet_visible=$2 WHERE account_id=$1',[wallet,visible]);
+ }
 });
 
 test('Screen 1\'s Debit: the message type and the mandate go with it, the accounts write the creditor\'s side and the debtor\'s bank; Transact sends it once and the message is closed',async()=>{

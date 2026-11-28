@@ -5,7 +5,9 @@
 -- direct debit (pacs.003.001.08) under the debtor's mandate, sent to the debtor's bank's peer server. Kept with the draft it was
 -- written in, which it closes, who sent it and, while 4-Eyes was on, the holders of the two PINs given; nothing is booked until the
 -- debtor's bank answered that it settled - then on the NOSTRO and the chosen account, or converted into the chosen wallet at the
--- rate quoted when it was sent.
+-- rate quoted when it was sent. Booked against what it was sent with (review finding): the NOSTRO's ledger account, and the
+-- wallet's asset, chain, holder and receiving address as they were then - money the debtor's bank collected is booked even when
+-- the wallet or the NOSTRO changed since.
 ALTER TABLE avis_core_v2.fin_terminal_drafts
  DROP CONSTRAINT fin_terminal_drafts_direction_check,
  ADD CONSTRAINT fin_terminal_drafts_direction_check CHECK (direction IN ('OUTGOING','INCOMING','DEBIT')),
@@ -18,7 +20,12 @@ CREATE TABLE avis_core_v2.fin_terminal_debits (
  profile_id varchar(35) NOT NULL REFERENCES avis_core_v2.bank_connector_profiles(profile_id),
  booking_account_id uuid NOT NULL REFERENCES avis_core_v2.ledger_accounts(account_id),
  nostro_cash_account_id uuid NOT NULL REFERENCES avis_core_v2.external_cash_accounts(cash_account_id),
+ nostro_ledger_account_id uuid NOT NULL REFERENCES avis_core_v2.ledger_accounts(account_id),
  token_wallet_account_id uuid REFERENCES avis_core_v2.ledger_accounts(account_id),
+ asset varchar(25),
+ network varchar(32),
+ wallet_holder text,
+ wallet_address text,
  rate numeric(38,18) CHECK (rate>0),
  rate_source text,
  rate_observed_at timestamptz,
@@ -43,7 +50,8 @@ CREATE TABLE avis_core_v2.fin_terminal_debits (
  created_at timestamptz NOT NULL DEFAULT now(),
  updated_at timestamptz NOT NULL DEFAULT now(),
  CHECK ((status='SETTLED')=(booked_journal_id IS NOT NULL)),
- CHECK ((token_wallet_account_id IS NULL)=(rate IS NULL) AND (rate IS NULL)=(rate_source IS NULL) AND (rate IS NULL)=(rate_observed_at IS NULL)),
+ CHECK ((token_wallet_account_id IS NULL)=(rate IS NULL) AND (rate IS NULL)=(rate_source IS NULL) AND (rate IS NULL)=(rate_observed_at IS NULL)
+  AND (rate IS NULL)=(asset IS NULL) AND (rate IS NULL)=(network IS NULL) AND (rate IS NULL)=(wallet_holder IS NULL) AND (rate IS NULL)=(wallet_address IS NULL)),
  CHECK (NOT four_eyes OR cardinality(checkers)=2)
 );
 CREATE INDEX fin_terminal_debits_sending ON avis_core_v2.fin_terminal_debits(created_at) WHERE status='SENDING';
