@@ -6,24 +6,25 @@ import {SovereignCore,fault,money,decimal} from './core.mjs';
 import {RECEIVING_OWNERS} from './checkout-ip-settlement.mjs';
 import {cryptoLedgerAccount} from './crypto/rolling-ledger.mjs';
 import {MetaMaskPricing} from './metamask-pricing.mjs';
-import {FIELDS,LIMITS,HEAD,PACS008,blankForm,buildFinMessage,normalizeForm,fieldProblems} from '../public/fin-message.mjs';
+import {FIELDS,LIMITS,HEAD,PACS008,PACS003,blankForm,buildFinMessage,normalizeForm,fieldProblems} from '../public/fin-message.mjs';
 
 // The FinTerminal's composer on the server: requested by the bank owner with the FinTerminal ISO 20022 specification,
 // screen 1 "FIN - ISO 20022 Composer". A message is checked against the official schemas (schemas/head.001.001.02.xsd from
-// iso20022.org, schemas/pacs.008.001.08.xsd) and kept as a draft; a UETR names one payment only.
+// iso20022.org, schemas/pacs.008.001.08.xsd, and for a Debit schemas/pacs.003.001.08.xsd) and kept as a draft; a UETR names one
+// payment only.
 const UETR=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const NAMESPACE='urn:iso:std:iso:20022:tech:xsd:';
 // The message is checked whole, as it is written: its envelope holds the header and then the transfer, each by its own
 // official schema. Reported directly (review of the composer): a broken envelope around two correct parts passed when only
 // the parts were checked.
-const ENVELOPE=`<?xml version="1.0" encoding="UTF-8"?>
-<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:head="${NAMESPACE+HEAD}" xmlns:pacs="${NAMESPACE+PACS008}">
+const envelope=type=>`<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:head="${NAMESPACE+HEAD}" xmlns:pacs="${NAMESPACE+type}">
  <xs:import namespace="${NAMESPACE+HEAD}" schemaLocation="${HEAD}.xsd"/>
- <xs:import namespace="${NAMESPACE+PACS008}" schemaLocation="${PACS008}.xsd"/>
+ <xs:import namespace="${NAMESPACE+type}" schemaLocation="${type}.xsd"/>
  <xs:element name="Envelope"><xs:complexType><xs:sequence><xs:element ref="head:AppHdr"/><xs:element ref="pacs:Document"/></xs:sequence></xs:complexType></xs:element>
 </xs:schema>`;
 let schemas=null;
-const officialSchemas=async()=>schemas??=await Promise.all([HEAD,PACS008].map(async type=>({fileName:type+'.xsd',contents:await readFile(new URL('../schemas/'+type+'.xsd',import.meta.url),'utf8')})));
+const officialSchemas=async()=>schemas??=await Promise.all([HEAD,PACS008,PACS003].map(async type=>({fileName:type+'.xsd',contents:await readFile(new URL('../schemas/'+type+'.xsd',import.meta.url),'utf8')})));
 // The schemas' own words, under the part they are about: a finding within the header or within the transfer names its
 // elements alone; anything else (the envelope, its parts out of place, XML that does not read) with each element's
 // namespace written out.
@@ -31,16 +32,17 @@ function readable(error){
  const text=String(error.message||error.rawMessage||'').replace(/^(Schemas (validity|parser) error|parser error) : /,'').trim();
  const named=[...text.matchAll(/\{urn:iso:std:iso:20022:tech:xsd:([^}]+)\}/g)].map(match=>match[1]);
  const type=/^Element '\{urn:iso:std:iso:20022:tech:xsd:([^}]+)\}/.exec(text)?.[1];
- const part=type&&named.every(name=>name===type)?{[HEAD]:'AppHdr',[PACS008]:'Document'}[type]:null;
+ const part=type&&named.every(name=>name===type)?{[HEAD]:'AppHdr',[PACS008]:'Document',[PACS003]:'Document'}[type]:null;
  return (part||'XML')+': '+text.replace(/\{urn:iso:std:iso:20022:tech:xsd:([^}]+)\}([A-Za-z0-9]+)/g,part?'$2':'$2 ($1)');
 }
 
 const parser=new XMLParser({ignoreAttributes:true,removeNSPrefix:true});
 const first=xml=>{try{return Object.keys(parser.parse(xml)).find(key=>!key.startsWith('?'))||null;}catch{return null;}};
 
-export async function validateFinMessage(xml){
+// type: the message the envelope must hold - a credit transfer, or a direct debit for a Debit.
+export async function validateFinMessage(xml,type=PACS008){
  if(typeof xml!=='string'||!xml.trim()||Buffer.byteLength(xml)>65535||/<!DOCTYPE|<!ENTITY|<\?xml-stylesheet/i.test(xml))fault('FIN_MESSAGE_INVALID','xml');
- const result=await validateXML({xml:{fileName:'message.xml',contents:xml},schema:{fileName:'envelope.xsd',contents:ENVELOPE},preload:await officialSchemas(),maxMemoryPages:512});
+ const result=await validateXML({xml:{fileName:'message.xml',contents:xml},schema:{fileName:'envelope.xsd',contents:envelope(type===PACS003?PACS003:PACS008)},preload:await officialSchemas(),maxMemoryPages:512});
  // The schemas take any element they declare as a whole message: the header alone or the transfer alone passes too. Only the
  // envelope with both is the message. Reported directly: "XSD: PASSED" for only part of a message.
  if(result.valid){const root=first(xml);return root==='Envelope'?{valid:true,errors:[]}:{valid:false,errors:["XML: Element '"+(root||'?')+"': Not the message's envelope. Expected is ( Envelope ), with the AppHdr and the Document inside."]};}
@@ -83,8 +85,9 @@ const fitsSettlement=row=>{const number=settlementNumber(row.iban_or_account_no)
 const CHOICES={bookingAccountId:'booking_account_id',nostroAccountId:'nostro_cash_account_id',tokenWalletId:'token_wallet_account_id'};
 // The bank owner: "We now register an incoming transfer so AVISPay PLC is the receiver". An outgoing message names the chosen
 // Common or Suspense account as the debtor's and the NOSTRO as the receiver (INDA); an incoming one names that account as the
-// creditor's and the NOSTRO, where the money arrives, as the sender (INGA).
-const DIRECTIONS=['OUTGOING','INCOMING'];
+// creditor's and the NOSTRO, where the money arrives, as the sender (INGA). A Debit (the bank owner: "There is missing a function:
+// Debit") names that account as the creditor's, and the NOSTRO at the debtor's bank as the receiver (INDA).
+const DIRECTIONS=['OUTGOING','INCOMING','DEBIT'];
 // Why a peer's credit transfer is not booked, as its status answer says it (pacs.002 RJCT): the ISO 20022 status reason code and
 // the bank's words for it.
 const REJECTED={
@@ -137,16 +140,18 @@ const WALLET_ADDRESS=`SELECT d.public_address FROM avis_core_v2.user_deposit_add
 const HAS_ADDRESS=` AND EXISTS(SELECT 1 FROM avis_core_v2.user_deposit_addresses d LEFT JOIN avis_core_v2.crypto_asset_wallet_routes r
  ON r.address_id=d.address_id AND r.user_id=d.user_id AND r.network=d.network AND r.asset_id=a.asset_id
  WHERE d.user_id=l.user_id AND d.network=l.network AND (r.address_id IS NOT NULL OR d.is_primary))`;
-// An outgoing message transacted (FinPeers.transact) is a wire: what became of it is the wire's status.
-const DRAFT_ROWS=`SELECT d.*,c.asset AS converted_asset,c.quantity::text AS converted_quantity,c.tx_hash AS converted_hash,w.status AS wire_status
+// An outgoing message transacted (FinPeers.transact) is a wire, a Debit sent is a debit: what became of it is their status. A Debit
+// is closed once it is sent.
+const DRAFT_ROWS=`SELECT d.*,c.asset AS converted_asset,c.quantity::text AS converted_quantity,c.tx_hash AS converted_hash,w.status AS wire_status,b.status AS debit_status
  FROM avis_core_v2.fin_terminal_drafts d LEFT JOIN avis_core_v2.fin_terminal_conversions c ON c.draft_id=d.draft_id
- LEFT JOIN avis_core_v2.fin_terminal_wires w ON w.uetr=d.uetr AND d.direction='OUTGOING' AND d.registered_journal_id=w.reserve_journal_id`;
+ LEFT JOIN avis_core_v2.fin_terminal_wires w ON w.uetr=d.uetr AND d.direction='OUTGOING' AND d.registered_journal_id=w.reserve_journal_id
+ LEFT JOIN avis_core_v2.fin_terminal_debits b ON b.draft_id=d.draft_id`;
 
 const draftOf=(row,full=true)=>({draftId:row.draft_id,revision:row.revision,uetr:row.uetr,messageType:row.message_type,
  amount:row.form.amount,currency:row.form.currency,creditorName:row.form.creditorName,debtorName:row.form.debtorName,schemaValid:row.schema_valid,
- direction:row.direction,registered:row.registered_journal_id!=null,updatedAt:new Date(row.updated_at).toISOString(),updatedBy:row.updated_by,
+ direction:row.direction,registered:row.registered_journal_id!=null||row.debit_status!=null,updatedAt:new Date(row.updated_at).toISOString(),updatedBy:row.updated_by,
  conversion:row.converted_asset?{asset:row.converted_asset,quantity:four(row.converted_quantity),txHash:row.converted_hash}:null,
- transacted:row.wire_status||null,
+ transacted:row.wire_status||row.debit_status||null,
  ...(full?{form:row.form,xml:row.message,selection:Object.fromEntries(Object.entries(CHOICES).map(([name,column])=>[name,row[column]??null])),
   registeredAt:row.registered_at==null?null:new Date(row.registered_at).toISOString()}:{})});
 
@@ -162,10 +167,12 @@ export class FinTerminal{
   // A field's limit is for what is kept: an IBAN written in groups of four is counted without its spaces (review finding).
   const form=normalizeForm(input);
   for(const field of FIELDS)if(form[field].length>LIMITS[field])fault('INVALID_FIELD',field);
-  if(form.messageType!==PACS008)fault('INVALID_FIELD','messageType');
+  if(![PACS008,PACS003].includes(form.messageType))fault('INVALID_FIELD','messageType');
   if(!UETR.test(form.uetr))fault('INVALID_FIELD','uetr');
   return form;
  }
+ // A Debit is a direct debit (pacs.003), every other message a credit transfer (pacs.008).
+ #typed(form,direction){if(form.messageType!==(direction==='DEBIT'?PACS003:PACS008))fault('INVALID_FIELD','messageType');}
  #selection(input){
   if(input!==undefined&&input!==null&&(typeof input!=='object'||Array.isArray(input)))fault('INVALID_FIELD','selection');
   return Object.fromEntries(Object.keys(CHOICES).map(name=>{
@@ -185,14 +192,15 @@ export class FinTerminal{
  // settlement account. The NOSTRO's number is used as the register keeps it, without a further check (the bank owner: "Nostro
  // accounts are registered and must select via the listed NOSTROS and no need any further check").
  async #checkSelection(db,selection,form,direction='OUTGOING'){
-  const incoming=direction==='INCOMING';
+  const incoming=direction==='INCOMING',debit=direction==='DEBIT';
   if(selection.bookingAccountId){
    const row=(await db.query(BOOKING+' AND a.account_id=$2 AND a.currency_code=$3',[RECEIVING_OWNERS,selection.bookingAccountId,form.currency])).rows[0];
    if(!row)fault('FIN_BOOKING_ACCOUNT','bookingAccountId',409);
-   // Incoming, the chosen account's bank is also the message's receiver (AppHdr To, InstdAgt) - review finding.
-   const [iban,bic]=incoming?['creditorIban','creditorAgentBic']:['debtorIban','debtorAgentBic'];
+   // A Debit collects into the chosen account, as an incoming transfer arrives there. Incoming, the chosen account's bank is also the
+   // message's receiver (AppHdr To, InstdAgt) - review finding.
+   const [iban,bic]=incoming||debit?['creditorIban','creditorAgentBic']:['debtorIban','debtorAgentBic'];
    if(form[iban]!==row.abiq_iban||form[bic]!==row.abiq_bic||incoming&&form.receiverBic!==row.abiq_bic)
-    fault(incoming?'FIN_CREDITOR_MISMATCH':'FIN_BOOKING_MISMATCH','bookingAccountId',409);
+    fault(incoming?'FIN_CREDITOR_MISMATCH':debit?'FIN_DEBIT_CREDITOR_MISMATCH':'FIN_BOOKING_MISMATCH','bookingAccountId',409);
   }
   if(selection.nostroAccountId){
    const row=(await db.query(NOSTRO+' WHERE cash_account_id=$1 AND currency_code=$2 AND is_active',[selection.nostroAccountId,form.currency])).rows[0];
@@ -215,18 +223,19 @@ export class FinTerminal{
    tokenWallets:wallets.map(row=>({accountId:row.account_id,holder:row.full_name,currency:row.currency_code,network:row.network,name:row.name||row.currency_code}))
   };
  }
- // A UETR already given to another draft, an IP-to-IP transfer or a bank payment is refused. A transacted draft's own wire is its own
- // (review finding: reopened, it showed as a duplicate of itself); it is not sent again (#opened).
+ // A UETR already given to another draft, an IP-to-IP transfer or a bank payment is refused. A transacted draft's own wire, or a Debit
+ // draft's own Debit, is its own (review finding: reopened, it showed as a duplicate of itself); it is not sent again (#opened).
  async #uetrTaken(db,uetr,draftId){
   return (await db.query(`SELECT 1 FROM avis_core_v2.fin_terminal_drafts WHERE uetr=$1 AND draft_id IS DISTINCT FROM $2::uuid
    UNION ALL SELECT 1 FROM avis_core_v2.fin_terminal_wires w WHERE w.uetr=$1
     AND w.reserve_journal_id IS DISTINCT FROM (SELECT registered_journal_id FROM avis_core_v2.fin_terminal_drafts WHERE draft_id=$2::uuid)
+   UNION ALL SELECT 1 FROM avis_core_v2.fin_terminal_debits WHERE uetr=$1 AND draft_id IS DISTINCT FROM $2::uuid
    UNION ALL SELECT 1 FROM avis_core_v2.interbank_ip_transfers WHERE uetr=$1
    UNION ALL SELECT 1 FROM avis_core_v2.payment_requests WHERE uetr=$1 LIMIT 1`,[uetr,draftId])).rows.length>0;
  }
  async validate(actor,body){
   this.#administrator(actor);
-  const form=this.#form(body?.form),checked=await validateFinMessage(body?.xml);
+  const form=this.#form(body?.form),checked=await validateFinMessage(body?.xml,form.messageType);
   const problems=fieldProblems(form).map(problem=>problem.field+': '+problem.message);
   if(await this.#uetrTaken(this.pool,form.uetr,typeof body?.draftId==='string'&&UETR.test(body.draftId)?body.draftId:null))problems.push('uetr: already used by another payment or draft.');
   return {valid:checked.valid&&!problems.length,errors:[...problems,...checked.errors]};
@@ -253,12 +262,13 @@ export class FinTerminal{
    throw error;
   }finally{client.release?.();}
  }
- // The draft as it was opened: saved meanwhile, it is opened again first; a registered incoming transfer, or a transacted
- // outgoing message, is not changed any more.
+ // The draft as it was opened: saved meanwhile, it is opened again first; a registered incoming transfer, a transacted outgoing
+ // message or a Debit sent is not changed any more.
  async #opened(db,draftId,revision){
-  const row=(await db.query('SELECT revision,registered_journal_id,direction FROM avis_core_v2.fin_terminal_drafts WHERE draft_id=$1 FOR UPDATE',[draftId])).rows[0];
+  const row=(await db.query(`SELECT d.revision,d.registered_journal_id,d.direction,EXISTS(SELECT 1 FROM avis_core_v2.fin_terminal_debits b WHERE b.draft_id=d.draft_id) AS sent
+   FROM avis_core_v2.fin_terminal_drafts d WHERE d.draft_id=$1 FOR UPDATE OF d`,[draftId])).rows[0];
   if(!row)fault('FIN_DRAFT_NOT_FOUND','draftId',404);
-  if(row.registered_journal_id)fault(row.direction==='OUTGOING'?'FIN_TRANSACTED':'FIN_DRAFT_REGISTERED','draftId',409);
+  if(row.registered_journal_id||row.sent)fault(row.direction==='INCOMING'?'FIN_DRAFT_REGISTERED':'FIN_TRANSACTED','draftId',409);
   if(row.revision!==revision)fault('FIN_DRAFT_CHANGED','draftId',409);
  }
  async #keep(db,actor,draftId,{form,xml,valid,selection,direction},journalId=null){
@@ -276,9 +286,10 @@ export class FinTerminal{
  async save(actor,body){
   this.#administrator(actor);
   const form=this.#form(body?.form),selection=this.#selection(body?.selection),direction=this.#direction(body?.direction),xml=buildFinMessage(form),draftId=body?.draftId??null;
+  this.#typed(form,direction);
   if(draftId!==null&&!UETR.test(String(draftId)))fault('FIN_DRAFT_NOT_FOUND','draftId',404);
   if(draftId!==null&&!Number.isInteger(body?.revision))fault('INVALID_FIELD','revision');
-  const valid=(await validateFinMessage(xml)).valid&&!fieldProblems(form).length;
+  const valid=(await validateFinMessage(xml,form.messageType)).valid&&!fieldProblems(form).length;
   return this.#transaction(async client=>{
    if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
    await this.#checkSelection(client,selection,form,direction);
@@ -313,6 +324,7 @@ export class FinTerminal{
  async register(actor,body){
   this.#administrator(actor);
   const form=this.#form(body?.form),selection=this.#selection(body?.selection),xml=buildFinMessage(form),draftId=body?.draftId??null;
+  this.#typed(form,'INCOMING');
   if(draftId!==null&&!UETR.test(String(draftId)))fault('FIN_DRAFT_NOT_FOUND','draftId',404);
   if(draftId!==null&&!Number.isInteger(body?.revision))fault('INVALID_FIELD','revision');
   if(!selection.bookingAccountId)fault('FIN_BOOKING_ACCOUNT','bookingAccountId',409);
@@ -345,25 +357,71 @@ export class FinTerminal{
   let price;try{price=money((await this.pricing.spot(descriptor,currency)).rate);}catch{fault('FIN_CONVERT_RATE','tokenWalletId',503);}
   return {rate:decimal(SCALE*SCALE/price),source:'MetaMask',observedAt:new Date()};
  }
- // An incoming transfer converted at the rate quoted: its tokens loaded into the wallet and into the bank's custody on that chain
+ // A transfer's money converted at the rate quoted: its tokens loaded into the wallet and into the bank's custody on that chain
  // (the "Direct Institutional MPC Wallet"); the NOSTRO and the core banking cash stay as they are.
- async #convert(client,actor,{form,xml,selection,wallet,quote,mode,draftId=null,revision}){
-  if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
-  await this.#checkSelection(client,selection,form,'INCOMING');
-  if(draftId!==null)await this.#opened(client,draftId,revision);
+ async #tokens(client,actor,{key,event,form,wallet,quote}){
   const quantity=convertedQuantity(form.amount,quote.rate),hash=transferHash(form.uetr),travel=ivms101(form,wallet);
   if(!/[1-9]/.test(quantity))fault('FIN_CONVERT_QUANTITY','amount',409);
   if(!travel.verified)fault('FIN_IVMS101','form',409);
   const custody=await cryptoLedgerAccount(client,{owner:'HOT_WALLET',currency:wallet.currency_code,network:wallet.network,bucket:'CHAIN_CUSTODY',category:'ASSET'});
-  const journalId=await new SovereignCore(null).post(client,actor,'fin-incoming:'+form.uetr,'FIN_INCOMING_CONVERTED',form.businessMessageId,
+  const journalId=await new SovereignCore(null).post(client,actor,key,event,form.businessMessageId,
    [{accountId:custody,direction:'DEBIT',amount:quantity},{accountId:wallet.account_id,direction:'CREDIT',amount:quantity}]);
-  const row=await this.#keep(client,actor,draftId,{form,xml,valid:true,selection,direction:'INCOMING'},journalId);
+  return {journalId,quantity,hash,travel};
+ }
+ async #converted(client,actor,{form,draftId,journalId,wallet,quote,quantity,hash,travel,mode}){
   await client.query(`INSERT INTO avis_core_v2.fin_terminal_conversions(uetr,draft_id,journal_id,token_wallet_account_id,fiat_amount,fiat_currency,asset,network,
    rate,rate_source,rate_observed_at,quantity,tx_hash,mode,ivms101,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16)`,
-   [form.uetr,row.draft_id,journalId,wallet.account_id,form.amount,form.currency,wallet.currency_code,wallet.network,quote.rate,quote.source,
+   [form.uetr,draftId,journalId,wallet.account_id,form.amount,form.currency,wallet.currency_code,wallet.network,quote.rate,quote.source,
     quote.observedAt.toISOString(),quantity,hash,mode,JSON.stringify(travel),String(actor.id)]);
+ }
+ async #convert(client,actor,{form,xml,selection,wallet,quote,mode,draftId=null,revision}){
+  if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
+  await this.#checkSelection(client,selection,form,'INCOMING');
+  if(draftId!==null)await this.#opened(client,draftId,revision);
+  const {journalId,quantity,hash,travel}=await this.#tokens(client,actor,{key:'fin-incoming:'+form.uetr,event:'FIN_INCOMING_CONVERTED',form,wallet,quote});
+  const row=await this.#keep(client,actor,draftId,{form,xml,valid:true,selection,direction:'INCOMING'},journalId);
+  await this.#converted(client,actor,{form,draftId:row.draft_id,journalId,wallet,quote,quantity,hash,travel,mode});
   await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_INCOMING_CONVERTED',journalId]);
   return {row:{...row,converted_asset:wallet.currency_code,converted_quantity:quantity,converted_hash:hash},asset:wallet.currency_code,quantity,hash};
+ }
+ // The wallet chosen for a Debit's money and the live rate it is converted at, quoted when it is sent: an amount that converts to no
+ // token is refused before it leaves.
+ async debitQuote(tokenWalletId,form){
+  const wallet=await this.#wallet(this.pool,tokenWalletId),quote=await this.#rate(form.currency,wallet);
+  if(!/[1-9]/.test(convertedQuantity(form.amount,quote.rate)))fault('FIN_CONVERT_QUANTITY','amount',409);
+  return {wallet,quote};
+ }
+ // Sent, a Debit's message is kept for good as the draft it was written in, closed by its debit (src/fin-peer.mjs, transact): never
+ // changed or sent again. Nothing is booked before the debtor's bank answered (bookDebit); the NOSTRO's ledger account is kept with it.
+ async keepDebit(client,actor,{form,xml,selection,draftId,revision}){
+  if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
+  await this.#checkSelection(client,selection,form,'DEBIT');
+  if(draftId!==null)await this.#opened(client,draftId,revision);
+  const nostro=await this.#nostroLedger(client,selection.nostroAccountId,form.currency);
+  if(!nostro)fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
+  return {draftId:(await this.#keep(client,actor,draftId,{form,xml,valid:true,selection,direction:'DEBIT'})).draft_id,nostroLedger:nostro.account_id};
+ }
+ // Settled by the debtor's bank, a Debit's money is the bank's - the bank owner: "A transaction does either book the message monies
+ // to our common account and the physical clearing to our NOSTRO selected or convert the monies by all connected gateways into a
+ // coin and books the coin into the chosen wallet" - as an incoming transfer is booked: on the NOSTRO and the chosen account, or
+ // converted into the chosen wallet at the rate quoted when it was sent. Booked against what it was sent with, the NOSTRO's ledger
+ // account and the wallet as they were then (review finding: the money the debtor's bank collected is booked even when the wallet
+ // or the NOSTRO changed since). Its draft keeps the journal.
+ async bookDebit(client,actor,debit){
+  const form=normalizeForm((await client.query('SELECT form FROM avis_core_v2.fin_terminal_drafts WHERE draft_id=$1',[debit.draft_id])).rows[0].form);
+  let journalId;
+  if(debit.token_wallet_account_id){
+   const wallet={account_id:debit.token_wallet_account_id,currency_code:debit.asset,network:debit.network,full_name:debit.wallet_holder,public_address:debit.wallet_address};
+   const quote={rate:String(debit.rate),source:debit.rate_source,observedAt:new Date(debit.rate_observed_at)};
+   const tokens=await this.#tokens(client,actor,{key:'fin-debit:'+debit.uetr,event:'FIN_DEBIT_CONVERTED',form,wallet,quote});
+   journalId=tokens.journalId;await this.#converted(client,actor,{form,draftId:debit.draft_id,wallet,quote,...tokens,mode:'MANUAL'});
+  }else journalId=await new SovereignCore(null).post(client,actor,'fin-debit:'+debit.uetr,'FIN_DEBIT_BOOKED',form.businessMessageId,
+   [{accountId:debit.nostro_ledger_account_id,direction:'DEBIT',amount:debit.amount},{accountId:debit.booking_account_id,direction:'CREDIT',amount:debit.amount}]);
+  await client.query('UPDATE avis_core_v2.fin_terminal_drafts SET registered_journal_id=$2,registered_at=now(),registered_by=$3,revision=revision+1,updated_at=now() WHERE draft_id=$1',
+   [debit.draft_id,journalId,String(actor.id)]);
+  await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',
+   [String(actor.id),debit.token_wallet_account_id?'FIN_DEBIT_CONVERTED':'FIN_DEBIT_BOOKED',journalId]);
+  return journalId;
  }
  async #book(client,actor,{form,xml,selection,draftId=null,revision}){
   if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
@@ -413,17 +471,29 @@ export class FinTerminal{
  // the physical clearing to our NOSTRO selected"). Checked here before anything is reserved or sent.
  async transactable(actor,body){
   this.#administrator(actor);
-  const form=this.#form(body?.form),selection=this.#selection(body?.selection),xml=buildFinMessage(form),draftId=body?.draftId??null;
-  if(this.#direction(body?.direction)!=='OUTGOING')fault('FIN_TRANSACT_DIRECTION','direction',409);
+  const form=this.#form(body?.form),selection=this.#selection(body?.selection),direction=this.#direction(body?.direction),xml=buildFinMessage(form),draftId=body?.draftId??null;
+  // An incoming transfer is booked by the bank as it comes (the bank owner: "booked automatically ... does not need press to transact").
+  if(direction==='INCOMING')fault('FIN_TRANSACT_DIRECTION','direction',409);
+  this.#typed(form,direction);
   if(draftId!==null&&!UETR.test(String(draftId)))fault('FIN_DRAFT_NOT_FOUND','draftId',404);
   if(draftId!==null&&!Number.isInteger(body?.revision))fault('INVALID_FIELD','revision');
   if(!selection.bookingAccountId)fault('FIN_BOOKING_ACCOUNT','bookingAccountId',409);
   if(!selection.nostroAccountId)fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
-  // A wire pays a beneficiary named, at their account, as the Cash Wire's (src/fin-peer.mjs, #wire).
-  if(!form.creditorName)fault('FIN_WIRE_BENEFICIARY','creditorName');
-  if(!form.creditorIban)fault('FIN_WIRE_ACCOUNT','creditorIban');
-  if(fieldProblems(form).length||!(await validateFinMessage(xml)).valid)fault('FIN_TRANSACT_INVALID','xml');
-  return {form,xml,selection:{...selection,tokenWalletId:null},draftId,revision:draftId===null?null:body.revision};
+  if(direction==='DEBIT'){
+   // A Debit collects from the debtor named, at their account, under the mandate they signed (the bank owner: "when we have
+   // authorisation for debiting an external connected account").
+   if(!form.debtorName)fault('FIN_DEBIT_DEBTOR','debtorName');
+   if(!form.debtorIban)fault('FIN_DEBIT_ACCOUNT','debtorIban');
+   if(!form.mandateId)fault('FIN_DEBIT_MANDATE','mandateId');
+   if(!form.mandateSignatureDate)fault('FIN_DEBIT_MANDATE','mandateSignatureDate');
+  }else{
+   // A wire pays a beneficiary named, at their account, as the Cash Wire's (src/fin-peer.mjs, #wire).
+   if(!form.creditorName)fault('FIN_WIRE_BENEFICIARY','creditorName');
+   if(!form.creditorIban)fault('FIN_WIRE_ACCOUNT','creditorIban');
+  }
+  if(fieldProblems(form).length||!(await validateFinMessage(xml,form.messageType)).valid)fault('FIN_TRANSACT_INVALID','xml');
+  // An outgoing message is paid from the account; a Debit's money may be converted into the wallet chosen.
+  return {form,xml,direction,selection:direction==='DEBIT'?selection:{...selection,tokenWalletId:null},draftId,revision:draftId===null?null:body.revision};
  }
  // Transacted, the message is kept for good as the draft it was written in - closed, never changed or sent again: the bank owner,
  // "Multiple pressing are not generating duplicated a transaction" - and its money is reserved as a Cash Wire's is.

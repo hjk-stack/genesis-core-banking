@@ -44,8 +44,9 @@ for(const width of [260,390,820,1440])test('the composer on '+(width<500?'a phon
   await page.goto(base+'/fin-terminal');
   const field=name=>page.locator('[data-fin-field="'+name+'"]'),xml=page.locator('[data-fin-xml]'),verdict=page.locator('[data-fin-xsd]'),state=page.locator('[data-fin-draft-state]');
   await page.locator('[data-fin-composer]').waitFor();await page.waitForFunction(()=>document.querySelector('[data-fin-xml]').value.includes('<UETR>'));
-  // The form writes the XML.
-  for(const [name,value] of Object.entries(exampleForm()))if(!['uetr','businessMessageId','createdAt','settlementAccount'].includes(name))await (SELECTS.has(name)?field(name).selectOption(value):field(name).fill(value));
+  // The form writes the XML. A credit transfer has no mandate: its fields are a Debit's only (test-browser/fin-wire-layout.mjs).
+  for(const [name,value] of Object.entries(exampleForm()))if(!['uetr','businessMessageId','createdAt','settlementAccount','mandateId','mandateSignatureDate'].includes(name))await (SELECTS.has(name)?field(name).selectOption(value):field(name).fill(value));
+  assert.deepEqual(await page.locator('[data-fin-mandate]').isVisible(),false);
   assert.match(await xml.inputValue(),/<Nm>Example Creditor SARL<\/Nm>/);assert.match(await xml.inputValue(),/<IntrBkSttlmAmt Ccy="EUR">1250000\.00<\/IntrBkSttlmAmt>/);
   // The accounts: the Common account is the debtor's, the NOSTRO account settles the transfer, the "+" wallet is kept.
   const choice=name=>page.locator('[data-fin-choice="'+name+'"]');

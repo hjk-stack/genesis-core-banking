@@ -6,7 +6,7 @@ import {validateXML} from 'xmllint-wasm';
 import {XMLParser} from 'fast-xml-parser';
 import {fault} from './core.mjs';
 import {sendBankMessage,connectorCredentials} from './payment-transport.mjs';
-import {HEAD,PACS008,LIMITS,newMessageId,readFinMessage,normalizeForm} from '../public/fin-message.mjs';
+import {HEAD,PACS008,PACS003,LIMITS,newMessageId,readFinMessage,normalizeForm} from '../public/fin-message.mjs';
 import {ABIQ_ISSUER} from './avispay-core-accounts.mjs';
 import {ServerDOMParser} from './fin-xml.mjs';
 import {FinTerminal} from './fin-terminal.mjs';
@@ -105,7 +105,8 @@ export async function readPeerAnswer(xml,{localBic,peerBic,event,businessMessage
 // The peer's answer to a credit transfer the bank sent (Screen B's Cash Wire): its status report naming that transfer - its message
 // and its UETR - with the transfer's status and, refused, the reason and why (pacs.002.001.10, as the peer's own FinTerminal answers:
 // buildPaymentStatus); or its reject of the message (admi.002.001.01). Anything else is kept as it came and shown with the reason.
-export async function readPeerStatus(xml,{localBic,peerBic,businessMessageId,uetr,own=[]}){
+// original: the kind of message sent, where its report must name it so (review finding: a Debit's status names a direct debit).
+export async function readPeerStatus(xml,{localBic,peerBic,businessMessageId,uetr,own=[],original=null}){
  if(/<!DOCTYPE|<!ENTITY|<\?xml-stylesheet/i.test(xml))return {status:'UNREAD',reason:'NOT_ISO20022'};
  const type=[PACS002,ADMI002].find(type=>xml.includes(NAMESPACE+type));
  if(!type)return {status:'UNREAD',reason:'NOT_ISO20022'};
@@ -120,8 +121,9 @@ export async function readPeerStatus(xml,{localBic,peerBic,businessMessageId,uet
  // The message sent named - in the report's original group or in the transfer's own - and the transfer's status by its UETR; a
  // report on no transfer, the status of the message sent. Both blocks may be left out or repeated (pacs.002.001.10).
  const report=document.FIToFIPmtStsRpt,groups=[].concat(report.OrgnlGrpInfAndSts||[]),items=[].concat(report.TxInfAndSts||[]);
- const item=items.find(entry=>entry.OrgnlUETR===uetr),group=groups.find(entry=>entry.OrgnlMsgId===businessMessageId);
- const named=item?Boolean(group)||item.OrgnlGrpInf?.OrgnlMsgId===businessMessageId:!items.length&&Boolean(group);
+ const sent=entry=>entry?.OrgnlMsgId===businessMessageId&&(!original||entry.OrgnlMsgNmId===original);
+ const item=items.find(entry=>entry.OrgnlUETR===uetr),group=groups.find(sent);
+ const named=item?Boolean(group)||sent(item.OrgnlGrpInf):!items.length&&Boolean(group);
  const code=item?item.TxSts||group?.GrpSts||null:items.length?null:group?.GrpSts||null;
  const info=[].concat((item||group)?.StsRsnInf||[])[0],reason=info?.Rsn?.Cd||info?.Rsn?.Prtry||null,text=[].concat(info?.AddtlInf||[]).join(' ')||null;
  const answer={...said,code,parameters:[uetr,...(reason?[reason]:[])],text};
@@ -237,6 +239,11 @@ const OUTCOMES={SETTLED:'NOSTRO & Core Synced',RETURNED:'returned to the account
 const cents=value=>{const [whole,fraction='']=String(value).split('.');return whole+'.'+fraction.padEnd(2,'0').slice(0,2);};
 const wireOf=row=>({uetr:row.uetr,status:row.status,peerStatus:row.peer_status,reason:row.reason_code,amount:cents(row.amount),currency:row.currency_code,
  creditorName:row.creditor_name,creditorIban:row.creditor_iban,fourEyes:row.four_eyes,checkers:row.checkers});
+// What became of a Debit in the stream: booked - "(NOSTRO & Core Synced)", as a settled transfer - or converted into the wallet;
+// refused, or not taken by the debtor's bank; neither, not settled. Only a settled Debit is booked.
+const DEBITED={SETTLED:'NOSTRO & Core Synced',CONVERTED:'converted into the wallet',REFUSED:'refused, nothing booked',HELD:'not settled, nothing booked'};
+const debitOf=row=>({uetr:row.uetr,status:row.status,peerStatus:row.peer_status,reason:row.reason_code,amount:cents(row.amount),currency:row.currency_code,
+ debtorName:row.debtor_name,debtorAccount:row.debtor_account,mandateId:row.mandate_id,wallet:row.token_wallet_account_id!==null,fourEyes:row.four_eyes,checkers:row.checkers});
 
 export class FinPeers{
  constructor(pool,{send=sendBankMessage,credentials=connectorCredentials,terminal=new FinTerminal(pool),access=new FinAccess(pool),vault=new PeerVault()}={}){
@@ -428,18 +435,18 @@ export class FinPeers{
   if(message.form.senderBic!==peer.local_bic)fault('FIN_TRANSACT_SENDER','senderBic',409);
   if(message.form.receiverBic!==peer.peer_bic)fault('FIN_TRANSACT_RECEIVER','receiverBic',409);
   await this.#recover();
-  const check=await this.access.check(person,body);let draftId=null;
+  const check=await this.access.check(person,body);
+  if(message.direction==='DEBIT')return this.#debit(actor,person,peer,credentials,check,message);
+  let draftId=null;
   const result=await this.#execute(actor,person,peer,credentials,check,{form:message.form,xml:message.xml,bookingAccountId:message.selection.bookingAccountId,
    reserve:async db=>{const reserved=await this.terminal.reserveTransact(db,actor,message);draftId=reserved.draftId;return reserved;}});
   return {...result,draft:await this.terminal.draft(actor,draftId)};
  }
- // One execution for both: under the connector lock nothing leaves while the listening port is open, and 4-Eyes switched on since
- // the PINs were looked at asks them first; the money is reserved and the message kept before it leaves.
+ // One execution for both: under the connector lock (#gate) the money is reserved and the message kept before it leaves.
  async #execute(actor,person,peer,credentials,check,{form,xml,bookingAccountId,reserve}){
   const messageId=randomUUID(),text=form.amount+' '+form.currency+' -> '+form.creditorIban;
   await underConnectorLock(this.pool,async db=>{
-   if((await db.query(LISTENING)).rows.length)fault('FIN_LISTENING',null,409);
-   if((await db.query('SELECT four_eyes FROM avis_core_v2.fin_terminal_mode WHERE mode_id=1 FOR SHARE')).rows[0]?.four_eyes===true&&!check.fourEyes)fault('FIN_PIN','pin1');
+   await this.#gate(db,check);
    const reserved=await reserve(db);
    await db.query(`INSERT INTO avis_core_v2.fin_terminal_peer_messages(message_id,profile_id,direction,message_type,business_message_id,event_parameters,event_text,status,content,created_by)
     VALUES($1,$2,'OUT',$3,$4,$5,$6,'SENDING',$7,$8)`,[messageId,peer.profile_id,PACS008,form.businessMessageId,[form.uetr],text,xml,String(actor.id)]);
@@ -449,14 +456,67 @@ export class FinPeers{
      reserved.journalId,check.fourEyes,check.checkers,String(actor.id),person.name]);
    await db.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_OUTGOING_DISPATCHED',form.uetr]);
   });
-  let answer=null,error=null;
-  try{answer=await this.transmit(peer,xml,credentials,{minVersion:'TLSv1.3'});}catch(failure){error=diagnostic(failure);}
   // What came back is kept as it came before it is read (review finding): a wire whose finishing fails is finished later from it
   // (#recover), never sent again.
-  const received=typeof answer==='string'&&answer.length?answer.replaceAll('\0',''):null;
+  const {received,error}=await this.#deliver(peer,xml,credentials);
   await this.pool.query(`UPDATE avis_core_v2.fin_terminal_wires SET answer=$2,delivery_error=$3,delivered_at=now(),updated_at=now() WHERE uetr=$1 AND status='SENDING'`,
    [form.uetr,received,error]);
   return this.#finish(form.uetr);
+ }
+ // Nothing leaves while the listening port is open, and 4-Eyes switched on since the PINs were looked at asks them first.
+ async #gate(db,check){
+  if((await db.query(LISTENING)).rows.length)fault('FIN_LISTENING',null,409);
+  if((await db.query('SELECT four_eyes FROM avis_core_v2.fin_terminal_mode WHERE mode_id=1 FOR SHARE')).rows[0]?.four_eyes===true&&!check.fourEyes)fault('FIN_PIN','pin1');
+ }
+ // Over TLS 1.3, as the specification's connector; an answer as it came - text cannot hold a zero byte - or why none came.
+ async #deliver(peer,xml,credentials){
+  let answer=null,error=null;
+  try{answer=await this.transmit(peer,xml,credentials,{minVersion:'TLSv1.3'});}catch(failure){error=diagnostic(failure);}
+  return {received:typeof answer==='string'&&answer.length?answer.replaceAll('\0',''):null,error};
+ }
+ // Screen 1's Debit: the composer's direct debit (pacs.003) under the debtor's mandate, sent to their bank's Peer Server with the
+ // login saved for it in the register, and PIN 1 and PIN 2 while 4-Eyes is on. The bank owner: "There is missing a function: Debit.
+ // This is when we have authorisation for debiting an external connected account". Nothing is reserved - the money is the debtor's
+ // until their bank settles it; the message is kept and closed before it leaves, with the rate a "+" wallet is loaded at.
+ async #debit(actor,person,peer,credentials,check,message){
+  const {form,xml,selection}=message,{wallet=null,quote=null}=selection.tokenWalletId?await this.terminal.debitQuote(selection.tokenWalletId,form):{};
+  const messageId=randomUUID(),text='DEBIT '+form.amount+' '+form.currency+' <- '+form.debtorIban;let draftId;
+  await underConnectorLock(this.pool,async db=>{
+   await this.#gate(db,check);
+   const kept=await this.terminal.keepDebit(db,actor,message);draftId=kept.draftId;
+   await db.query(`INSERT INTO avis_core_v2.fin_terminal_peer_messages(message_id,profile_id,direction,message_type,business_message_id,event_parameters,event_text,status,content,created_by)
+    VALUES($1,$2,'OUT',$3,$4,$5,$6,'SENDING',$7,$8)`,[messageId,peer.profile_id,PACS003,form.businessMessageId,[form.uetr],text,xml,String(actor.id)]);
+   await db.query(`INSERT INTO avis_core_v2.fin_terminal_debits(uetr,message_id,draft_id,profile_id,booking_account_id,nostro_cash_account_id,nostro_ledger_account_id,
+    token_wallet_account_id,asset,network,wallet_holder,wallet_address,rate,rate_source,rate_observed_at,amount,currency_code,debtor_name,debtor_account,mandate_id,
+    mandate_signed,four_eyes,checkers,sent_by,sent_by_name) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
+    [form.uetr,messageId,draftId,peer.profile_id,selection.bookingAccountId,selection.nostroAccountId,kept.nostroLedger,selection.tokenWalletId,
+     wallet?.currency_code??null,wallet?.network??null,wallet?.full_name??null,wallet?.public_address??null,quote?.rate??null,quote?.source??null,
+     quote?quote.observedAt.toISOString():null,form.amount,form.currency,form.debtorName,form.debtorIban,form.mandateId,form.mandateSignatureDate,
+     check.fourEyes,check.checkers,String(actor.id),person.name]);
+   await db.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_DEBIT_SENT',form.uetr]);
+  });
+  const {received,error}=await this.#deliver(peer,xml,credentials);
+  await this.pool.query(`UPDATE avis_core_v2.fin_terminal_debits SET answer=$2,delivery_error=$3,delivered_at=now(),updated_at=now() WHERE uetr=$1 AND status='SENDING'`,
+   [form.uetr,received,error]);
+  return {...await this.#finishDebit(form.uetr),draft:await this.terminal.draft(actor,draftId)};
+ }
+ // The peer's answer kept with a message the bank sent, read: settled (ACSC, ACCC); refused (RJCT, or its message rejected) or never
+ // taken (UNSENT); or neither. original: the kind of message sent, where its report must name it so (readPeerStatus).
+ async #answered(row,uetr,original=null){
+  const known=row.delivered_at!=null,error=row.delivery_error;
+  const read=known&&row.answer&&await readPeerStatus(row.answer,{localBic:row.local_bic,peerBic:row.peer_bic,businessMessageId:row.business_message_id,uetr,own:await this.#own(),original});
+  const refused=read?.status==='NAK'||read?.status==='ACK'&&read.code==='RJCT';
+  return {known,error,read,settled:read?.status==='ACK'&&SETTLED.includes(read.code),untaken:refused||known&&Boolean(error)&&UNSENT.test(error),
+   peerStatus:read?.type===PACS002&&read.status==='ACK'?read.code:null,reason:refused?read.parameters[1]||read.code:null};
+ }
+ // The message sent and the peer's answer in the stream, with what became of it. Without a result the message stays as it was sent,
+ // shown without result once its sending is a minute old.
+ async #streamed(client,kept,row,{known,error,read},outcome){
+  if(known)await client.query('UPDATE avis_core_v2.fin_terminal_peer_messages SET status=$2,error_code=$3,event_text=$4,updated_at=now() WHERE message_id=$1',
+   [kept.message_id,error?'FAILED':'DELIVERED',error,row.event_text+' · '+outcome]);
+  else await client.query('UPDATE avis_core_v2.fin_terminal_peer_messages SET event_text=$2 WHERE message_id=$1',[kept.message_id,row.event_text+' · '+outcome]);
+  if(read)await client.query(`INSERT INTO avis_core_v2.fin_terminal_peer_messages(message_id,profile_id,direction,answer_to,message_type,business_message_id,event_code,event_parameters,event_text,status,error_code,content)
+   VALUES($1,$2,'IN',$3,$4,$5,$6,$7,$8,$9,$10,$11)`,[randomUUID(),kept.profile_id,kept.message_id,read.type||null,read.businessMessageId||null,read.code||null,read.parameters||[],read.text||null,read.status,read.reason||null,row.answer]);
  }
  // A wire sent, finished: the peer's answer read, what became of its money booked and both in the stream, in one transaction - booked
  // for whoever dispatched it. Nothing kept of what came back, its result is unknown and its money held. Finished meanwhile, it is
@@ -464,37 +524,52 @@ export class FinPeers{
  async #finish(uetr){
   const wire=(await this.pool.query(`SELECT w.*,m.business_message_id,m.event_text,p.local_bic,p.peer_bic FROM avis_core_v2.fin_terminal_wires w
    JOIN avis_core_v2.fin_terminal_peer_messages m USING(message_id) JOIN avis_core_v2.bank_connector_profiles p ON p.profile_id=w.profile_id WHERE w.uetr=$1`,[uetr])).rows[0];
-  const known=wire.delivered_at!=null,error=wire.delivery_error;
-  const read=known&&wire.answer&&await readPeerStatus(wire.answer,{localBic:wire.local_bic,peerBic:wire.peer_bic,businessMessageId:wire.business_message_id,uetr,own:await this.#own()});
-  const refused=read?.status==='NAK'||read?.status==='ACK'&&read.code==='RJCT';
-  const outcome=read?.status==='ACK'&&SETTLED.includes(read.code)?'SETTLED':refused||known&&error&&UNSENT.test(error)?'RETURNED':'HELD';
+  const answered=await this.#answered(wire,uetr),outcome=answered.settled?'SETTLED':answered.untaken?'RETURNED':'HELD';
   const client=await this.pool.connect();let kept;
   try{
    await client.query('BEGIN');
    kept=(await client.query('SELECT * FROM avis_core_v2.fin_terminal_wires WHERE uetr=$1 FOR UPDATE',[uetr])).rows[0];
    if(kept.status==='SENDING'){
-    const journalId=outcome==='HELD'?null:await this.terminal.finishWire(client,{id:kept.dispatched_by},kept,outcome==='SETTLED',read?.businessMessageId||wire.business_message_id);
-    // Without a result the message stays as it was sent, shown without result once its sending is a minute old.
-    if(known)await client.query('UPDATE avis_core_v2.fin_terminal_peer_messages SET status=$2,error_code=$3,event_text=$4,updated_at=now() WHERE message_id=$1',
-     [kept.message_id,error?'FAILED':'DELIVERED',error,wire.event_text+' · '+OUTCOMES[outcome]]);
-    else await client.query('UPDATE avis_core_v2.fin_terminal_peer_messages SET event_text=$2 WHERE message_id=$1',[kept.message_id,wire.event_text+' · '+OUTCOMES[outcome]]);
-    if(read)await client.query(`INSERT INTO avis_core_v2.fin_terminal_peer_messages(message_id,profile_id,direction,answer_to,message_type,business_message_id,event_code,event_parameters,event_text,status,error_code,content)
-     VALUES($1,$2,'IN',$3,$4,$5,$6,$7,$8,$9,$10,$11)`,[randomUUID(),kept.profile_id,kept.message_id,read.type||null,read.businessMessageId||null,read.code||null,read.parameters||[],read.text||null,read.status,read.reason||null,wire.answer]);
+    const journalId=outcome==='HELD'?null:await this.terminal.finishWire(client,{id:kept.dispatched_by},kept,outcome==='SETTLED',answered.read?.businessMessageId||wire.business_message_id);
+    await this.#streamed(client,kept,wire,answered,OUTCOMES[outcome]);
     kept=(await client.query(`UPDATE avis_core_v2.fin_terminal_wires SET status=$2,peer_status=$3,reason_code=$4,settle_journal_id=$5,updated_at=now() WHERE uetr=$1 RETURNING *`,
-     [uetr,outcome,read?.type===PACS002&&read.status==='ACK'?read.code:null,refused?read.parameters[1]||read.code:null,journalId])).rows[0];
+     [uetr,outcome,answered.peerStatus,answered.reason,journalId])).rows[0];
    }
    await client.query('COMMIT');
   }catch(failure){await client.query('ROLLBACK').catch(()=>{});throw failure;}
   finally{client.release?.();}
   return {wire:wireOf(kept),messages:(await this.pool.query(EXCHANGE,[kept.message_id])).rows.map(messageOf)};
  }
- // Wires whose finishing never completed - the bank's database failed, or the bank stopped, after they left - finished at the next
- // Execute & Dispatch: the transport gives up after 15 seconds, so a wire still sending a minute on has its result kept, or none.
+ // A Debit sent, finished as a wire is: settled by the debtor's bank, its money booked (src/fin-terminal.mjs, bookDebit) - for whoever
+ // sent it - and both in the stream, in one transaction; refused or not taken, nothing is booked; neither, nothing is booked either.
+ async #finishDebit(uetr){
+  const debit=(await this.pool.query(`SELECT b.*,m.business_message_id,m.event_text,p.local_bic,p.peer_bic FROM avis_core_v2.fin_terminal_debits b
+   JOIN avis_core_v2.fin_terminal_peer_messages m USING(message_id) JOIN avis_core_v2.bank_connector_profiles p ON p.profile_id=b.profile_id WHERE b.uetr=$1`,[uetr])).rows[0];
+  const answered=await this.#answered(debit,uetr,PACS003),outcome=answered.settled?'SETTLED':answered.untaken?'REFUSED':'HELD';
+  const client=await this.pool.connect();let kept;
+  try{
+   await client.query('BEGIN');
+   kept=(await client.query('SELECT * FROM avis_core_v2.fin_terminal_debits WHERE uetr=$1 FOR UPDATE',[uetr])).rows[0];
+   if(kept.status==='SENDING'){
+    const journalId=outcome==='SETTLED'?await this.terminal.bookDebit(client,{id:kept.sent_by},kept):null;
+    await this.#streamed(client,kept,debit,answered,DEBITED[outcome==='SETTLED'&&kept.token_wallet_account_id?'CONVERTED':outcome]);
+    kept=(await client.query(`UPDATE avis_core_v2.fin_terminal_debits SET status=$2,peer_status=$3,reason_code=$4,booked_journal_id=$5,updated_at=now() WHERE uetr=$1 RETURNING *`,
+     [uetr,outcome,answered.peerStatus,answered.reason,journalId])).rows[0];
+   }
+   await client.query('COMMIT');
+  }catch(failure){await client.query('ROLLBACK').catch(()=>{});throw failure;}
+  finally{client.release?.();}
+  return {debit:debitOf(kept),messages:(await this.pool.query(EXCHANGE,[kept.message_id])).rows.map(messageOf)};
+ }
+ // Wires and Debits whose finishing never completed - the bank's database failed, or the bank stopped, after they left - finished at
+ // the next Execute & Dispatch or Transact: the transport gives up after 15 seconds, so one still sending a minute on has its result
+ // kept, or none.
  // One that cannot be finished now is left for the next time; it never holds the others up.
  async #recover(){
-  const stuck=(await this.pool.query(`SELECT uetr FROM avis_core_v2.fin_terminal_wires WHERE status='SENDING' AND updated_at<now()-interval '1 minute'
-   ORDER BY created_at LIMIT 20`)).rows;
-  for(const {uetr} of stuck)await this.#finish(uetr).catch(()=>null);
+  const stuck=(await this.pool.query(`SELECT uetr,debit FROM (SELECT uetr,created_at,false AS debit FROM avis_core_v2.fin_terminal_wires
+   WHERE status='SENDING' AND updated_at<now()-interval '1 minute' UNION ALL SELECT uetr,created_at,true FROM avis_core_v2.fin_terminal_debits
+   WHERE status='SENDING' AND updated_at<now()-interval '1 minute') s ORDER BY created_at LIMIT 20`)).rows;
+  for(const {uetr,debit} of stuck)await (debit?this.#finishDebit(uetr):this.#finish(uetr)).catch(()=>null);
  }
  // A peer's own message, taken on the listening port once its TLS, certificate and IP address were checked (src/fin-listener.mjs):
  // kept as it came, with the bank's answer as it leaves; the listener tells what became of the answer.

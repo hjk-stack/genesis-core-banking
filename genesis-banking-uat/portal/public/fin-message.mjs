@@ -2,8 +2,10 @@
 // (head.001.001.02) and one FI-to-FI customer credit transfer (pacs.008.001.08), in the order their official schemas
 // (schemas/) give, side by side in one envelope. The same module builds the XML in the terminal's window and on the server
 // (src/fin-terminal.mjs), and reads the XML back into the form: requested by the bank owner, "live two-way XML
-// synchronization" of the FinTerminal ISO 20022 specification.
-export const HEAD='head.001.001.02',PACS008='pacs.008.001.08';
+// synchronization" of the FinTerminal ISO 20022 specification. A Debit is an FI-to-FI customer direct debit (pacs.003.001.08)
+// instead: the bank owner, "There is missing a function: Debit. This is when we have authorisation for debiting an external
+// connected account" - the authorisation is its mandate (MndtRltdInf: its number and the date it was signed).
+export const HEAD='head.001.001.02',PACS008='pacs.008.001.08',PACS003='pacs.003.001.08';
 const namespace=type=>'urn:iso:std:iso:20022:tech:xsd:'+type;
 export const PRIORITIES={'HIGH/URGP':['HIGH','URGP'],'NORM/NURG':['NORM','NURG']};
 export const SETTLEMENTS={'CLRG/TGT':['CLRG','TGT'],INDA:['INDA',''],INGA:['INGA','']};
@@ -13,13 +15,15 @@ export const CHARGE_BEARERS=['SHAR','DEBT','CRED','SLEV'];
 export const FIELDS=Object.freeze(['messageType','businessMessageId','createdAt','senderBic','receiverBic','uetr','endToEndId','priority',
  'currency','amount','valueDate','chargeBearer','settlement','settlementAccount','debtorName','debtorIban','debtorAgentBic','creditorName','creditorIban',
  'creditorAgentBic','intermediaryBic','intermediaryAddress','ultimateDebtorName','ultimateDebtorAddress','ultimateCreditorName',
- 'ultimateCreditorAddress','structuredReference','unstructuredRemittance','regulatoryCountry','regulatoryCode','regulatoryDetails']);
+ 'ultimateCreditorAddress','structuredReference','unstructuredRemittance','regulatoryCountry','regulatoryCode','regulatoryDetails',
+ 'mandateId','mandateSignatureDate']);
 // The longest each field may be: its element's own limit, the details ten Inf elements of 35, an address 140 characters in lines
 // of at most 70 (AdrLine).
 export const LIMITS=Object.freeze({messageType:15,businessMessageId:35,createdAt:35,senderBic:11,receiverBic:11,uetr:36,endToEndId:35,
  priority:9,currency:3,amount:25,valueDate:10,chargeBearer:4,settlement:8,settlementAccount:34,debtorName:140,debtorIban:34,debtorAgentBic:11,creditorName:140,
  creditorIban:34,creditorAgentBic:11,intermediaryBic:11,intermediaryAddress:140,ultimateDebtorName:140,ultimateDebtorAddress:140,ultimateCreditorName:140,
- ultimateCreditorAddress:140,structuredReference:35,unstructuredRemittance:140,regulatoryCountry:2,regulatoryCode:10,regulatoryDetails:359});
+ ultimateCreditorAddress:140,structuredReference:35,unstructuredRemittance:140,regulatoryCountry:2,regulatoryCode:10,regulatoryDetails:359,
+ mandateId:35,mandateSignatureDate:10});
 // The Authority Country's two selectors (the bank owner: "Authority Country both fields must be selectors"): every country by its
 // ISO 3166 code (and Kosovo's XK, as banks use it), and the reporting codes of the bank owner's list.
 export const COUNTRIES=Object.freeze(('AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ '+
@@ -102,18 +106,22 @@ export function buildFinMessage(input){
   node('Fr',[node('FIId',[node('FinInstnId',[node('BICFI',f.senderBic)])])]),
   node('To',[node('FIId',[node('FinInstnId',[node('BICFI',f.receiverBic)])])]),
   node('BizMsgIdr',f.businessMessageId),node('MsgDefIdr',f.messageType),node('CreDt',f.createdAt)],{attrs:{xmlns:namespace(HEAD)}});
- const transfer=node('CdtTrfTxInf',[
-  node('PmtId',[node('EndToEndId',f.endToEndId),node('UETR',f.uetr)]),
-  optional('PmtTpInf',[optional('InstrPrty',priority),optional('SvcLvl',[optional('Cd',serviceLevel)])]),
-  node('IntrBkSttlmAmt',f.amount,{attrs:{Ccy:f.currency}}),node('IntrBkSttlmDt',f.valueDate),node('ChrgBr',f.chargeBearer),
-  agent('IntrmyAgt1',f.intermediaryBic,f.intermediaryAddress,true),
-  party('UltmtDbtr',f.ultimateDebtorName,f.ultimateDebtorAddress),
-  node('Dbtr',[node('Nm',f.debtorName)]),node('DbtrAcct',[accountId(f.debtorIban)]),agent('DbtrAgt',f.debtorAgentBic),
-  agent('CdtrAgt',f.creditorAgentBic),node('Cdtr',[node('Nm',f.creditorName)]),node('CdtrAcct',[accountId(f.creditorIban)]),
-  party('UltmtCdtr',f.ultimateCreditorName,f.ultimateCreditorAddress),
-  optional('RgltryRptg',[optional('Authrty',[optional('Ctry',f.regulatoryCountry)]),optional('Dtls',[optional('Cd',f.regulatoryCode),...detailPieces(f.regulatoryDetails).map(piece=>node('Inf',piece))])]),
-  optional('RmtInf',[optional('Ustrd',f.unstructuredRemittance),optional('Strd',[optional('CdtrRefInf',f.structuredReference&&[node('Tp',[node('CdOrPrtry',[node('Cd','SCOR')])]),node('Ref',f.structuredReference)])])])]);
- const document=node('Document',[node('FIToFICstmrCdtTrf',[
+ const identification=node('PmtId',[node('EndToEndId',f.endToEndId),node('UETR',f.uetr)]);
+ const type=optional('PmtTpInf',[optional('InstrPrty',priority),optional('SvcLvl',[optional('Cd',serviceLevel)])]);
+ const amount=[node('IntrBkSttlmAmt',f.amount,{attrs:{Ccy:f.currency}}),node('IntrBkSttlmDt',f.valueDate),node('ChrgBr',f.chargeBearer)];
+ const debtor=[node('Dbtr',[node('Nm',f.debtorName)]),node('DbtrAcct',[accountId(f.debtorIban)]),agent('DbtrAgt',f.debtorAgentBic)];
+ const creditor=[node('Cdtr',[node('Nm',f.creditorName)]),node('CdtrAcct',[accountId(f.creditorIban)])];
+ const intermediary=agent('IntrmyAgt1',f.intermediaryBic,f.intermediaryAddress,true);
+ const [ultimateDebtor,ultimateCreditor]=[party('UltmtDbtr',f.ultimateDebtorName,f.ultimateDebtorAddress),party('UltmtCdtr',f.ultimateCreditorName,f.ultimateCreditorAddress)];
+ const tail=[optional('RgltryRptg',[optional('Authrty',[optional('Ctry',f.regulatoryCountry)]),optional('Dtls',[optional('Cd',f.regulatoryCode),...detailPieces(f.regulatoryDetails).map(piece=>node('Inf',piece))])]),
+  optional('RmtInf',[optional('Ustrd',f.unstructuredRemittance),optional('Strd',[optional('CdtrRefInf',f.structuredReference&&[node('Tp',[node('CdOrPrtry',[node('Cd','SCOR')])]),node('Ref',f.structuredReference)])])])];
+ // The same parts in each message's own order (schemas/): a direct debit names the creditor first, with the mandate before it.
+ const debit=f.messageType===PACS003;
+ const transfer=debit
+  ?node('DrctDbtTxInf',[identification,type,...amount,node('DrctDbtTx',[node('MndtRltdInf',[node('MndtId',f.mandateId),node('DtOfSgntr',f.mandateSignatureDate)])]),
+   ...creditor,agent('CdtrAgt',f.creditorAgentBic),ultimateCreditor,intermediary,...debtor,ultimateDebtor,...tail])
+  :node('CdtTrfTxInf',[identification,type,...amount,intermediary,ultimateDebtor,...debtor,agent('CdtrAgt',f.creditorAgentBic),...creditor,ultimateCreditor,...tail]);
+ const document=node('Document',[node(debit?'FIToFICstmrDrctDbt':'FIToFICstmrCdtTrf',[
   node('GrpHdr',[node('MsgId',f.businessMessageId),node('CreDtTm',f.createdAt),node('NbOfTxs','1'),
    node('SttlmInf',[node('SttlmMtd',method),optional('SttlmAcct',f.settlementAccount&&[accountId(f.settlementAccount)]),optional('ClrSys',[optional('Cd',clearing)])]),
    agent('InstgAgt',f.senderBic),agent('InstdAgt',f.receiverBic)]),transfer])],{attrs:{xmlns:namespace(f.messageType||PACS008)}});
@@ -135,7 +143,7 @@ export function readFinMessage(xml,DOMParserImpl=globalThis.DOMParser){
  // Pieces of one text (the details' Inf, an address's AdrLine) joined again; an account by its IBAN or its other number.
  const pieces=(element,name)=>kids(element).filter(child=>child.localName===name).map(child=>child.textContent.trim()).filter(Boolean).join(' ');
  const account=element=>value(element,'Id','IBAN')||value(element,'Id','Othr','Id');
- const credit=at(document,'FIToFICstmrCdtTrf'),group=at(credit,'GrpHdr'),tx=at(credit,'CdtTrfTxInf');
+ const debit=at(document,'FIToFICstmrDrctDbt'),credit=debit||at(document,'FIToFICstmrCdtTrf'),group=at(credit,'GrpHdr'),tx=at(credit,debit?'DrctDbtTxInf':'CdtTrfTxInf');
  const amount=at(tx,'IntrBkSttlmAmt'),pick=(table,...codes)=>Object.keys(table).find(key=>table[key].every((code,i)=>code===(codes[i]||'')))||'';
  const details=at(tx,'RgltryRptg','Dtls');
  const form={
@@ -153,6 +161,7 @@ export function readFinMessage(xml,DOMParserImpl=globalThis.DOMParser){
   ultimateCreditorName:value(tx,'UltmtCdtr','Nm'),ultimateCreditorAddress:pieces(at(tx,'UltmtCdtr','PstlAdr'),'AdrLine'),
   structuredReference:value(tx,'RmtInf','Strd','CdtrRefInf','Ref'),unstructuredRemittance:value(tx,'RmtInf','Ustrd'),
   regulatoryCountry:value(tx,'RgltryRptg','Authrty','Ctry'),regulatoryCode:value(details,'Cd'),regulatoryDetails:pieces(details,'Inf'),
+  mandateId:value(tx,'DrctDbtTx','MndtRltdInf','MndtId'),mandateSignatureDate:value(tx,'DrctDbtTx','MndtRltdInf','DtOfSgntr'),
  };
  return {form:normalizeForm(form)};
 }
