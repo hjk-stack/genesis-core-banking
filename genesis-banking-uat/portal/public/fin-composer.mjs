@@ -1,4 +1,4 @@
-import {FIELDS,PACS008,COUNTRIES,REPORTING_CODES,blankForm,buildFinMessage,readFinMessage,normalizeForm,newUetr} from './fin-message.mjs';
+import {FIELDS,PACS008,PACS003,COUNTRIES,REPORTING_CODES,blankForm,buildFinMessage,readFinMessage,normalizeForm,newUetr} from './fin-message.mjs';
 
 // Screen 1 of the FinTerminal (fin-terminal.mjs), the "FIN - ISO 20022 Composer" of the bank owner's specification: the form
 // and its XML kept in step both ways (fin-message.mjs), the XML checked against the official schemas on the server
@@ -17,10 +17,11 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  const $=selector=>screen.querySelector(selector),inputs=[...screen.querySelectorAll('[data-fin-field]')];
  const xml=$('[data-fin-xml]'),verdict=$('[data-fin-xsd]'),problems=$('[data-fin-errors]'),state=$('[data-fin-draft-state]'),list=$('[data-fin-drafts]');
  const controls=[...screen.querySelectorAll('.fin-actions button,.fin-actions select,[data-fin-new-uetr]')],choices=[...screen.querySelectorAll('[data-fin-choice]')];
- const turn=$('[data-fin-direction]'),register=$('[data-fin-register]'),keep=$('[data-fin-save]');
+ const turn=$('[data-fin-direction]'),type=$('[data-fin-field="messageType"]'),mandate=$('[data-fin-mandate]'),register=$('[data-fin-register]'),keep=$('[data-fin-save]');
  const transact=$('[data-fin-transact]'),pinBox=$('[data-fin-transact-pins]'),pins=[...screen.querySelectorAll('[data-fin-transact-pin]')];
  let form=blankForm(),draft=null,dirty=false,edits=0,broken=null,pause=null,busy=false,refused=null,selection=noChoice();
- // The bank owner: "We now register an incoming transfer so AVISPay PLC is the receiver".
+ // The bank owner: "We now register an incoming transfer so AVISPay PLC is the receiver", and "There is missing a function: Debit.
+ // This is when we have authorisation for debiting an external connected account".
  let direction='OUTGOING',registered=false,converted=null;
  // Transact (the bank owner: "When the transaction is filled, then add a button for press Transact for the transaction executed"):
  // the message as it passed Validate XML (passed, its edit), the Peer Server chosen above it, 4-Eyes, and what became of it.
@@ -47,19 +48,25 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   problems.hidden=!errors.length;
   for(const input of inputs)if(named.has(input.dataset.finField))input.setAttribute('aria-invalid','true');else input.removeAttribute('aria-invalid');
  }
+ const coins=()=>converted?[converted.quantity+' '+converted.asset]:[];
+ const closed=()=>direction==='OUTGOING'?'Transacted · '+(transacted||'SENDING'):direction==='DEBIT'?['Debit',transacted||'SENDING',...coins()].join(' · ')
+  :converted?['Incoming converted','ACSC',...coins()].join(' · '):'Incoming booked · ACSC';
  function paintState(){
-  state.textContent=registered?(direction==='OUTGOING'?'Transacted · '+(transacted||'SENDING'):converted?'Incoming converted · ACSC · '+converted.quantity+' '+converted.asset:'Incoming booked · ACSC'):
-   draft?(dirty?'Draft · changes not saved':'Draft saved · revision '+draft.revision):(dirty?'New message · not saved':'New message');
+  state.textContent=registered?closed():draft?(dirty?'Draft · changes not saved':'Draft saved · revision '+draft.revision):(dirty?'New message · not saved':'New message');
   list.value=draft?.draftId||'';
  }
- // Transact works an outgoing message that passed Validate XML as it stands, with its Common or Suspense account and its NOSTRO
- // chosen, to a Peer Server chosen; PIN 1 and PIN 2 while 4-Eyes is on.
+ // Transact works an outgoing message or a Debit that passed Validate XML as it stands, with its Common or Suspense account and its
+ // NOSTRO chosen, to a Peer Server chosen; PIN 1 and PIN 2 while 4-Eyes is on.
  function paintTransact(){
-  transact.hidden=direction!=='OUTGOING'||registered;pinBox.hidden=transact.hidden||!fourEyes;
+  transact.hidden=direction==='INCOMING'||registered;pinBox.hidden=transact.hidden||!fourEyes;
   transact.disabled=busy||transact.hidden||passed!==edits||!!broken||!selection.bookingAccountId||!selection.nostroAccountId||!peer;
  }
- // Registered, an incoming transfer is not saved or registered again; transacted, an outgoing message is not saved or sent again.
- function paintDirection(){turn.value=direction;turn.disabled=registered;register.hidden=direction!=='INCOMING'||registered;keep.hidden=registered;paintTransact();}
+ // Registered, an incoming transfer is not saved or registered again; transacted, an outgoing message or a Debit is not saved or sent
+ // again. The mandate is a Debit's.
+ function paintDirection(){
+  turn.value=direction;turn.disabled=type.disabled=registered;register.hidden=direction!=='INCOMING'||registered;keep.hidden=registered;mandate.hidden=direction!=='DEBIT';
+  paintTransact();
+ }
  function changed(){edits++;dirty=true;refused=null;show('unchecked','XSD: not checked');paintState();paintTransact();}
 
  // The Common and Suspense accounts and the NOSTRO accounts in the message's currency; the "+" wallets, never AG or AGi
@@ -86,21 +93,24 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  // A chosen account writes the message's fields it stands for. Outgoing, the Common or Suspense account is the debtor's account
  // at the bank and the NOSTRO account is the receiver's bank and the account the transfer settles through there (INDA, SttlmAcct).
  // Incoming, the Common or Suspense account is the creditor's, AVISPay PLC's, and its bank the receiver; the NOSTRO account is
- // the sender's bank, where the money arrives (INGA, SttlmAcct).
+ // the sender's bank, where the money arrives (INGA, SttlmAcct). A Debit, the Common or Suspense account is the creditor's; the
+ // NOSTRO account is the receiver's bank - the debtor's - and the account the money is cleared through there (INDA, SttlmAcct).
  const fills={
-  bookingAccountId:id=>{const account=accounts.bookingAccounts.find(item=>item.accountId===id);return account&&(direction==='INCOMING'
-   ?{creditorName:account.institution,creditorIban:account.iban,creditorAgentBic:account.bic,receiverBic:account.bic}
-   :{debtorName:account.institution,debtorIban:account.iban,debtorAgentBic:account.bic});},
+  bookingAccountId:id=>{const account=accounts.bookingAccounts.find(item=>item.accountId===id);return account&&(direction==='OUTGOING'
+   ?{debtorName:account.institution,debtorIban:account.iban,debtorAgentBic:account.bic}
+   :{creditorName:account.institution,creditorIban:account.iban,creditorAgentBic:account.bic,...(direction==='INCOMING'?{receiverBic:account.bic}:{})});},
   nostroAccountId:id=>{const account=accounts.nostroAccounts.find(item=>item.accountId===id);return account&&(direction==='INCOMING'
    ?{...(account.bic?{senderBic:account.bic}:{}),settlement:'INGA',settlementAccount:account.account}
    :{...(account.bic?{receiverBic:account.bic}:{}),settlement:'INDA',settlementAccount:account.account});},
   tokenWalletId:()=>null};
  // The fields that name a chosen account: written otherwise, the message no longer goes with that account (review finding).
  const binds={OUTGOING:{bookingAccountId:['debtorIban','debtorAgentBic'],nostroAccountId:['receiverBic','settlement','settlementAccount']},
-  INCOMING:{bookingAccountId:['creditorIban','creditorAgentBic','receiverBic'],nostroAccountId:['senderBic','settlement','settlementAccount']}};
+  INCOMING:{bookingAccountId:['creditorIban','creditorAgentBic','receiverBic'],nostroAccountId:['senderBic','settlement','settlementAccount']},
+  DEBIT:{bookingAccountId:['creditorIban','creditorAgentBic'],nostroAccountId:['receiverBic','settlement','settlementAccount']}};
  // The fields a chosen account wrote that are let go with it: all but the settlement method.
  const wrote={OUTGOING:{bookingAccountId:['debtorName','debtorIban','debtorAgentBic'],nostroAccountId:['receiverBic','settlementAccount']},
-  INCOMING:{bookingAccountId:['creditorName','creditorIban','creditorAgentBic','receiverBic'],nostroAccountId:['senderBic','settlementAccount']}};
+  INCOMING:{bookingAccountId:['creditorName','creditorIban','creditorAgentBic','receiverBic'],nostroAccountId:['senderBic','settlementAccount']},
+  DEBIT:{bookingAccountId:['creditorName','creditorIban','creditorAgentBic'],nostroAccountId:['receiverBic','settlementAccount']}};
  const bound=(name,now=normalizeForm(form))=>{
   const fill=selection[name]&&fills[name](selection[name]);if(!fill)return null;
   const filled=normalizeForm({...form,...fill});
@@ -134,19 +144,23 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   if(Object.keys(clear).length){form={...form,...clear};paint();write();}
   if(moved||JSON.stringify(selection)!==was)paintChoices();
  }
- // Turned to the other direction, the chosen accounts go to the other side: what they wrote on the side they leave is emptied
- // where it still says so, and they write the side they take; one whose fields were written otherwise is let go.
- turn.addEventListener('change',()=>{
-  const next=turn.value==='INCOMING'?'INCOMING':'OUTGOING';if(next===direction)return;
-  const now=normalizeForm(form);let clear={};
+ // Turned to another direction, the chosen accounts go to the other side: what they wrote on the side they leave is emptied
+ // where it still says so, and they write the side they take; one whose fields were written otherwise is let go. A Debit is a
+ // direct debit (pacs.003) under the debtor's mandate, the other directions credit transfers (pacs.008): the message type goes with
+ // the direction, and a Debit's mandate with it.
+ function turnTo(next){
+  if(next===direction)return;
+  const now=normalizeForm(form);let clear={messageType:next==='DEBIT'?PACS003:PACS008,...(direction==='DEBIT'?{mandateId:'',mandateSignatureDate:''}:{})};
   for(const name of ['bookingAccountId','nostroAccountId']){if(bound(name,now)===false)selection={...selection,[name]:''};else clear={...clear,...unwritten(name,now)};}
   direction=next;
   for(const name of ['bookingAccountId','nostroAccountId'])if(selection[name])clear={...clear,...fills[name](selection[name])};
   form={...form,...clear};broken=null;paint();paintChoices();write();paintDirection();changed();
- });
- // The form writes the XML.
+ }
+ turn.addEventListener('change',()=>turnTo(['INCOMING','DEBIT'].includes(turn.value)?turn.value:'OUTGOING'));
+ // The form writes the XML; the message type chosen, the direction it goes with.
  const take=event=>{
   const field=event.target?.dataset?.finField;if(!field||form[field]===event.target.value)return;
+  if(field==='messageType'){turnTo(event.target.value===PACS003?'DEBIT':direction==='DEBIT'?'OUTGOING':direction);paint();return;}
   if(event.target.tagName==='SELECT')choose(event.target,event.target.value);
   const before=form;form={...form,[field]:event.target.value};broken=null;write();rebind(before);changed();
  };
@@ -155,8 +169,8 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  // The XML writes the form, a moment after the last key; XML that does not read leaves the form as it is and says why.
  function read(){
   view.clearTimeout(pause);pause=null;
-  const result=readFinMessage(xml.value,view.DOMParser);
-  if(!result.error&&result.form.messageType!==PACS008)result.error='The message type is '+PACS008+'.';
+  const result=readFinMessage(xml.value,view.DOMParser),expected=direction==='DEBIT'?PACS003:PACS008;
+  if(!result.error&&result.form.messageType!==expected)result.error='The message type is '+expected+'.';
   if(result.error){broken=result.error;show('broken','XML: '+result.error);return;}
   broken=null;
   if(same(result.form,form)){if(verdict.dataset.state==='broken')show('unchecked','XSD: not checked');return;}
@@ -172,11 +186,13 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  async function listDrafts(){
   let rows;try{rows=(await request('GET','/api/fin-terminal/drafts'))?.rows;}catch{return;}
   if(!Array.isArray(rows))rows=[];
-  // An incoming transfer is listed with its sender, an outgoing one with its creditor; a transacted one with what became of it.
-  const incoming=row=>row.direction==='INCOMING';
-  const status=row=>incoming(row)?['·',row.registered?(row.conversion?'Incoming converted':'Incoming booked'):'Incoming']:row.registered?['·','Transacted',...(row.transacted?[row.transacted]:[])]:[];
+  // An incoming transfer and a Debit are listed with their debtor, an outgoing one with its creditor; a transacted one with what
+  // became of it.
+  const incoming=row=>row.direction==='INCOMING',debit=row=>row.direction==='DEBIT';
+  const status=row=>incoming(row)?['·',row.registered?(row.conversion?'Incoming converted':'Incoming booked'):'Incoming']
+   :debit(row)?['·','Debit',...(row.transacted?[row.transacted]:[])]:row.registered?['·','Transacted',...(row.transacted?[row.transacted]:[])]:[];
   list.replaceChildren(choice('','New message'),...rows.map(row=>choice(row.draftId,[row.schemaValid?'XSD ✓':'XSD ✗',...status(row),
-   '·',row.amount||'—',row.currency,'·',(incoming(row)?row.debtorName:row.creditorName)||'—','·',when(row.updatedAt)].join(' '))));
+   '·',row.amount||'—',row.currency,'·',(incoming(row)||debit(row)?row.debtorName:row.creditorName)||'—','·',when(row.updatedAt)].join(' '))));
   list.value=draft?.draftId||'';
  }
  // One action at a time; a refusal is shown with its reason and its field. The button pressed shows it is pressed until its action
@@ -228,7 +244,8 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   const at=edits,to=peer;let result;
   try{result=await request('POST','/api/fin-terminal/peers/'+encodeURIComponent(to)+'/transact',body);}
   catch(error){if(['FIN_PIN','FIN_PIN_MISSING'].includes(error?.code))onRefused();throw error;}
-  const kept=result.draft;draft={draftId:kept.draftId,revision:kept.revision};registered=kept.registered===true;transacted=kept.transacted||result.wire?.status||null;
+  const kept=result.draft;draft={draftId:kept.draftId,revision:kept.revision};registered=kept.registered===true;converted=kept.conversion||null;
+  transacted=kept.transacted||result.wire?.status||result.debit?.status||null;
   if(edits===at){form=whole(kept.form);selection=chosen(kept.selection);dirty=false;paint();paintChoices();xml.value=kept.xml;show('passed','XSD: PASSED');}
   await listDrafts();paintState();paintDirection();onTransacted(to,result);
  }
@@ -240,7 +257,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  async function open(draftId){
   const {draft:loaded}=await request('GET','/api/fin-terminal/drafts/'+encodeURIComponent(draftId));
   form=whole(loaded.form);selection=chosen(loaded.selection);draft={draftId:loaded.draftId,revision:loaded.revision};dirty=false;broken=null;refused=null;
-  direction=loaded.direction==='INCOMING'?'INCOMING':'OUTGOING';registered=loaded.registered===true;converted=loaded.conversion||null;
+  direction=['INCOMING','DEBIT'].includes(loaded.direction)?loaded.direction:'OUTGOING';registered=loaded.registered===true;converted=loaded.conversion||null;
   passed=-1;transacted=loaded.transacted||null;paint();paintChoices();xml.value=loaded.xml;paintState();paintDirection();await check();
  }
  async function listAccounts(){

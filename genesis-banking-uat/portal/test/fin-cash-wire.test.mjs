@@ -13,6 +13,7 @@ import pg from 'pg';
 import {migrate} from '../src/migrate.mjs';
 import {AccountManagement} from '../src/account-management.mjs';
 import {SovereignCore} from '../src/core.mjs';
+import {cryptoLedgerAccount} from '../src/crypto/rolling-ledger.mjs';
 import {FinTerminal,validateFinMessage} from '../src/fin-terminal.mjs';
 import {FinAccess} from '../src/fin-access.mjs';
 import {FinPeers,buildPaymentStatus,buildReject} from '../src/fin-peer.mjs';
@@ -480,4 +481,194 @@ test('Screen 1\'s Transact: closed until the message passes Validate XML with it
   // It shows at once in the Peer Server's stream.
   await until(()=>[...doc.querySelectorAll('[data-fin-peer-stream] li')].some(item=>item.textContent.includes('41.00 EUR')),'the stream');
  }finally{held=null;dom.window.close();await new Promise(resolve=>server.close(resolve));}
+});
+
+// Screen 1's Debit. The bank owner: "There is missing a function: Debit. This is when we have authorisation for debiting an external
+// connected account", and "A transaction does either book the message monies to our common account and the physical clearing to
+// our NOSTRO selected or convert the monies by all connected gateways into a coin and books the coin into the chosen wallet". The
+// direct debit as the composer writes it (fin-composer.mjs, fills): AVISPay PLC's account the creditor's, the NOSTRO at the
+// debtor's bank where it is cleared, and the debtor's mandate; the debtor's bank answers as a peer's FinTerminal answers.
+const DEBTOR=exampleIban('FR','00000000000000000000456');
+const debited=(changes={},selection={})=>({direction:'DEBIT',selection:{bookingAccountId:account.accountId,nostroAccountId:nostro.id,tokenWalletId:'',...selection},
+ form:normalizeForm({...blankForm(new Date()),messageType:'pacs.003.001.08',uetr:newUetr(),senderBic:BANK,receiverBic:PEER,amount:'300.00',settlement:'INDA',
+  settlementAccount:'NOSTRO-EXAMPLE-1',debtorName:'Example Debtor GmbH',debtorIban:DEBTOR,debtorAgentBic:PEER,creditorName:account.institution,creditorIban:account.iban,
+  creditorAgentBic:account.bic,mandateId:'MANDATE-EXAMPLE-0001',mandateSignatureDate:'2026-10-01',unstructuredRemittance:'Invoice 2026-207',...changes})});
+// The debtor's bank's status of the direct debit it received, naming it as a direct debit.
+const debitStatus=(xml,code,options)=>status(xml,code,options).replace('<OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>','<OrgnlMsgNmId>pacs.003.001.08</OrgnlMsgNmId>');
+const debit=async uetr=>(await pool.query('SELECT * FROM avis_core_v2.fin_terminal_debits WHERE uetr=$1',[uetr])).rows[0];
+const debitJournals=async uetr=>(await pool.query("SELECT event_type FROM avis_core_v2.ledger_journals WHERE idempotency_key='fin-debit:'||$1",[uetr])).rows.map(row=>row.event_type);
+// A "+" wallet the converter loads: EURC on Solana, with its receiving address there.
+let eurc=null;
+const eurcWallet=async()=>{
+ if(eurc)return eurc;
+ const holder=(await new AccountManagement(pool,{directory:{env:{}}}).openCustomer(admin,{fullName:'Example Wallet Holder',accountType:'PERSONAL',currencies:['EUR']},randomUUID())).userId;
+ eurc=await cryptoLedgerAccount(pool,{userId:holder,currency:'EURC',network:'SOLANA'});
+ await pool.query("INSERT INTO avis_core_v2.user_deposit_addresses(user_id,network,public_address,is_primary) VALUES($1,'SOLANA','ExampleSolanaDebitAddress3333333333333333',true)",[holder]);
+ return eurc;
+};
+
+test('Debit: the direct debit goes to the debtor\'s bank\'s Peer Server under the mandate; settled, its money is booked to the Common or Suspense account with the clearing on the NOSTRO; closed, pressed again it is refused',async()=>{
+ received.length=0;reply=xml=>debitStatus(xml,'ACSC');
+ const order=debited(),start=await money(),debits=await count('fin_terminal_debits');
+ const result=await peers.transact(admin,owner,'EXAMPLE_TLS_PEER',order);
+ // The debtor's bank received the direct debit as the composer wrote it, over mutual TLS 1.3, passing its official schemas.
+ assert.equal(received.length,1);assert.deepEqual([received[0].authorized,received[0].protocol],[true,'TLSv1.3']);
+ assert.deepEqual(await validateFinMessage(received[0].xml,'pacs.003.001.08'),{valid:true,errors:[]});
+ const {form}=readFinMessage(received[0].xml,ServerDOMParser);
+ assert.deepEqual([form.messageType,form.uetr,form.senderBic,form.receiverBic,form.amount,form.settlement,form.settlementAccount,form.debtorName,form.debtorIban,
+  form.creditorIban,form.mandateId,form.mandateSignatureDate,form.unstructuredRemittance],
+  ['pacs.003.001.08',order.form.uetr,BANK,PEER,'300.00','INDA','NOSTRO-EXAMPLE-1','Example Debtor GmbH',DEBTOR,account.iban,'MANDATE-EXAMPLE-0001','2026-10-01','Invoice 2026-207']);
+ // Settled: the money is on the NOSTRO, where it was cleared, and on the Common or Suspense account; nothing is reserved.
+ assert.deepEqual(moved(start,await money()),{account:'300.00',nostro:'300.00',held:'0.00',suspense:'0.00'});
+ assert.deepEqual(result.debit,{uetr:order.form.uetr,status:'SETTLED',peerStatus:'ACSC',reason:null,amount:'300.00',currency:'EUR',debtorName:'Example Debtor GmbH',
+  debtorAccount:DEBTOR,mandateId:'MANDATE-EXAMPLE-0001',wallet:false,fourEyes:false,checkers:[]});
+ assert.deepEqual(await debitJournals(order.form.uetr),['FIN_DEBIT_BOOKED']);
+ const row=await debit(order.form.uetr);
+ assert.deepEqual([row.sent_by,row.sent_by_name,row.mandate_id,row.booked_journal_id===null],[admin.id,owner.name,'MANDATE-EXAMPLE-0001',false]);
+ // What was sent and the debtor's bank's answer, in the stream.
+ const [out,answer]=result.messages;
+ assert.deepEqual([out.direction,out.type,out.status,out.parameters,out.text,answer.answerTo,answer.type,answer.status,answer.event],
+  ['OUT','pacs.003.001.08','DELIVERED',[order.form.uetr],'DEBIT 300.00 EUR <- '+DEBTOR+' · NOSTRO & Core Synced',out.messageId,'pacs.002.001.10','ACK','ACSC']);
+ assert.match(streamLine(out),new RegExp('^>>> \\[[^\\]]+ UTC\\] IP pacs\\.003 SENT \\(Seq #\\d{6}\\) · DEBIT 300\\.00 EUR <- '+DEBTOR+' · NOSTRO & Core Synced$'));
+ assert.match(streamLine(answer),/^<<< \[[^\]]+ UTC\] PEER pacs\.002 ACSC$/);
+ assert.deepEqual((await pool.query('SELECT operation,actor_id FROM avis_core_v2.operation_audit WHERE resource_id=ANY($1::text[]) ORDER BY operation',
+  [[order.form.uetr,row.booked_journal_id]])).rows,[{operation:'FIN_DEBIT_BOOKED',actor_id:admin.id},{operation:'FIN_DEBIT_SENT',actor_id:admin.id}]);
+ // Kept as sent and closed, with what became of it.
+ const {draft}=result;
+ assert.deepEqual([draft.direction,draft.messageType,draft.registered,draft.transacted,draft.form.mandateId],['DEBIT','pacs.003.001.08',true,'SETTLED','MANDATE-EXAMPLE-0001']);
+ assert.deepEqual((await new FinTerminal(pool).drafts(admin)).filter(item=>item.draftId===draft.draftId).map(item=>[item.direction,item.transacted,item.debtorName]),
+  [['DEBIT','SETTLED','Example Debtor GmbH']]);
+ // Pressed again - as it was written, as the closed message, or the closed message with a new UETR: refused, nothing sent or booked.
+ const again=await money();
+ await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',order),refused('FIN_UETR_DUPLICATE',409));
+ await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',{...order,draftId:draft.draftId,revision:draft.revision}),refused('FIN_UETR_DUPLICATE',409));
+ await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',{...order,form:{...order.form,uetr:newUetr()},draftId:draft.draftId,revision:draft.revision}),refused('FIN_TRANSACTED',409));
+ await assert.rejects(new FinTerminal(pool).save(admin,{...order,draftId:draft.draftId,revision:draft.revision}),refused('FIN_UETR_DUPLICATE',409));
+ assert.equal(received.length,1);assert.equal(await count('fin_terminal_debits'),debits+1);
+ assert.deepEqual(moved(again,await money()),{account:'0.00',nostro:'0.00',held:'0.00',suspense:'0.00'});
+ // A Debit saved first is the draft closed.
+ const fin=new FinTerminal(pool),written=debited({amount:'12.00'}),saved=await fin.save(admin,written);
+ assert.deepEqual([saved.direction,saved.schemaValid,saved.registered],['DEBIT',true,false]);
+ const fromDraft=await peers.transact(admin,owner,'EXAMPLE_TLS_PEER',{...written,draftId:saved.draftId,revision:saved.revision});
+ assert.deepEqual([fromDraft.draft.draftId,fromDraft.draft.registered,fromDraft.debit.status],[saved.draftId,true,'SETTLED']);
+});
+
+test('Debit into a "+" wallet: settled, its money is converted at the rate quoted when it was sent and loaded into the wallet; the NOSTRO and the account stay as they are',async()=>{
+ received.length=0;reply=xml=>debitStatus(xml,'ACSC');
+ const wallet=await eurcWallet(),order=debited({},{tokenWalletId:wallet}),start=await money();
+ const result=await peers.transact(admin,owner,'EXAMPLE_TLS_PEER',order);
+ assert.deepEqual([result.debit.status,result.debit.wallet],['SETTLED',true]);
+ assert.deepEqual(moved(start,await money()),{account:'0.00',nostro:'0.00',held:'0.00',suspense:'0.00'});
+ const row=await debit(order.form.uetr);
+ assert.deepEqual([row.token_wallet_account_id,String(row.rate),row.rate_source],[wallet,'1.000000000000000000','MiCA 1:1']);
+ assert.deepEqual((await pool.query(`SELECT asset,network,rate_source,quantity::numeric(38,4)::text AS quantity,mode,journal_id=$2 AS booked FROM avis_core_v2.fin_terminal_conversions
+  WHERE uetr=$1`,[order.form.uetr,row.booked_journal_id])).rows,[{asset:'EURC',network:'SOLANA',rate_source:'MiCA 1:1',quantity:'299.8500',mode:'MANUAL',booked:true}]);
+ assert.equal((await pool.query('SELECT available_balance::numeric(38,4)::text AS b FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[wallet])).rows[0].b,'299.8500');
+ assert.deepEqual(await debitJournals(order.form.uetr),['FIN_DEBIT_CONVERTED']);
+ assert.deepEqual([result.draft.transacted,result.draft.conversion.asset,result.draft.conversion.quantity],['SETTLED','EURC','299.8500']);
+ assert.equal(result.messages[0].text,'DEBIT 300.00 EUR <- '+DEBTOR+' · converted into the wallet');
+});
+
+test('a Debit refused by the debtor\'s bank, not taken or not answered books nothing; one whose finishing never completed is finished at the next Transact',async()=>{
+ const start=await money();
+ // Refused (RJCT with its reason).
+ received.length=0;reply=xml=>debitStatus(xml,'RJCT',{reason:'MD01',text:'No mandate'});
+ const declined=await peers.transact(admin,owner,'EXAMPLE_TLS_PEER',debited());
+ assert.deepEqual([declined.debit.status,declined.debit.peerStatus,declined.debit.reason,declined.draft.registered,declined.draft.transacted],['REFUSED','RJCT','MD01',true,'REFUSED']);
+ assert.equal(declined.messages[0].text,'DEBIT 300.00 EUR <- '+DEBTOR+' · refused, nothing booked');
+ // Not taken: the debtor's bank's server not reached.
+ const unsent=await peers.transact(admin,owner,'EXAMPLE_ISO_PEER',debited());
+ assert.deepEqual([unsent.debit.status,unsent.messages[0].status,unsent.messages[0].error],['REFUSED','FAILED','ECONNREFUSED']);
+ // Not answered: nothing booked, not settled.
+ reply=()=>null;
+ const silent=await peers.transact(admin,owner,'EXAMPLE_TLS_PEER',debited());
+ assert.deepEqual([silent.debit.status,silent.messages[0].text],['HELD','DEBIT 300.00 EUR <- '+DEBTOR+' · not settled, nothing booked']);
+ for(const item of [declined,unsent,silent])assert.deepEqual([(await debit(item.debit.uetr)).booked_journal_id,await debitJournals(item.debit.uetr)],[null,[]]);
+ assert.deepEqual(moved(start,await money()),{account:'0.00',nostro:'0.00',held:'0.00',suspense:'0.00'});
+ // The bank's database failed after the debtor's bank settled: the answer is kept, and the Debit is finished - once - at the next Transact.
+ reply=xml=>debitStatus(xml,'ACSC');
+ const stuck=debited({amount:'70.00'}),terminal=peers.terminal;
+ terminal.bookDebit=async()=>{throw new Error('database gone');};
+ try{await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',stuck),/database gone/);}finally{delete terminal.bookDebit;}
+ const waiting=await debit(stuck.form.uetr);
+ assert.deepEqual([waiting.status,waiting.answer.includes('<TxSts>ACSC</TxSts>'),waiting.booked_journal_id],['SENDING',true,null]);
+ await pool.query("UPDATE avis_core_v2.fin_terminal_debits SET updated_at=now()-interval '2 minutes' WHERE uetr=$1",[stuck.form.uetr]);
+ received.length=0;const next=await peers.transact(admin,owner,'EXAMPLE_TLS_PEER',debited({amount:'5.00'}));
+ assert.deepEqual([(await debit(stuck.form.uetr)).status,next.debit.status,received.length],['SETTLED','SETTLED',1]);
+ assert.deepEqual(await debitJournals(stuck.form.uetr),['FIN_DEBIT_BOOKED']);
+ assert.deepEqual(moved(start,await money()),{account:'75.00',nostro:'75.00',held:'0.00',suspense:'0.00'});
+});
+
+test('a Debit sends and books nothing without its debtor, their account or the mandate, as a credit transfer, into another account, through another NOSTRO or another bank, while the port listens, or without the PINs under 4-Eyes',async()=>{
+ received.length=0;reply=xml=>debitStatus(xml,'ACSC');
+ const wallet=await eurcWallet(),start=await money(),debits=await count('fin_terminal_debits'),drafts=await count('fin_terminal_drafts');
+ for(const [order,code,field] of [[debited({debtorName:''}),'FIN_DEBIT_DEBTOR','debtorName'],[debited({debtorIban:''}),'FIN_DEBIT_ACCOUNT','debtorIban'],
+  [debited({mandateId:''}),'FIN_DEBIT_MANDATE','mandateId'],[debited({mandateSignatureDate:''}),'FIN_DEBIT_MANDATE','mandateSignatureDate'],
+  [debited({mandateSignatureDate:'01.10.2026'}),'FIN_TRANSACT_INVALID','xml'],[debited({messageType:'pacs.008.001.08'}),'INVALID_FIELD','messageType'],
+  [{...debited(),selection:{bookingAccountId:'',nostroAccountId:nostro.id}},'FIN_BOOKING_ACCOUNT','bookingAccountId'],
+  [debited({creditorIban:BENEFICIARY}),'FIN_DEBIT_CREDITOR_MISMATCH','bookingAccountId'],[debited({settlement:'INGA'}),'FIN_NOSTRO_MISMATCH','nostroAccountId'],
+  [debited({senderBic:'SMPLDEFFXXX'}),'FIN_TRANSACT_SENDER','senderBic'],[debited({receiverBic:'SMPLDEFFXXX'}),'FIN_TRANSACT_RECEIVER','receiverBic'],
+  // An amount that converts to no token is refused before it leaves.
+  [debited({amount:'0.00004'},{tokenWalletId:wallet}),'FIN_CONVERT_QUANTITY','amount']])
+  await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',order),error=>error.code===code&&error.field===field,code);
+ await assert.rejects(peers.transact(admin,owner,'EXAMPLE_USD_PEER',debited()),refused('FIN_TRANSACT_NOSTRO',409));
+ await assert.rejects(peers.transact(guest,owner,'EXAMPLE_TLS_PEER',debited()),refused('FORBIDDEN',403));
+ await pool.query(`INSERT INTO avis_core_v2.fin_terminal_listener(listener_id,open_until,changed_by) VALUES(1,now()+interval '15 minutes','fin-debit-test')
+  ON CONFLICT(listener_id) DO UPDATE SET open_until=EXCLUDED.open_until`);
+ try{await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',debited()),refused('FIN_LISTENING',409));}
+ finally{await pool.query('UPDATE avis_core_v2.fin_terminal_listener SET open_until=NULL');}
+ await pool.query('DELETE FROM avis_core_v2.fin_terminal_pins');
+ await access.setPin(admin,owner,{slot:1,pin:'135790'});await access.setPin(admin,officer,{slot:2,pin:'246802'});await access.fourEyes(admin,owner,{on:true});
+ try{
+  await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',debited()),error=>error.code==='FIN_PIN'&&error.field==='pin1');
+  assert.deepEqual([await count('fin_terminal_debits'),await count('fin_terminal_drafts'),received.length],[debits,drafts,0]);
+  // With PIN 1 and PIN 2 it goes, kept with their holders.
+  const checked=await peers.transact(admin,owner,'EXAMPLE_TLS_PEER',{...debited({amount:'9.00'}),pin1:'135790',pin2:'246802'});
+  assert.deepEqual([checked.debit.status,checked.debit.fourEyes,checked.debit.checkers.length],['SETTLED',true,2]);
+ }finally{await access.fourEyes(admin,owner,{on:false});}
+ assert.deepEqual(moved(start,await money()),{account:'9.00',nostro:'9.00',held:'0.00',suspense:'0.00'});
+});
+
+test('Screen 1\'s Debit: the message type and the mandate go with it, the accounts write the creditor\'s side and the debtor\'s bank; Transact sends it once and the message is closed',async()=>{
+ const {server,base,cookie}=await signIn(()=>owner),html=await readFile(new URL('../public/fin-terminal.html',import.meta.url),'utf8');
+ const dom=new JSDOM(html,{url:base+'/fin-terminal'}),doc=dom.window.document,asked=[];
+ try{
+  const fetcher=async(path,init={})=>{asked.push({path,method:init.method||'GET',body:init.body});return fetch(base+path,{...init,headers:{...init.headers,cookie,origin:base}});};
+  await startFinTerminal({root:doc,fetcher,windowApi:{BroadcastChannel:class{close(){}},addEventListener(){},close(){}}});
+  const $=selector=>doc.querySelector(selector),transact=$('[data-fin-transact]'),field=name=>$('[data-fin-field="'+name+'"]'),mandate=$('[data-fin-mandate]');
+  const type=(name,value)=>{const input=field(name);input.value=value;input.dispatchEvent(new dom.window.Event(input.tagName==='SELECT'?'change':'input',{bubbles:true}));};
+  const pick=(selector,value)=>{const select=$(selector);select.value=value;select.dispatchEvent(new dom.window.Event('change',{bubbles:true}));};
+  const offered=(selector,value)=>[...doc.querySelectorAll(selector+' option')].some(option=>option.value===value);
+  await until(()=>offered('[data-fin-choice="nostroAccountId"]',nostro.id)&&offered('[data-fin-peer-server]','EXAMPLE_TLS_PEER'),'the accounts and the peer servers');
+  assert.deepEqual([field('messageType').value,mandate.hidden],['pacs.008.001.08',true]);
+  // Chosen for an outgoing message, the accounts go to the creditor's side when it turns to a Debit, with the direct debit and its mandate.
+  pick('[data-fin-peer-server]','EXAMPLE_TLS_PEER');pick('[data-fin-choice="bookingAccountId"]',account.accountId);pick('[data-fin-choice="nostroAccountId"]',nostro.id);
+  assert.equal(field('debtorIban').value,account.iban);
+  pick('[data-fin-direction]','DEBIT');
+  assert.deepEqual([field('messageType').value,mandate.hidden,transact.hidden,transact.disabled],['pacs.003.001.08',false,false,true]);
+  assert.deepEqual(['debtorName','debtorIban','debtorAgentBic','creditorName','creditorIban','creditorAgentBic','receiverBic','settlement','settlementAccount'].map(name=>field(name).value),
+   ['','','',account.institution,account.iban,account.bic,PEER,'INDA','NOSTRO-EXAMPLE-1']);
+  for(const [name,value] of Object.entries({senderBic:BANK,amount:'25.00',debtorName:'Example Debtor GmbH',debtorIban:DEBTOR,debtorAgentBic:PEER,
+   mandateId:'MANDATE-EXAMPLE-0002',mandateSignatureDate:'2026-10-02'}))type(name,value);
+  assert.match($('[data-fin-xml]').value,/<FIToFICstmrDrctDbt>[\s\S]*<MndtId>MANDATE-EXAMPLE-0002<\/MndtId>\s*<DtOfSgntr>2026-10-02<\/DtOfSgntr>/);
+  $('[data-fin-validate]').click();await until(()=>$('[data-fin-xsd]').textContent==='XSD: PASSED'&&!transact.disabled,'the check');
+  // Pressed twice: one request goes, and the message is closed with what became of it.
+  received.length=0;reply=xml=>debitStatus(xml,'ACSC');
+  transact.click();transact.click();
+  await until(()=>$('[data-fin-draft-state]').textContent==='Debit · SETTLED','the debit');
+  const sent=asked.filter(request=>request.path.endsWith('/transact'));
+  assert.deepEqual([sent.length,sent[0].path,JSON.parse(sent[0].body).direction,received.length],[1,'/api/fin-terminal/peers/EXAMPLE_TLS_PEER/transact','DEBIT',1]);
+  assert.deepEqual([transact.hidden,$('[data-fin-save]').hidden,$('[data-fin-direction]').disabled,field('messageType').disabled],[true,true,true,true]);
+  await until(()=>[...doc.querySelectorAll('[data-fin-peer-stream] li')].some(item=>/IP pacs\.003 SENT .*DEBIT 25\.00 EUR/.test(item.textContent)),'the stream');
+  assert.ok([...doc.querySelectorAll('[data-fin-drafts] option')].some(option=>/Debit SETTLED · 25\.00 EUR · Example Debtor GmbH/.test(option.textContent)),'listed with its debtor');
+  // A new message is a credit transfer again; the direct debit chosen as its type turns it to a Debit, and back, without the mandate.
+  $('[data-fin-new]').click();await until(()=>$('[data-fin-draft-state]').textContent==='New message','a new message');
+  assert.deepEqual([field('messageType').value,mandate.hidden,$('[data-fin-direction]').value],['pacs.008.001.08',true,'OUTGOING']);
+  type('messageType','pacs.003.001.08');
+  assert.deepEqual([$('[data-fin-direction]').value,mandate.hidden],['DEBIT',false]);
+  type('mandateId','MANDATE-EXAMPLE-0003');
+  pick('[data-fin-direction]','OUTGOING');
+  assert.deepEqual([field('messageType').value,field('mandateId').value,mandate.hidden],['pacs.008.001.08','',true]);
+  assert.doesNotMatch($('[data-fin-xml]').value,/MndtId/);
+ }finally{dom.window.close();await new Promise(resolve=>server.close(resolve));}
 });

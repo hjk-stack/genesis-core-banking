@@ -182,3 +182,30 @@ test('Transact sits with the composer\'s buttons inside the window; every button
   assert.deepEqual(errors,[]);
  }finally{await context.close();}
 });
+
+// The bank owner: "There is missing a function: Debit. This is when we have authorisation for debiting an external connected account".
+test('Debit on a phone, an iPad and a computer: the direct debit\'s mandate inside the window with Transact, shown for a Debit only',async()=>{
+ const context=await signedContext({width:1440,height:900}),page=await context.newPage(),errors=[];
+ page.on('pageerror',error=>errors.push(error.message));
+ try{
+  const mandate=page.locator('[data-fin-mandate]');
+  for(const width of [260,390,820,1440]){
+   await page.setViewportSize({width,height:900});await page.goto(base+'/fin-terminal');await page.locator('[data-fin-transact]').waitFor();
+   assert.equal(await mandate.isVisible(),false,'no mandate for a credit transfer, '+width);
+   await page.selectOption('[data-fin-direction]','DEBIT');await mandate.waitFor();
+   assert.equal(await page.inputValue('[data-fin-field="messageType"]'),'pacs.003.001.08');
+   await page.fill('[data-fin-field="mandateId"]','MANDATE-EXAMPLE-0001');await page.fill('[data-fin-field="mandateSignatureDate"]','2026-10-01');
+   assert.match(await page.inputValue('[data-fin-xml]'),/<MndtId>MANDATE-EXAMPLE-0001<\/MndtId>\s*<DtOfSgntr>2026-10-01<\/DtOfSgntr>/);
+   const boxes=await page.locator('[data-fin-mandate] :is(legend,input),.fin-actions button:visible').evaluateAll(nodes=>nodes.map(node=>{const box=node.getBoundingClientRect();
+    return {name:node.dataset.finField||node.textContent,left:box.left,right:box.right,width:box.width};}));
+   assert.deepEqual(boxes.filter(box=>['mandateId','mandateSignatureDate','Transact'].includes(box.name)).map(box=>box.name),['mandateId','mandateSignatureDate','Transact']);
+   for(const box of boxes)assert.ok(box.left>=0&&box.right<=width+0.5&&box.width>0,JSON.stringify(box)+' inside '+width);
+   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no sideways scrolling, '+width);
+   await mandate.evaluate(node=>node.scrollIntoView({block:'center'}));await page.screenshot({path:'test-results/fin-debit-'+width+'.png'});
+   // Back to a credit transfer, the mandate goes with it.
+   await page.selectOption('[data-fin-direction]','OUTGOING');
+   assert.deepEqual([await mandate.isVisible(),await page.inputValue('[data-fin-field="messageType"]')],[false,'pacs.008.001.08']);
+  }
+  assert.deepEqual(errors,[]);
+ }finally{await context.close();}
+});

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
-import {FIELDS,LIMITS,PACS008,COUNTRIES,REPORTING_CODES,blankForm,buildFinMessage,readFinMessage,normalizeForm,detailPieces,fieldProblems,ibanValid,newMessageId} from '../public/fin-message.mjs';
+import {FIELDS,LIMITS,PACS008,PACS003,COUNTRIES,REPORTING_CODES,blankForm,buildFinMessage,readFinMessage,normalizeForm,detailPieces,fieldProblems,ibanValid,newMessageId} from '../public/fin-message.mjs';
 import {validateFinMessage} from '../src/fin-terminal.mjs';
 import {exampleForm,exampleIban} from './helpers/fin-example.mjs';
 
@@ -20,6 +20,25 @@ test('a complete message passes both official schemas: the header against head.0
   '<IntrmyAgt1>','<UltmtDbtr>','<UltmtCdtr>','<RgltryRptg>','<Cd>SCOR</Cd>','<Ref>RF18539007547034</Ref>'])assert.ok(xml.includes(piece),piece);
  const order=['<PmtId>','<PmtTpInf>','<IntrBkSttlmAmt','<IntrBkSttlmDt>','<ChrgBr>','<IntrmyAgt1>','<UltmtDbtr>','<Dbtr>','<DbtrAcct>','<DbtrAgt>','<CdtrAgt>','<Cdtr>','<CdtrAcct>','<UltmtCdtr>','<RgltryRptg>','<RmtInf>'];
  assert.deepEqual(order.map(tag=>xml.indexOf(tag)),[...order.map(tag=>xml.indexOf(tag))].sort((a,b)=>a-b));
+});
+
+// The bank owner: "There is missing a function: Debit. This is when we have authorisation for debiting an external connected account".
+test('a Debit is a direct debit (pacs.003.001.08) under the debtor\'s mandate - its number and the date it was signed - passing both official schemas, read back as written',async()=>{
+ const form={...exampleForm(),messageType:PACS003,settlement:'INDA',mandateId:'MANDATE-EXAMPLE-0001',mandateSignatureDate:'2026-10-01'};
+ const xml=buildFinMessage(form);
+ assert.match(xml,/\n  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs\.003\.001\.08">\n    <FIToFICstmrDrctDbt>/);
+ assert.deepEqual(await validateFinMessage(xml,PACS003),{valid:true,errors:[]});
+ for(const piece of ['<MsgDefIdr>pacs.003.001.08</MsgDefIdr>','<DrctDbtTxInf>','<UETR>9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d</UETR>'])assert.ok(xml.includes(piece),piece);
+ assert.match(xml,/<DrctDbtTx>\s*<MndtRltdInf>\s*<MndtId>MANDATE-EXAMPLE-0001<\/MndtId>\s*<DtOfSgntr>2026-10-01<\/DtOfSgntr>\s*<\/MndtRltdInf>\s*<\/DrctDbtTx>/);
+ // The schema's own order: the creditor first, the mandate before it; the debtor after the intermediary.
+ const order=['<PmtId>','<PmtTpInf>','<IntrBkSttlmAmt','<IntrBkSttlmDt>','<ChrgBr>','<DrctDbtTx>','<Cdtr>','<CdtrAcct>','<CdtrAgt>','<UltmtCdtr>','<IntrmyAgt1>','<Dbtr>','<DbtrAcct>','<DbtrAgt>','<UltmtDbtr>','<RgltryRptg>','<RmtInf>'];
+ assert.deepEqual(order.map(tag=>xml.indexOf(tag)),[...order.map(tag=>xml.indexOf(tag))].sort((a,b)=>a-b));
+ const read=readFinMessage(xml,DOMParser);assert.equal(read.error,undefined);assert.deepEqual(read.form,normalizeForm(form));
+ // Checked as a credit transfer it fails, and a credit transfer carries no mandate.
+ assert.equal((await validateFinMessage(xml)).valid,false);
+ assert.doesNotMatch(buildFinMessage({...form,messageType:PACS008}),/MndtRltdInf|DrctDbt/);
+ // A Debit is under the debtor's authorisation: without its mandate it does not pass.
+ assert.deepEqual((await validateFinMessage(buildFinMessage({...form,mandateId:'',mandateSignatureDate:''}),PACS003)).errors.map(error=>/Element '(\w+)'/.exec(error)?.[1]),['MndtId','DtOfSgntr']);
 });
 
 test('optional parts left empty are left out, and the message still passes both schemas',async()=>{

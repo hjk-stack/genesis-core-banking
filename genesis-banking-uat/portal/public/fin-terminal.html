@@ -55,8 +55,8 @@
 <form class="fin-form" data-fin-form autocomplete="off" novalidate>
 <div class="fin-row">
 <fieldset class="fin-panel"><legend>Business Application Header (head.001.001.02)</legend>
-<label><span>Message Type</span><select data-fin-field="messageType"><option value="pacs.008.001.08">pacs.008.001.08 – FI-to-FI Customer Credit Transfer</option></select></label>
-<label><span>Direction</span><select data-fin-direction><option value="OUTGOING">Outgoing</option><option value="INCOMING">Incoming</option></select></label>
+<label><span>Message Type</span><select data-fin-field="messageType"><option value="pacs.008.001.08">pacs.008.001.08 – FI-to-FI Customer Credit Transfer</option><option value="pacs.003.001.08">pacs.003.001.08 – FI-to-FI Customer Direct Debit</option></select></label>
+<label><span>Direction</span><select data-fin-direction><option value="OUTGOING">Outgoing</option><option value="INCOMING">Incoming</option><option value="DEBIT">Debit</option></select></label>
 <label><span>Sender BIC</span><input class="fin-code" data-fin-field="senderBic" maxlength="11" spellcheck="false"></label>
 <label><span>Receiver BIC</span><input class="fin-code" data-fin-field="receiverBic" maxlength="11" spellcheck="false"></label>
 <label><span>Auto-generated UETR</span><span class="fin-with-button"><input class="fin-code" data-fin-field="uetr" readonly spellcheck="false"><button type="button" data-fin-new-uetr aria-label="New UETR" title="New UETR">↻</button></span></label>
@@ -91,6 +91,10 @@
 <label><span>Creditor Agent BIC</span><input class="fin-code" data-fin-field="creditorAgentBic" maxlength="11" spellcheck="false"></label>
 </fieldset>
 </div>
+<fieldset class="fin-panel fin-panel-wide" data-fin-mandate hidden><legend>Direct Debit Mandate</legend>
+<label><span>Mandate ID</span><input class="fin-code" data-fin-field="mandateId" maxlength="35" spellcheck="false"></label>
+<label><span>Date of Signature</span><input class="fin-code" data-fin-field="mandateSignatureDate" maxlength="10" placeholder="YYYY-MM-DD" spellcheck="false"></label>
+</fieldset>
 <fieldset class="fin-panel fin-panel-wide"><legend>Intermediary Agent &amp; Ultimate Parties</legend>
 <label><span>Intermediary Agent BIC</span><input class="fin-code" data-fin-field="intermediaryBic" maxlength="11" spellcheck="false"></label>
 <label><span>Intermediary Agent Address</span><input data-fin-field="intermediaryAddress" maxlength="140"></label>

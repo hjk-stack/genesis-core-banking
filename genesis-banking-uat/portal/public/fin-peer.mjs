@@ -44,10 +44,12 @@ export function streamLine(message){
  const when='['+clock(message.at)+']',text=message.text?['·',message.text]:[],seq='(Seq #'+String(message.sequence).padStart(6,'0')+')';
  // What the bank sent: its own message, or its answer to a peer's message - the same event, a refusal with its reason, or a
  // transfer's status (pacs.002: ACSC, or RJCT with its reason code).
- // A credit transfer the bank sent (Screen B's Cash Wire) as the specification's terminal writes it: "IP pacs.008 SENT".
+ // A credit transfer the bank sent (Screen B's Cash Wire) as the specification's terminal writes it: "IP pacs.008 SENT"; a Debit
+ // (Screen 1) as "IP pacs.003 SENT".
  if(message.direction==='OUT'){
   const answer=Boolean(message.answerTo),refusal=message.type==='admi.002.001.01',status=message.type==='pacs.002.001.10',transfer=message.type==='pacs.008.001.08';
-  return ['>>>',when,...(answer?['ANSWER']:[]),refusal?'REJECT':status?['pacs.002',message.event,...message.parameters.slice(1)].join(' '):transfer?'IP pacs.008':EVENTS[message.event]||message.event,
+  return ['>>>',when,...(answer?['ANSWER']:[]),refusal?'REJECT':status?['pacs.002',message.event,...message.parameters.slice(1)].join(' '):transfer?'IP pacs.008':
+   message.type==='pacs.003.001.08'?'IP pacs.003':EVENTS[message.event]||message.event,
    SENT[message.status]||message.status,seq,
    ...(message.status==='FAILED'?['·',failure(message.error)]:[]),...(message.status==='DELIVERED'&&!answer&&!message.answered?['· no answer message']:[]),
    ...(refusal?['·',message.event]:[]),...text].join(' ');
