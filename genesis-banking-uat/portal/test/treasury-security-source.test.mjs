@@ -249,13 +249,12 @@ test('Treasury booking registers a documented manual holding once, atomically, w
  assert.deepEqual(await financialState(),before);
 });
 test('catalogue booking selects the registered instrument, not its issue volume, and existing source links remain immutable',async()=>{
- const registered=await security({kind:'bond',isin:'US0378331005',quoteBasis:'PERCENT',denomination:'1000'});
+ const registered=await security({kind:'bond',isin:'US5949181045',quoteBasis:'PERCENT',denomination:'1000'});
  await pool.query("UPDATE avis_core_v2.portfolio_securities SET source='GREEN_BOND' WHERE security_id=$1",[registered.id]);
  const before=await financialState(),input={sourceMode:'CATALOGUE',securityId:registered.id,userId:'1',quantity:'3',issuingPrice:'100',marketPrice:'99',reference:'Databank custody '+key()};
- // Use a distinct institutional instrument if an earlier test already used this ISIN.
- const existing=(await core.list(admin,'treasurypositions')).find(t=>t.isin==='US0378331005'&&String(t.owner_user_id)==='1');
- if(existing){await assert.rejects(core.bookTreasurySecurity(admin,input,key()),/TREASURY_SOURCE_ALREADY_BOOKED/);}
- else{const result=await core.bookTreasurySecurity(admin,input,key());assert.equal((await position(result.positionId)).quantity,'3.000000000000000000');}
+ const result=await core.bookTreasurySecurity(admin,input,key());
+ assert.equal((await position(result.positionId)).quantity,'3.000000000000000000');
+ assert.equal((await core.list(admin,'treasurypositions')).find(t=>t.booking_id===result.bookingId).source_system,'GREEN_BOND_CATALOGUE');
  const manual=await security();
  await assert.rejects(core.bookTreasurySecurity(admin,{...input,securityId:manual.id,reference:key()},key()),/TREASURY_SECURITY_IDENTITY/);
  await assert.rejects(core.bookTreasurySecurity({...admin,customerUserId:'1'},input,key()),/FORBIDDEN/);

@@ -162,7 +162,7 @@ export class SecuritiesPortfolio extends AccountManagement {
    const assetCode=s.isin||s.security_id;
    // An original Treasury booking, including an unlinked opening position, is
    // selected/registered instead of being silently booked a second time.
-   const known=(await db.query("SELECT booking_id FROM avis_core_v2.treasury_opening_positions WHERE asset_class='SECURITY' AND (source_reference=$1 OR (owner_user_id=$2 AND (asset_code=$3 OR ($4::varchar IS NOT NULL AND isin=$4) OR lower(asset_name)=lower($5)))) LIMIT 1",[reference,request.userId,assetCode,s.isin,s.name])).rows[0];
+   const known=(await db.query("SELECT booking_id FROM avis_core_v2.treasury_opening_positions WHERE asset_class='SECURITY' AND (source_reference=$1 OR (owner_user_id=$2 AND (asset_code=$3 OR ($4::varchar IS NOT NULL AND isin=$4) OR lower(asset_name)=lower($5) OR (asset_code='AVISPAY-PLC-SHARES' AND $6='share' AND lower($5) IN ('avispay plc','avispay plc shares'))))) LIMIT 1",[reference,request.userId,assetCode,s.isin,s.name,s.kind])).rows[0];
    if(known)fault('TREASURY_SOURCE_ALREADY_BOOKED','securityId',409);
    const old=(await db.query("SELECT * FROM avis_core_v2.portfolio_positions WHERE user_id=$1 AND security_id=$2 FOR UPDATE",[request.userId,s.security_id])).rows[0];
    if(old?.treasury_booking_id)fault('TREASURY_SECURITY_LINKED','securityId',409);

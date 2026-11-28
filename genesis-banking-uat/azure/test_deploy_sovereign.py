@@ -744,6 +744,7 @@ class FrontendReleaseIntegrityTests(unittest.TestCase):
                   '/nostro-clearing.mjs': 'public/nostro-clearing.mjs',
         '/checkout-ip.mjs': 'public/checkout-ip.mjs',
                  '/crypto-workspace.mjs': 'public/crypto-workspace.mjs',
+                 '/rolling-converter-admin.mjs': 'public/rolling-converter-admin.mjs',
                  '/treasury-source.mjs': 'public/treasury-source.mjs',
         '/wallet-trading-scroller.mjs': 'public/wallet-trading-scroller.mjs',
         '/wallet-trading-scroller.css': 'public/wallet-trading-scroller.css',
