@@ -408,10 +408,13 @@ test('Transact: the composer\'s outgoing message goes to the Peer Server chosen 
  const {draft}=result;
  assert.deepEqual([draft.direction,draft.registered,draft.transacted,draft.uetr,draft.form.creditorName],['OUTGOING',true,'SETTLED',order.form.uetr,'Example Creditor SARL']);
  assert.equal((await new FinTerminal(pool).drafts(admin)).find(row=>row.draftId===draft.draftId).transacted,'SETTLED');
+ // Reopened, it passes Validate XML as it was sent: its wire is its own (review finding); another draft with its UETR does not.
+ assert.deepEqual(await new FinTerminal(pool).validate(admin,{form:draft.form,xml:draft.xml,draftId:draft.draftId}),{valid:true,errors:[]});
+ assert.deepEqual((await new FinTerminal(pool).validate(admin,{form:draft.form,xml:draft.xml})).errors,['uetr: already used by another payment or draft.']);
  // Pressed again - as it was written, as the closed message, or the closed message with a new UETR: refused, nothing sent or booked.
  const again=await money();
  await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',order),refused('FIN_UETR_DUPLICATE',409));
- await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',{...order,draftId:draft.draftId,revision:draft.revision}),refused('FIN_UETR_DUPLICATE',409));
+ await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',{...order,draftId:draft.draftId,revision:draft.revision}),refused('FIN_TRANSACTED',409));
  await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',{...order,form:{...order.form,uetr:newUetr()},draftId:draft.draftId,revision:draft.revision}),refused('FIN_TRANSACTED',409));
  assert.equal(received.length,1);assert.equal(await count('fin_terminal_wires'),wires+1);
  assert.deepEqual(moved(again,await money()),{account:'0.00',nostro:'0.00',held:'0.00',suspense:'0.00'});
@@ -538,12 +541,14 @@ test('Debit: the direct debit goes to the debtor\'s bank\'s Peer Server under th
  assert.deepEqual([draft.direction,draft.messageType,draft.registered,draft.transacted,draft.form.mandateId],['DEBIT','pacs.003.001.08',true,'SETTLED','MANDATE-EXAMPLE-0001']);
  assert.deepEqual((await new FinTerminal(pool).drafts(admin)).filter(item=>item.draftId===draft.draftId).map(item=>[item.direction,item.transacted,item.debtorName]),
   [['DEBIT','SETTLED','Example Debtor GmbH']]);
+ // Reopened, it passes Validate XML as it was sent: its Debit is its own.
+ assert.deepEqual(await new FinTerminal(pool).validate(admin,{form:draft.form,xml:draft.xml,draftId:draft.draftId}),{valid:true,errors:[]});
  // Pressed again - as it was written, as the closed message, or the closed message with a new UETR: refused, nothing sent or booked.
  const again=await money();
  await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',order),refused('FIN_UETR_DUPLICATE',409));
- await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',{...order,draftId:draft.draftId,revision:draft.revision}),refused('FIN_UETR_DUPLICATE',409));
+ await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',{...order,draftId:draft.draftId,revision:draft.revision}),refused('FIN_TRANSACTED',409));
  await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',{...order,form:{...order.form,uetr:newUetr()},draftId:draft.draftId,revision:draft.revision}),refused('FIN_TRANSACTED',409));
- await assert.rejects(new FinTerminal(pool).save(admin,{...order,draftId:draft.draftId,revision:draft.revision}),refused('FIN_UETR_DUPLICATE',409));
+ await assert.rejects(new FinTerminal(pool).save(admin,{...order,draftId:draft.draftId,revision:draft.revision}),refused('FIN_TRANSACTED',409));
  assert.equal(received.length,1);assert.equal(await count('fin_terminal_debits'),debits+1);
  assert.deepEqual(moved(again,await money()),{account:'0.00',nostro:'0.00',held:'0.00',suspense:'0.00'});
  // A Debit saved first is the draft closed.
