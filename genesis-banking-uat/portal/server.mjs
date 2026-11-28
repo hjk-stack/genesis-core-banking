@@ -176,6 +176,9 @@ FIN_DRAFT_REGISTERED:'This incoming transfer is registered and is not changed an
  FIN_WIRE_AMOUNT:'Enter the amount in EUR, above zero, with at most two decimals.',FIN_WIRE_BENEFICIARY:'Enter the beneficiary\'s name.',
  FIN_WIRE_ACCOUNT:'Enter the beneficiary\'s account number, at most 34 characters.',FIN_WIRE_NOSTRO:'This peer server has no active EUR NOSTRO account of its bank.',
  FIN_WIRE_INVALID:'The transfer does not pass its official schemas.',
+ FIN_TRANSACT_INVALID:'Transact a message that passes Validate XML.',FIN_TRANSACT_DIRECTION:'Transact sends an outgoing message.',
+ FIN_TRANSACT_NOSTRO:'Choose the NOSTRO account registered for this Peer Server.',FIN_TRANSACT_SENDER:'The Sender BIC is not the bank\'s own BIC at this Peer Server.',
+ FIN_TRANSACT_RECEIVER:'The Receiver BIC is not this Peer Server\'s bank.',FIN_TRANSACTED:'This transaction is executed: it is not changed or sent again.',
  PEER_VAULT:'The Key Vault of the peer servers\' logins is not in place in Azure: nothing was registered.',
  FIN_REGISTER_NOSTRO:'Select an active NOSTRO account whose bank has a BIC.',FIN_REGISTER_LOGIN:'IP-to-IP takes the certificate login.'
 };
@@ -570,6 +573,9 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    // Screen B's Cash Wire (NOSTRO) (src/fin-peer.mjs): Execute & Dispatch to a peer server, with PIN 1 and PIN 2 while 4-Eyes is on.
    const finWire=/^\/api\/fin-terminal\/peers\/([A-Z0-9_]{1,35})\/transfers$/.exec(path);
    if(finWire)return send(res,200,await finPeers.dispatch(actor,finPerson,finWire[1],body));
+   // Screen 1's Transact (src/fin-peer.mjs): the composer's outgoing message executed as the Cash Wire is, to the Peer Server chosen.
+   const finTransact=/^\/api\/fin-terminal\/peers\/([A-Z0-9_]{1,35})\/transact$/.exec(path);
+   if(finTransact)return send(res,200,await finPeers.transact(actor,finPerson,finTransact[1],body));
    if(path==='/api/fin-terminal/listener'){
     if(typeof body?.open!=='boolean')fault('INVALID_FIELD','open');
     return send(res,200,body.open?await finListener.open(actor,body):await finListener.close(actor));

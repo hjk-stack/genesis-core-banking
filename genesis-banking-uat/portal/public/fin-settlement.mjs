@@ -43,9 +43,11 @@ export function createFinSettlement({root=document,request,view=root.defaultView
   const server=Date.parse(data?.listener?.now);if(Number.isFinite(server))skew=server-Date.now();
   paintStp();paintClock();paintLedgers(data?.ledgers);
  }
+ // Pressed, the switch shows it is pressed until the bank answered (the bank owner: "all buttons must be interactive, showing that
+ // they are pressed").
  stp.addEventListener('click',()=>{
-  if(busy)return;busy=true;
-  request('POST','/api/fin-terminal/mode',{roboticStp:!robotic}).then(data=>{robotic=data?.roboticStp===true;paintStp();}).catch(()=>{}).finally(()=>{busy=false;});
+  if(busy)return;busy=true;stp.setAttribute('aria-busy','true');
+  request('POST','/api/fin-terminal/mode',{roboticStp:!robotic}).then(data=>{robotic=data?.roboticStp===true;paintStp();}).catch(()=>{}).finally(()=>{busy=false;stp.removeAttribute('aria-busy');});
  });
  paintStp();paintClock();
  return {start(){void refresh();view.setInterval(()=>void refresh(),POLL);view.setInterval(paintClock,1000);},refresh};

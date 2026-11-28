@@ -56,7 +56,8 @@ async function composer(){
  };
  const terminal=await startFinTerminal({root:doc,fetcher,windowApi:{BroadcastChannel:class{close(){}},addEventListener(){},close(){}}});
  const $=selector=>doc.querySelector(selector),field=name=>$('[data-fin-field="'+name+'"]');
- const idle=()=>![...doc.querySelectorAll('.fin-actions button')].some(button=>button.disabled);
+ // No action under way: Transact is not counted, as it waits for a message to transact (paintTransact).
+ const idle=()=>![...doc.querySelectorAll('.fin-actions button:not([data-fin-transact])')].some(button=>button.disabled);
  const page={dom,doc,$,field,terminal,xml:$('[data-fin-xml]'),verdict:()=>$('[data-fin-xsd]').textContent,state:()=>$('[data-fin-draft-state]').textContent,
   errors:()=>[...doc.querySelectorAll('[data-fin-errors] li')].map(item=>item.textContent),
   type(name,value){const input=field(name);input.value=value;input.dispatchEvent(new dom.window.Event(input.tagName==='SELECT'?'change':'input',{bubbles:true}));},

@@ -59,20 +59,22 @@ export async function startFinTerminal({root=document,fetcher=fetch,windowApi=ro
   waiting=!session&&!windowApi.opener&&!front();if(waiting)return;
   if(!session)return leave(true);
   terminal.hidden=false;csrf=session.csrf||'';
-  if(!composer){composer=createFinComposer({root,request});composer?.start();peer=createFinPeer({root,request,onRegistered:peers=>wire?.setPeers(peers)});void peer?.start();settlement=createFinSettlement({root,request});settlement?.start();createFinConverter({root,request})?.start();
-   // A wire dispatched shows at once in the ledgers and in Screen A's stream; its PINs follow the 4-Eyes switch.
+  // A wire dispatched, or a message transacted, shows at once in the ledgers and in Screen A's stream; the PINs of both follow the
+  // 4-Eyes switch, and Transact goes to the Peer Server chosen above the composer.
+  if(!composer){composer=createFinComposer({root,request,onTransacted:()=>{void settlement?.refresh();void peer?.look();},onRefused:()=>void access?.refresh()});composer?.start();
+   peer=createFinPeer({root,request,onRegistered:peers=>wire?.setPeers(peers),onChosen:chosen=>composer?.peer(chosen)});void peer?.start();settlement=createFinSettlement({root,request});settlement?.start();createFinConverter({root,request})?.start();
    wire=createFinWire({root,request,onDispatched:()=>{void settlement?.refresh();void peer?.look();},onRefused:()=>void access?.refresh()});
-   access=createFinAccess({root,request,onState:state=>wire?.access(state)});access?.start();void wire?.start();}
+   access=createFinAccess({root,request,onState:state=>{wire?.access(state);composer?.access(state);}});access?.start();void wire?.start();}
  }
  // Sign out by hand ("The bank must have login and log off operative"): the bank session and its sign-in end (server.mjs
  // /api/logout), every bank page of this browser is told, and this one leaves. Refused, it says so and stays.
  const out=root.querySelector('[data-fin-sign-out]');
  if(out)out.onclick=async()=>{
-  if(out.disabled)return;out.disabled=true;
+  if(out.disabled)return;out.disabled=true;out.setAttribute('aria-busy','true');
   try{
    const response=await fetcher('/api/logout',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'content-type':'application/json','x-csrf-token':csrf},body:'{}'});
    if(!response.ok)throw new Error();
-  }catch{out.disabled=false;out.textContent='Not signed out - try again';return;}
+  }catch{out.disabled=false;out.removeAttribute('aria-busy');out.textContent='Not signed out - try again';return;}
   try{const channel=new windowApi.BroadcastChannel(FIN_TERMINAL_CHANNEL);channel.postMessage({type:'signed-out'});channel.close();}catch{}
   leave(false);
  };

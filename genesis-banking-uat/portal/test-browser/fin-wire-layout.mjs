@@ -110,13 +110,22 @@ test('4-Eyes on: PIN 1 and PIN 2 with their holders, inside the window - one und
  }finally{await access.fourEyes(admin,finTerminalOwner,{on:false});}
 });
 
-// The bank owner: "the header referencing PIN make it in a klap menu, with default closed". One sign-in for every width: the
-// bank answers too many sign-ins at once with 429.
+// One sign-in for the tests below, at every width: the bank answers more than eight sign-ins a minute with 429 (server.mjs).
+let signedIn=null;
+async function signedContext(viewport){
+ if(!signedIn){
+  const context=await browser.newContext();
+  try{assert.equal((await context.request.post(base+'/api/login',{headers:{origin:base},data:{username:admin.username,password:'fixture'}})).status(),200);signedIn=await context.storageState();}
+  finally{await context.close();}
+ }
+ return browser.newContext({viewport,storageState:signedIn});
+}
+
+// The bank owner: "the header referencing PIN make it in a klap menu, with default closed".
 test('the PIN menu on a phone, an iPad and a computer: closed when the terminal opens, the PINs folding out under it inside the window',async()=>{
- const context=await browser.newContext({viewport:{width:1440,height:900}}),page=await context.newPage(),errors=[];
+ const context=await signedContext({width:1440,height:900}),page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  try{
-  assert.equal((await context.request.post(base+'/api/login',{headers:{origin:base},data:{username:admin.username,password:'fixture'}})).status(),200);
   const open=page.locator('[data-fin-pins-open]'),pins=page.locator('[data-fin-pins]');
   for(const width of [260,390,820,1440]){
    await page.setViewportSize({width,height:900});await page.goto(base+'/fin-terminal');
@@ -137,6 +146,39 @@ test('the PIN menu on a phone, an iPad and a computer: closed when the terminal 
    await open.click();
    assert.equal(await open.getAttribute('aria-expanded'),'false');assert.equal(await pins.isVisible(),false,'closed again, '+width);
   }
+  assert.deepEqual(errors,[]);
+ }finally{await context.close();}
+});
+
+// The bank owner: "When the transaction is filled, then add a button for press Transact for the transaction executed and all buttons
+// must be interactive, showing that they are pressed".
+test('Transact sits with the composer\'s buttons inside the window; every button shows it is pressed while held, and while what it started runs',async()=>{
+ const context=await signedContext({width:1440,height:900}),page=await context.newPage(),errors=[];
+ page.on('pageerror',error=>errors.push(error.message));
+ const look=locator=>locator.evaluate(node=>{const style=getComputedStyle(node);return {transform:style.transform,shadow:style.boxShadow,filter:style.filter,opacity:style.opacity};});
+ try{
+  const transact=page.locator('[data-fin-transact]'),validate=page.locator('[data-fin-validate]');
+  for(const width of [260,390,820,1440]){
+   await page.setViewportSize({width,height:900});await page.goto(base+'/fin-terminal');await transact.waitFor();
+   assert.deepEqual([await transact.textContent(),await transact.isDisabled()],['Transact',true],'nothing to transact yet, '+width);
+   const boxes=await page.locator('.fin-actions button:visible').evaluateAll(nodes=>nodes.map(node=>{const box=node.getBoundingClientRect();return {name:node.textContent,left:box.left,right:box.right,height:box.height};}));
+   assert.ok(boxes.some(box=>box.name==='Transact'),'Transact shown, '+width);
+   for(const box of boxes)assert.ok(box.left>=0&&box.right<=width+0.5&&box.height>=32,JSON.stringify(box)+' inside '+width);
+   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no sideways scrolling, '+width);
+  }
+  // Held: it sinks.
+  await validate.waitFor();const rest=await look(validate),box=await validate.boundingBox();
+  await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();
+  const held=await look(validate);await page.mouse.up();
+  assert.notEqual(held.transform,'none');assert.notEqual(held.shadow,rest.shadow);assert.notEqual(held.filter,rest.filter);
+  // Its action under way (the bank's answer held back): it stays pressed, in full colour, until the answer came.
+  let release;const answer=new Promise(resolve=>{release=resolve;});
+  await page.route('**/api/fin-terminal/validate',async route=>{await answer;await route.continue();});
+  await validate.click();await page.waitForFunction(()=>document.querySelector('[data-fin-validate]').getAttribute('aria-busy')==='true');
+  const busy=await look(validate);assert.notEqual(busy.transform,'none');assert.equal(busy.opacity,'1');
+  await page.screenshot({path:'test-results/fin-transact-pressed-1440.png'});
+  release();await page.waitForFunction(()=>!document.querySelector('[data-fin-validate]').hasAttribute('aria-busy'));
+  assert.deepEqual(await look(validate),rest,'back as it was');
   assert.deepEqual(errors,[]);
  }finally{await context.close();}
 });

@@ -415,17 +415,37 @@ export class FinPeers{
   const wire=this.#wire(body),peer=await this.#peer(profileId),credentials=this.credentials(peer.credential_reference);
   await this.#recover();
   const {form,xml}=await this.terminal.cashWire(peer,wire),check=await this.access.check(person,body);
+  return this.#execute(actor,person,peer,credentials,check,{form,xml,bookingAccountId:wire.bookingAccountId,
+   reserve:db=>this.terminal.reserveWire(db,actor,{form,bookingAccountId:wire.bookingAccountId,nostroAccountId:peer.cash_account_id})});
+ }
+ // Screen 1's Transact: the composer's outgoing message (src/fin-terminal.mjs, transactable) executed as a Cash Wire is, to the
+ // Peer Server chosen above it - the bank sending as itself to that server's bank, through the NOSTRO registered for it - with
+ // PIN 1 and PIN 2 while 4-Eyes is on. Its message is closed with it (reserveTransact): the same message again is refused.
+ async transact(actor,person,profileId,body){
+  this.#administrator(actor);
+  const peer=await this.#peer(profileId),credentials=this.credentials(peer.credential_reference),message=await this.terminal.transactable(actor,body);
+  if(message.selection.nostroAccountId!==peer.cash_account_id)fault('FIN_TRANSACT_NOSTRO','nostroAccountId',409);
+  if(message.form.senderBic!==peer.local_bic)fault('FIN_TRANSACT_SENDER','senderBic',409);
+  if(message.form.receiverBic!==peer.peer_bic)fault('FIN_TRANSACT_RECEIVER','receiverBic',409);
+  await this.#recover();
+  const check=await this.access.check(person,body);let draftId=null;
+  const result=await this.#execute(actor,person,peer,credentials,check,{form:message.form,xml:message.xml,bookingAccountId:message.selection.bookingAccountId,
+   reserve:async db=>{const reserved=await this.terminal.reserveTransact(db,actor,message);draftId=reserved.draftId;return reserved;}});
+  return {...result,draft:await this.terminal.draft(actor,draftId)};
+ }
+ // One execution for both: under the connector lock nothing leaves while the listening port is open, and 4-Eyes switched on since
+ // the PINs were looked at asks them first; the money is reserved and the message kept before it leaves.
+ async #execute(actor,person,peer,credentials,check,{form,xml,bookingAccountId,reserve}){
   const messageId=randomUUID(),text=form.amount+' '+form.currency+' -> '+form.creditorIban;
   await underConnectorLock(this.pool,async db=>{
    if((await db.query(LISTENING)).rows.length)fault('FIN_LISTENING',null,409);
-   // 4-Eyes switched on since the PINs were looked at: they are asked first.
    if((await db.query('SELECT four_eyes FROM avis_core_v2.fin_terminal_mode WHERE mode_id=1 FOR SHARE')).rows[0]?.four_eyes===true&&!check.fourEyes)fault('FIN_PIN','pin1');
-   const reserved=await this.terminal.reserveWire(db,actor,{form,bookingAccountId:wire.bookingAccountId,nostroAccountId:peer.cash_account_id});
+   const reserved=await reserve(db);
    await db.query(`INSERT INTO avis_core_v2.fin_terminal_peer_messages(message_id,profile_id,direction,message_type,business_message_id,event_parameters,event_text,status,content,created_by)
     VALUES($1,$2,'OUT',$3,$4,$5,$6,'SENDING',$7,$8)`,[messageId,peer.profile_id,PACS008,form.businessMessageId,[form.uetr],text,xml,String(actor.id)]);
    await db.query(`INSERT INTO avis_core_v2.fin_terminal_wires(uetr,message_id,profile_id,booking_account_id,nostro_cash_account_id,suspense_account_id,amount,currency_code,
     creditor_name,creditor_iban,reserve_journal_id,four_eyes,checkers,dispatched_by,dispatched_by_name) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-    [form.uetr,messageId,peer.profile_id,wire.bookingAccountId,peer.cash_account_id,reserved.suspense,form.amount,form.currency,form.creditorName,form.creditorIban,
+    [form.uetr,messageId,peer.profile_id,bookingAccountId,peer.cash_account_id,reserved.suspense,form.amount,form.currency,form.creditorName,form.creditorIban,
      reserved.journalId,check.fourEyes,check.checkers,String(actor.id),person.name]);
    await db.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_OUTGOING_DISPATCHED',form.uetr]);
   });

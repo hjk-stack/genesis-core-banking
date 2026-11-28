@@ -66,6 +66,10 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
 .fin-actions .fin-primary{border-color:var(--fin-orange);background:var(--fin-orange);color:#1a1205}
 .fin-composer button:disabled,.fin-composer select:disabled{opacity:.55;cursor:progress}
 .fin-composer button:focus-visible{outline:2px solid var(--fin-orange);outline-offset:2px}
+/* Transact's PIN 1 and PIN 2 while 4-Eyes is on, beside it. */
+.fin-transact-pins{display:flex;flex-wrap:wrap;gap:6px}
+.fin-transact-pins[hidden]{display:none}
+.fin-transact-pins input{width:8.5em;max-width:100%;padding:7px 8px;border:1px solid var(--fin-line);border-radius:6px;background:var(--fin-ground);color:var(--fin-text);font:inherit;font-size:13px}
 /* Screen A's peer panel above the composer: the session message on the left, the peer server's answers on the right - the
    specification's picture, its stream green on black as a terminal writes. */
 .fin-peer{grid-column:1/-1;grid-row:1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"title title" "link link" "listen listen" "out in";gap:6px 16px;padding:10px 12px 12px;border:1px solid var(--fin-line);border-radius:8px;background:var(--fin-panel)}
@@ -170,3 +174,7 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
 .fin-pin button{padding:6px 10px;border:1px solid var(--fin-orange);border-radius:6px;background:transparent;color:var(--fin-orange);font:inherit;font-size:12px;cursor:pointer}
 .fin-pin button:disabled{opacity:.5;cursor:default}
 .fin-access-problem{width:100%;margin:0;font-size:12px;color:var(--fin-wrong)}
+/* The bank owner: "all buttons must be interactive, showing that they are pressed" - every button sinks while it is held, and
+   stays sunk while what it started runs (aria-busy), in full colour; last, so no other rule fades it. */
+.fin-terminal button:not(:disabled):active,.fin-terminal button[aria-busy=true]{transform:translateY(1px);box-shadow:inset 0 2px 7px rgba(0,0,0,.6);filter:brightness(.8)}
+.fin-terminal button[aria-busy=true]{opacity:1;cursor:progress}
