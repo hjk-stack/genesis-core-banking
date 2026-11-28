@@ -65,5 +65,7 @@ export function createFinWire({root=document,request,onDispatched=()=>{},onRefus
   peers=Array.isArray(listed?.peers)?listed.peers:[];accounts=Array.isArray(owned?.accounts?.bookingAccounts)?owned.accounts.bookingAccounts:[];
   paint();
  }
- return {start,access};
+ // A peer server registered on Screen A (fin-peer.mjs) is offered here at once.
+ function setPeers(list){peers=Array.isArray(list)?list:[];paint();}
+ return {start,access,setPeers};
 }

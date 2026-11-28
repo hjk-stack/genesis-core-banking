@@ -1,10 +1,23 @@
 import https from 'node:https';
 import tls from 'node:tls';
+import {isIP} from 'node:net';
 import {createHash,createHmac,randomBytes,randomUUID,timingSafeEqual} from 'node:crypto';
 import {fault} from './core.mjs';
+import {VAULT_REFERENCE,peerLogin} from './peer-vault.mjs';
 const hash=v=>createHash('sha256').update(v).digest('hex');
 const canonical=(method,path,time,nonce,body)=>[method,path,time,nonce,hash(body)].join('\n');
+// A connector's credentials are the bank's Azure settings (AVIS_CONNECTOR_*): a certificate and key and a shared secret. A peer
+// server registered in the FinTerminal has its login in Azure Key Vault (src/peer-vault.mjs) - the bank owner chose "Both": a
+// certificate login (the certificate and key the bank shows, the peer's own issuer, a shared secret where requests are signed), or
+// the user name and password the peer bank gave.
 export function connectorCredentials(reference,env=process.env){
+ const vaulted=VAULT_REFERENCE.exec(reference||'');
+ if(vaulted){
+  const login=peerLogin(vaulted[1]);
+  if(login?.kind==='certificate'&&typeof login.cert==='string'&&typeof login.key==='string'&&(login.hmacSecret===undefined||typeof login.hmacSecret==='string'&&Buffer.byteLength(login.hmacSecret)>=32))return login;
+  if(login?.kind==='password'&&typeof login.user==='string'&&login.user&&typeof login.password==='string'&&login.password)return login;
+  fault('CONNECTOR_CONFIGURATION',null,503);
+ }
  if(!/^AVIS_CONNECTOR_[A-Z0-9_]+$/.test(reference||''))fault('CONNECTOR_CONFIGURATION',null,503);
  let credentials;try{credentials=JSON.parse(env[reference]);}catch{fault('CONNECTOR_CONFIGURATION',null,503);}
  if(typeof credentials.hmacSecret!=='string'||Buffer.byteLength(credentials.hmacSecret)<32||!credentials.cert||!credentials.key)fault('CONNECTOR_CONFIGURATION',null,503);
@@ -14,6 +27,8 @@ export function signRequest(method,path,body,secret,time=String(Date.now()),nonc
  return {'x-avis-time':time,'x-avis-nonce':nonce,'x-avis-signature':createHmac('sha256',secret).update(canonical(method,path,time,nonce,body)).digest('hex')};
 }
 export async function authenticateMessage(pool,profileId,method,path,body,headers,secret,now=Date.now()){
+ // A connector without a shared secret signs nothing: nothing it sends here is taken.
+ if(typeof secret!=='string'||!secret)fault('MESSAGE_AUTHENTICATION',null,401);
  const time=headers['x-avis-time'],nonce=headers['x-avis-nonce'],signature=headers['x-avis-signature'];
  if(!/^\d{13}$/.test(time||'')||Math.abs(now-Number(time))>120000||!/^[0-9a-f]{48}$/.test(nonce||'')||!/^[0-9a-f]{64}$/.test(signature||''))fault('MESSAGE_AUTHENTICATION',null,401);
  const expected=signRequest(method,path,body,secret,time,nonce)['x-avis-signature'];
@@ -25,17 +40,23 @@ export async function authenticateMessage(pool,profileId,method,path,body,header
 export function frame(payload){const data=Buffer.from(payload);if(!data.length||data.length>65535)fault('MESSAGE_LENGTH');const out=Buffer.alloc(data.length+2);out.writeUInt16BE(data.length);data.copy(out,2);return out;}
 // A connection may ask for a newer TLS than the payment server's own minimum: the FinTerminal's peers speak TLS 1.3 only.
 export async function sendBankMessage(profile,body,credentials,{minVersion='TLSv1.2'}={}){
- const url=new URL(profile.endpoint_url),tlsOptions={cert:credentials.cert,key:credentials.key,ca:credentials.ca||undefined,minVersion,rejectUnauthorized:true,servername:url.hostname};
+ const url=new URL(profile.endpoint_url),host=url.hostname.replace(/^\[|\]$/g,''),password=credentials.kind==='password';
+ // A server known by its IP address is checked against that address: RFC 6066 gives a server name to a host name only.
+ const tlsOptions={...(password?{}:{cert:credentials.cert,key:credentials.key}),ca:credentials.ca||undefined,minVersion,rejectUnauthorized:true,...(isIP(host)?{}:{servername:host})};
  if(url.protocol==='https:')return new Promise((resolve,reject)=>{
-  const req=https.request(url,{...tlsOptions,method:'POST',headers:{'content-type':'application/xml','content-length':Buffer.byteLength(body),...signRequest('POST',url.pathname+url.search,body,credentials.hmacSecret)}},res=>{
+  // The user name and password a peer bank gave go as HTTP Basic authentication (RFC 7617); a shared secret signs the request.
+  const headers={'content-type':'application/xml','content-length':Buffer.byteLength(body),...(credentials.hmacSecret?signRequest('POST',url.pathname+url.search,body,credentials.hmacSecret):{}),
+   ...(password?{authorization:'Basic '+Buffer.from(credentials.user+':'+credentials.password).toString('base64')}:{})};
+  const req=https.request(url,{...tlsOptions,method:'POST',headers},res=>{
    const parts=[];let size=0;
    res.on('data',chunk=>{size+=chunk.length;if(size>65535)req.destroy(new Error('RESPONSE_TOO_LARGE'));else parts.push(chunk);});
    res.on('end',()=>{if(res.statusCode<200||res.statusCode>=300)return reject(new Error('BANK_HTTP_'+res.statusCode));resolve(Buffer.concat(parts).toString('utf8'));});res.on('error',reject);
   });const deadline=setTimeout(()=>req.destroy(new Error('BANK_TIMEOUT')),15000);req.once('close',()=>clearTimeout(deadline));req.setTimeout(15000,()=>req.destroy(new Error('BANK_TIMEOUT')));req.on('error',reject);req.end(body);
  });
- if(url.protocol!=='tls:')fault('CONNECTOR_CONFIGURATION');
+ // Over TLS the bank shows its certificate: a user name and password have no place there.
+ if(url.protocol!=='tls:'||password)fault('CONNECTOR_CONFIGURATION');
  return new Promise((resolve,reject)=>{
-  const socket=tls.connect({...tlsOptions,host:url.hostname,port:Number(url.port||443)});let received=Buffer.alloc(0),finished=false;
+  const socket=tls.connect({...tlsOptions,host,port:Number(url.port||443)});let received=Buffer.alloc(0),finished=false;
   const deadline=setTimeout(()=>socket.destroy(new Error('BANK_TIMEOUT')),15000);socket.once('close',()=>clearTimeout(deadline));
   socket.setTimeout(15000,()=>socket.destroy(new Error('BANK_TIMEOUT')));
   socket.on('secureConnect',()=>socket.write(frame(body)));

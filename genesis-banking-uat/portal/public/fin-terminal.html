@@ -21,7 +21,7 @@
 <p class="fin-peer-link" role="status" data-fin-peer-link data-state="NOT_CONNECTED">Peer link: NOT CONNECTED</p>
 <div class="fin-peer-listen"><select data-fin-listen-time aria-label="Listening time"><option value="15">15 min</option><option value="60">1 h</option><option value="480">8 h</option></select><button type="button" data-fin-listen disabled>Open Port</button><span class="fin-peer-listen-state" role="status" data-fin-listen-state data-state="CLOSED">Port closed</span></div>
 <div class="fin-peer-out">
-<label><span>Peer Server</span><select data-fin-peer-server></select></label>
+<label><span>Peer Server</span><span class="fin-with-button"><select data-fin-peer-server></select><button type="button" data-fin-peer-register-open aria-label="Register peer server" title="Register">+</button></span></label>
 <div class="fin-peer-whitelist"><span id="fin-peer-whitelist-title">Whitelisted IPs</span><ul class="fin-peer-addresses" aria-labelledby="fin-peer-whitelist-title" data-fin-peer-addresses></ul><span class="fin-with-button"><input class="fin-code" data-fin-peer-address maxlength="45" spellcheck="false" aria-label="Whitelisted IP address" placeholder="IP address" disabled><button type="button" data-fin-peer-address-add aria-label="Add IP address" title="Add" disabled>+</button></span></div>
 <label><span>Outgoing Welcome / Session Message (Transmitted to Peer Server)</span><textarea class="fin-code" data-fin-peer-text maxlength="1000" rows="3" spellcheck="false"></textarea></label>
 <div class="fin-peer-send"><select data-fin-peer-event aria-label="Session message"><option value="INIT">INIT_SESSION / READY</option><option value="HEARTBEAT">HEARTBEAT</option><option value="END">END_SESSION</option></select><button type="button" data-fin-peer-send disabled>Send to Peer Server</button></div>
@@ -29,6 +29,28 @@
 </div>
 <div class="fin-peer-in"><h3 id="fin-peer-stream-title">Peer Server Response / ACK Stream</h3><ol class="fin-code fin-peer-stream" aria-labelledby="fin-peer-stream-title" data-fin-peer-stream></ol></div>
 </section>
+<dialog class="fin-peer-register" aria-labelledby="fin-peer-register-title" data-fin-peer-register>
+<form class="fin-peer-register-form" data-fin-peer-register-form autocomplete="off" novalidate>
+<h2 id="fin-peer-register-title">Register Peer Server</h2>
+<label><span>Bank Name</span><input data-fin-peer-register-field="name" maxlength="100"></label>
+<label><span>Type</span><select data-fin-peer-register-field="protocol"><option value="IP_TO_IP">IP-to-IP</option><option value="BANK_API">API</option><option value="SWIFT_ISO20022">ISO 20022</option></select></label>
+<label><span>IP : Port</span><input class="fin-code" data-fin-peer-register-field="address" maxlength="260" spellcheck="false" placeholder="IP:port"></label>
+<label><span>NOSTRO Account</span><select data-fin-peer-register-field="cashAccountId"></select></label>
+<label><span>Login</span><select data-fin-peer-register-field="kind"><option value="certificate">Certificate</option><option value="password">User Name &amp; Password</option></select></label>
+<label><span>Peer Certificate (CA)</span><textarea class="fin-code" data-fin-peer-register-field="ca" rows="3" spellcheck="false"></textarea></label>
+<div class="fin-peer-register-login" data-fin-peer-register-login="certificate">
+<label><span>Our Certificate</span><textarea class="fin-code" data-fin-peer-register-field="cert" rows="3" spellcheck="false"></textarea></label>
+<label><span>Our Private Key</span><textarea class="fin-code" data-fin-peer-register-field="key" rows="3" spellcheck="false"></textarea></label>
+<label><span>Shared Secret</span><input type="password" data-fin-peer-register-field="secret" maxlength="1024" autocomplete="off"></label>
+</div>
+<div class="fin-peer-register-login" data-fin-peer-register-login="password" hidden>
+<label><span>User Name</span><input data-fin-peer-register-field="user" maxlength="256" autocomplete="off" spellcheck="false"></label>
+<label><span>Password</span><input type="password" data-fin-peer-register-field="password" maxlength="256" autocomplete="new-password"></label>
+</div>
+<p class="fin-peer-register-problem" role="alert" data-fin-peer-register-problem hidden></p>
+<div class="fin-peer-register-actions"><button type="button" data-fin-peer-register-cancel>Cancel</button><button type="submit" class="fin-primary" data-fin-peer-register-save>Register</button></div>
+</form>
+</dialog>
 <form class="fin-form" data-fin-form autocomplete="off" novalidate>
 <div class="fin-row">
 <fieldset class="fin-panel"><legend>Business Application Header (head.001.001.02)</legend>

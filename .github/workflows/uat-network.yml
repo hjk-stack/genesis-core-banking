@@ -9,15 +9,17 @@ name: GENESIS banking test server network (port 8443)
 #   bind  - binds a custom domain (hostname) to the moved bank app once its DNS points there.
 #   listener - makes the certificate port 8443 shows to peer banks, once, straight into the bank app's secret
 #           avis-connector-listener (never shown); the next bank deploy binds it as AVIS_CONNECTOR_LISTENER.
+#   vault - makes the Key Vault of the peer banks' logins (the FinTerminal's register), once: the bank app gets an
+#           identity of its own, the right to keep secrets there (get, list, set) and the vault's address.
 on:
   pull_request:
     paths: ['genesis-banking-uat/azure/move-uat-network.py', 'genesis-banking-uat/azure/test_move_uat_network.py', '.github/workflows/uat-network.yml']
   workflow_dispatch:
     inputs:
       mode:
-        description: 'plan = read and report only; apply = make the network and move the test server; bind = bind a custom domain to the moved bank app; listener = make the certificate of port 8443, once'
+        description: 'plan = read and report only; apply = make the network and move the test server; bind = bind a custom domain to the moved bank app; listener = make the certificate of port 8443, once; vault = make the Key Vault of the peer banks'' logins, once'
         type: choice
-        options: [plan, apply, bind, listener]
+        options: [plan, apply, bind, listener, vault]
         default: plan
       hostname:
         description: 'bind only: the custom domain whose DNS points to the moved bank app'

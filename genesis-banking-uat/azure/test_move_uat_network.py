@@ -115,6 +115,8 @@ class FakeAzure:
         self.pull = pull
         self.databases = {'genesis-fineract-uat-example': firewall, 'genesis-banking-pg-example': False}
         self.fail, self.calls, self.puts, self.network = fail or set(), [], [], {}
+        # The resource group's Key Vaults by their name (the vault mode's).
+        self.vaults = {}
         # True: an az that keeps a value given as @file as it is, instead of reading the file.
         self.literal = False
 
@@ -148,6 +150,32 @@ class FakeAzure:
             ingress['customDomains'] = (ingress.get('customDomains') or []) + [{'name': args[args.index('--hostname') + 1], 'bindingType': 'Disabled'}]
             return None
         if args[:3] == ('containerapp', 'hostname', 'bind'):
+            return None
+        if args[:3] == ('containerapp', 'identity', 'assign'):
+            self.apps[args[args.index('-n') + 1]]['identity'] = own('bank-principal-new')
+            return copy.deepcopy(self.apps[args[args.index('-n') + 1]]['identity'])
+        if args[:2] == ('containerapp', 'update'):
+            container = self.apps[args[args.index('-n') + 1]]['properties']['template']['containers'][0]
+            for pair in args[args.index('--set-env-vars') + 1:]:
+                key, value = pair.split('=', 1)
+                container['env'] = [item for item in container.get('env') or [] if item['name'] != key] + [{'name': key, 'value': value}]
+            return None
+        if args[:2] == ('keyvault', 'list'):
+            return [{'name': name, 'id': vault['id'], 'tags': dict(vault['tags'])} for name, vault in self.vaults.items()]
+        if args[:2] == ('keyvault', 'show'):
+            return copy.deepcopy(self.vaults[args[args.index('-n') + 1]])
+        if args[:2] == ('keyvault', 'create'):
+            name = args[args.index('-n') + 1]
+            self.vaults[name] = {'name': name, 'id': GROUP + '/providers/Microsoft.KeyVault/vaults/' + name, 'location': args[args.index('-l') + 1],
+                                 'tags': dict([args[args.index('--tags') + 1].split('=', 1)]),
+                                 'properties': {'vaultUri': 'https://' + name + '.vault.azure.net/', 'accessPolicies': [],
+                                                'enableRbacAuthorization': args[args.index('--enable-rbac-authorization') + 1] == 'true'}}
+            return copy.deepcopy(self.vaults[name])
+        if args[:2] == ('keyvault', 'set-policy'):
+            policies = self.vaults[args[args.index('-n') + 1]]['properties']['accessPolicies']
+            principal = args[args.index('--object-id') + 1]
+            policies[:] = [item for item in policies if item['objectId'] != principal] + [
+                {'objectId': principal, 'permissions': {'secrets': list(args[args.index('--secret-permissions') + 1:])}}]
             return None
         if args[:3] in (('containerapp', 'secret', 'set'), ('containerapp', 'secret', 'remove')):
             store = self.secrets[args[args.index('-n') + 1]]
@@ -548,6 +576,45 @@ class MoveTests(unittest.TestCase):
         self.assertIn('FAILED: The secret avis-connector-listener is on the bank app but holds no listening certificate: nothing changed.',
                       self.run_move('listener', azure, expect_exit=True))
         self.assertFalse([call for call in azure.calls[before:] if call[:2] == ('containerapp', 'secret')])
+
+    def test_vault_makes_the_key_vault_of_the_peer_logins_once_with_the_bank_app_s_own_identity_and_reads_no_secret(self):
+        # The bank owner: the register's login details are "stored only in Azure Key Vault"; the bank app "gets write permission
+        # there".
+        azure = FakeAzure()
+        text = self.run_move('vault', azure)
+        name = 'gbank-peers-' + move.hashlib.sha256((SUB + '/' + move.RG).encode()).hexdigest()[:8]
+        self.assertEqual(list(azure.vaults), [name])
+        vault = azure.vaults[name]
+        self.assertEqual((vault['location'], vault['tags'], vault['properties']['enableRbacAuthorization']), ('Italy North', {'purpose': 'fin-peer-logins'}, False))
+        # The bank app's own identity, and only the secrets' get, list and set.
+        self.assertEqual(vault['properties']['accessPolicies'], [{'objectId': 'bank-principal', 'permissions': {'secrets': ['get', 'list', 'set']}}])
+        self.assertFalse([call for call in azure.calls if call[:3] == ('containerapp', 'identity', 'assign')])
+        env = azure.apps[move.BANK]['properties']['template']['containers'][0]['env']
+        self.assertIn({'name': 'AVIS_PEER_VAULT', 'value': 'https://' + name + '.vault.azure.net/'}, env)
+        self.assertIn('Made: the Key Vault ' + name + " for the peer banks' logins.", text)
+        self.assertIn("The bank app keeps and reads the peer banks' logins in https://" + name + '.vault.azure.net/ (secrets: get, list, set), as AVIS_PEER_VAULT.', text)
+        # Nothing is read from a vault, and no secret of the bank app.
+        self.assertFalse([call for call in azure.calls if call[:2] == ('keyvault', 'secret') or call[0] == 'rest' and call[2] == 'post'])
+        # Run again: the same vault, nothing made twice, the app's setting not written again.
+        before = len(azure.calls)
+        text = self.run_move('vault', azure)
+        self.assertEqual(list(azure.vaults), [name])
+        self.assertFalse([call for call in azure.calls[before:] if call[:2] in (('keyvault', 'create'), ('containerapp', 'update'))])
+        self.assertNotIn('Made:', text)
+
+    def test_vault_gives_a_bank_app_without_an_identity_its_own_and_refuses_a_vault_on_azure_roles(self):
+        without = bank()
+        without['identity'] = {'type': 'None'}
+        azure = FakeAzure(apps=[without])
+        self.run_move('vault', azure)
+        self.assertEqual([call[:3] for call in azure.calls if call[:3] == ('containerapp', 'identity', 'assign')], [('containerapp', 'identity', 'assign')])
+        vault = next(iter(azure.vaults.values()))
+        self.assertEqual(vault['properties']['accessPolicies'][0]['objectId'], 'bank-principal-new')
+        # A vault of that purpose taking Azure roles is never changed to access policies here.
+        vault['properties']['enableRbacAuthorization'] = True
+        before = len(azure.calls)
+        self.assertIn('takes Azure roles, not access policies: nothing changed.', self.run_move('vault', azure, expect_exit=True))
+        self.assertFalse([call for call in azure.calls[before:] if call[:2] in (('keyvault', 'set-policy'), ('containerapp', 'update'))])
 
     def test_an_azure_error_shows_its_codes_never_the_command_or_the_answer(self):
         error = move.AzureError(('containerapp', 'secret', 'set', '-g', 'rg', '--secrets', 'name=example-stripe-key-value'),
