@@ -190,7 +190,7 @@ FIN_DRAFT_REGISTERED:'This incoming transfer is registered and is not changed an
 // the owner gave them FinTerminal access; tests give their own.
 export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={},finTerminalAccess=(_req,admission)=>admission?.person??null}) {
  const core=new TradingRobotCore(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map(),indexService=new IndexServiceAuthenticator(pool,{env:core.secretEnv,fetcher:transferOptions.indexServiceFetcher||core.cryptoFetch});
- const rollingConverter=createRollingConverterAdminClient({env:core.secretEnv,fetcher:transferOptions.rollingConverterFetcher||fetch});
+ const rollingConverter=createRollingConverterAdminClient({env:core.secretEnv,fetcher:transferOptions.rollingConverterFetcher||fetch,readPositions:actor=>core.list(actor,'securitypositions')});
  const stripePos=transferOptions.stripePos||new StripeWebPos(pool,{env:transferOptions.secretEnv||process.env,fetcher:transferOptions.stripeFetch||fetch});
  const basket=new CryptoBasket(core,stripePos),storeWallet=new StoreWallet(basket);
  const posControl=new CheckoutPosControl(pool),ipControl=new CheckoutIpControl(pool),posAuth=new CheckoutPosAuthenticator(pool,{fetcher:transferOptions.posServiceFetcher||fetch});

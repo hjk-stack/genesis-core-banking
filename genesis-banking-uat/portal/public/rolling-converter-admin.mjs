@@ -9,9 +9,9 @@ export function allowedConverterMessage(path,body){
  if(typeof path!=='string')return false;
  if(body===undefined)return path==='/assets'||new RegExp('^/records/'+RECORD+'/nautilus\\.json$').test(path);
  if(!body||typeof body!=='object'||Array.isArray(body))return false;
- const keys=path==='/records'?['asset','amount']:new RegExp('^/records/'+RECORD+'/loop$').test(path)?['legs','channels','legValue']:null;
+ const keys=path==='/records'?['asset','revision']:new RegExp('^/records/'+RECORD+'/loop$').test(path)?['legs','channels','legValue']:null;
  return !!keys&&Object.keys(body).every(k=>keys.includes(k)&&['string','number'].includes(typeof body[k])&&String(body[k]).length<=256)&&
- (path!=='/records'||typeof body.asset==='string');
+ (path!=='/records'||typeof body.asset==='string'&&/^portfolio:[0-9a-f]{64}$/.test(body.asset)&&typeof body.revision==='string'&&/^[0-9a-f]{64}$/.test(body.revision));
 }
 export function mountRollingConverterAdmin({host,api,isCurrent}){
  if(!host||!isRollingConverterHost(host.ownerDocument)||!isCurrent())return {close(){}};
