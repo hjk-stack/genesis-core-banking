@@ -39,28 +39,22 @@ function jsonDenied(response,code='BANK_WORKSTATION_REQUIRED',status=403) {
  return value;
 }
 
-test('an unapproved browser navigation receives the full-screen 403 document and keeps its diagnostic request ID',async t=>{
- t.mock.method(globalThis,'fetch',async()=>assert.fail('certificate denial must not call an external service'));
- const logs=[];t.mock.method(console,'error',value=>logs.push(JSON.parse(value)));
+test('unadmitted bank homepage redirects document navigation into approved email sign-in',async t=>{
+ t.mock.method(globalThis,'fetch',async()=>assert.fail('the login entry must not make an external request'));
  const response=await fixture.request('/',{headers:navigation});
- assert.equal(response.status,403);assert.match(response.headers['content-type'],/^text\/html; charset=utf-8$/);
- assert.match(response.body,/<h1[^>]*>You are not authorized to access this platform\.<\/h1>/);
- assert.match(response.body,/reserved for approved AVISPay workstations/);
- assert.match(response.body,/href="https:\/\/avis\.land"/);
- assert.ok(!/<(?:script|form|img|iframe)\b/i.test(response.body));
- assert.equal(response.headers['cache-control'],'no-store');
- assert.equal(response.headers['x-content-type-options'],'nosniff');
+ assert.equal(response.status,303);
+ assert.equal(response.headers.location,'/access/start');
+ assert.equal(response.headers['cache-control'],'private, no-store');
+ assert.equal(response.headers['referrer-policy'],'no-referrer');
  assert.match(response.headers['x-request-id'],/^[a-f0-9]{16}$/);
- assert.ok(logs.some(log=>log.requestId===response.headers['x-request-id']&&log.code==='BANK_WORKSTATION_REQUIRED'));
- const inlineStyle=response.body.match(/<style>([\s\S]*?)<\/style>/)?.[1];assert.ok(inlineStyle);
- const hash=createHash('sha256').update(inlineStyle).digest('base64');
- assert.equal(response.headers['content-security-policy'],`default-src 'none'; style-src 'sha256-${hash}'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`);
+ assert.equal(response.body,'');
  assert.equal(fixture.authentications.length,0);
 });
 
-test('HTML negotiation supports document clients and keeps fetch, asset, and non-HTML requests in JSON',async()=>{
+test('document navigation works on iPad Chrome and ordinary browsers; scripts and APIs never redirect',async()=>{
  for(const headers of [{accept:'text/html'},{...navigation,accept:'TEXT/HTML; q=0.8'},{...navigation,host:'BANK.AVISPAY.ONLINE:443'}]){
-  const response=await fixture.request('/',{headers});assert.equal(response.status,403);assert.match(response.headers['content-type'],/^text\/html/);
+  const response=await fixture.request('/',{headers});
+  assert.equal(response.status,303);assert.equal(response.headers.location,'/access/start');
  }
  for(const headers of [
   {},{accept:'application/json'},{accept:'*/*'},
@@ -71,6 +65,15 @@ test('HTML negotiation supports document clients and keeps fetch, asset, and non
   {...navigation,'sec-fetch-dest':'iframe'},
   {accept:'text/html','sec-fetch-dest':'document'}
  ])jsonDenied(await fixture.request('/',{headers}));
+});
+
+test('stale or malformed bank admission cookies restart browser login without authorizing APIs',async()=>{
+ const headers={...navigation,cookie:'__Host-avis_bank_admission=invalid'};
+ const landing=await fixture.request('/',{headers});
+ assert.equal(landing.status,303);assert.equal(landing.headers.location,'/access/start');
+ assert.match(landing.headers['set-cookie'][0],/^__Host-avis_bank_admission=;/);
+ assert.match(landing.headers['set-cookie'][0],/Max-Age=0$/);
+ jsonDenied(await fixture.request('/api/session',{headers}), 'BANK_WORKSTATION_REQUIRED');
 });
 
 test('FinTerminal navigation without an admitted workstation initiates the existing secure device handoff',async()=>{
@@ -109,19 +112,19 @@ test('other hosts keep the original interface and ignore a forwarded staff hostn
  jsonDenied(await fixture.request('/api/session',{headers:{...navigation,host:'public-bank.invalid'}}),'UNAUTHORIZED',401);
 });
 
-test('a valid certificate still requires workstation approval before the banking document is served',async t=>{
+test('legacy certificate API admission remains separately checked after browser login route changes',async t=>{
  const calls=[];
  t.mock.method(globalThis,'fetch',async(url,options)=>{
   calls.push({url:String(url),body:JSON.parse(options.body)});
   return {ok:true,json:async()=>({approved:false})};
  });
- const response=await fixture.request('/',{headers:{...navigation,'x-forwarded-client-cert':certificateHeader}});
- assert.equal(response.status,403);assert.ok(response.body.includes(message));
+ const response=await fixture.request('/',{headers:{accept:'application/json','x-forwarded-client-cert':certificateHeader}});
+ jsonDenied(response);
  assert.equal(calls.length,1);assert.equal(calls[0].url,'https://avis.land/bank/workstation-channel/admit');
  assert.match(calls[0].body.fp,/^[a-f0-9]{64}$/);assert.equal(fixture.authentications.length,0);
 });
 
-test('an approved workstation retains the original document, session requirement and phone approval step',async t=>{
+test('legacy certificate-identified bank session retains the old API contract during migration',async t=>{
  const actions=[];
  t.mock.method(globalThis,'fetch',async(url)=>{
   const action=new URL(url).pathname.split('/').at(-1);actions.push(action);
@@ -129,7 +132,7 @@ test('an approved workstation retains the original document, session requirement
   assert.equal(action,'start');
   return {ok:true,json:async()=>({id:'i'.repeat(43),poll:'p'.repeat(43),qr:'data:image/png;base64,dGVzdA==',expiresAt:'2030-01-01T00:00:00Z'})};
  });
- const headers={...navigation,'x-forwarded-client-cert':certificateHeader};
+ const headers={accept:'application/json','x-forwarded-client-cert':certificateHeader};
  const document=await fixture.request('/',{headers});
  assert.equal(document.status,200);assert.ok(!document.body.includes(message));
  assert.match(document.headers['content-security-policy'],/style-src 'self'/);
