@@ -59,7 +59,7 @@ export async function startFinTerminal({root=document,fetcher=fetch,windowApi=ro
   waiting=!session&&!windowApi.opener&&!front();if(waiting)return;
   if(!session)return leave(true);
   terminal.hidden=false;csrf=session.csrf||'';
-  if(!composer){composer=createFinComposer({root,request});composer?.start();peer=createFinPeer({root,request});void peer?.start();settlement=createFinSettlement({root,request});settlement?.start();createFinConverter({root,request})?.start();
+  if(!composer){composer=createFinComposer({root,request});composer?.start();peer=createFinPeer({root,request,onRegistered:peers=>wire?.setPeers(peers)});void peer?.start();settlement=createFinSettlement({root,request});settlement?.start();createFinConverter({root,request})?.start();
    // A wire dispatched shows at once in the ledgers and in Screen A's stream; its PINs follow the 4-Eyes switch.
    wire=createFinWire({root,request,onDispatched:()=>{void settlement?.refresh();void peer?.look();},onRefused:()=>void access?.refresh()});
    access=createFinAccess({root,request,onState:state=>wire?.access(state)});access?.start();void wire?.start();}

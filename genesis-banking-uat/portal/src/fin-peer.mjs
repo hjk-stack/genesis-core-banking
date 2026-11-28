@@ -1,5 +1,6 @@
-import {randomUUID} from 'node:crypto';
+import {randomUUID,randomBytes,X509Certificate} from 'node:crypto';
 import {isIP} from 'node:net';
+import tls from 'node:tls';
 import {readFile} from 'node:fs/promises';
 import {validateXML} from 'xmllint-wasm';
 import {XMLParser} from 'fast-xml-parser';
@@ -10,6 +11,7 @@ import {ABIQ_ISSUER} from './avispay-core-accounts.mjs';
 import {ServerDOMParser} from './fin-xml.mjs';
 import {FinTerminal} from './fin-terminal.mjs';
 import {FinAccess} from './fin-access.mjs';
+import {PeerVault} from './peer-vault.mjs';
 
 // Screen A of the FinTerminal, "Peer Server Handshake & Direct IP Interaction" in the bank owner's specification (FinTerminal
 // Unified NOSTRO & Crypto System v3): the bank's welcome or session message to a peer bank's server - an ISO 20022 system event
@@ -189,6 +191,13 @@ const PEERS=`SELECT p.profile_id,p.protocol,c.display_name,c.endpoint_url,c.cred
  JOIN avis_core_v2.external_cash_accounts a USING(cash_account_id)
  WHERE p.protocol IN ('IP_TO_IP','BANK_API','SWIFT_ISO20022') AND c.is_enabled AND a.is_active`;
 const PROFILE=/^[A-Z0-9_]{1,35}$/;
+// A peer server registered in the FinTerminal: one of the three types, on an active NOSTRO whose bank has a BIC.
+const REGISTER_PROTOCOLS=['IP_TO_IP','BANK_API','SWIFT_ISO20022'];
+const NOSTRO_OF=`SELECT cash_account_id,upper(bic_code) AS bic FROM avis_core_v2.external_cash_accounts
+ WHERE cash_account_id=$1 AND is_active AND upper(bic_code) ~ '^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$'`;
+// The X.509 certificates of a PEM bundle that read as certificates.
+const certificateBlocks=bundle=>(String(bundle||'').match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g)||[])
+ .filter(item=>{try{new X509Certificate(item);return true;}catch{return false;}});
 // The bank's own ABIQ code: its own ABIQ issuer's (ABIQ_ISSUER), while that issuer takes part in the ABIQ network
 // (src/abiq-interface.mjs) - never the code of an issuer the bank licensed (review finding).
 const OWN_ABIQ=`SELECT i.abiq_code FROM avis_core_v2.abiq_issuers i JOIN avis_core_v2.abiq_network_participants p USING(participant_code)
@@ -230,8 +239,8 @@ const wireOf=row=>({uetr:row.uetr,status:row.status,peerStatus:row.peer_status,r
  creditorName:row.creditor_name,creditorIban:row.creditor_iban,fourEyes:row.four_eyes,checkers:row.checkers});
 
 export class FinPeers{
- constructor(pool,{send=sendBankMessage,credentials=connectorCredentials,terminal=new FinTerminal(pool),access=new FinAccess(pool)}={}){
-  this.pool=pool;this.transmit=send;this.credentials=credentials;this.terminal=terminal;this.access=access;
+ constructor(pool,{send=sendBankMessage,credentials=connectorCredentials,terminal=new FinTerminal(pool),access=new FinAccess(pool),vault=new PeerVault()}={}){
+  this.pool=pool;this.transmit=send;this.credentials=credentials;this.terminal=terminal;this.access=access;this.vault=vault;
  }
  #administrator(actor){if(!actor?.admin)fault('FORBIDDEN',null,403);}
  async #own(){return (await this.pool.query(OWN_ABIQ,[ABIQ_ISSUER.participantCode])).rows.map(row=>row.abiq_code);}
@@ -281,6 +290,68 @@ export class FinPeers{
   const address=this.#address(body?.address),peer=await this.#peer(profileId);
   await this.pool.query('DELETE FROM avis_core_v2.fin_terminal_peer_addresses WHERE profile_id=$1 AND address=$2::inet',[peer.profile_id,address]);
   return {addresses:await this.#addresses(peer.profile_id)};
+ }
+ // A peer server registered in the FinTerminal's popup. The bank owner: "+IP register must be active for registered senders IP by
+ // incoming. The register is in a popup with IP and Bank name and login details into the receiver sever. (or for debit into the
+ // sender service and first login) the data gets stored in a drop down for reuse". Its bank, its type, its address and the NOSTRO
+ // it settles on (its bank's BIC is the peer's) become a connector, its IP address is whitelisted for the listening port, and its
+ // login goes to Azure Key Vault only (src/peer-vault.mjs) - first, so that nothing is registered without it.
+ async register(actor,body){
+  this.#administrator(actor);
+  const name=typeof body?.name==='string'?body.name.trim():'';
+  if(!name||[...name].length>100||/[\x00-\x1f\x7f]/.test(name))fault('INVALID_FIELD','name');
+  if(!REGISTER_PROTOCOLS.includes(body?.protocol))fault('INVALID_FIELD','protocol');
+  const endpoint=this.#endpoint(body.protocol,body.address),login=this.#login(body.protocol,body.login);
+  const nostro=typeof body.cashAccountId==='string'&&ID.test(body.cashAccountId.toLowerCase())?(await this.pool.query(NOSTRO_OF,[body.cashAccountId.toLowerCase()])).rows[0]:null;
+  if(!nostro)fault('FIN_REGISTER_NOSTRO','cashAccountId',409);
+  const slug=name.toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,20).replace(/_+$/,'')||'PEER';
+  const profileId='FIN_'+slug+'_'+randomBytes(3).toString('hex').toUpperCase(),secret='fin-peer-'+profileId.toLowerCase().replaceAll('_','-');
+  await this.vault.put(secret,login);
+  const client=await this.pool.connect();
+  try{
+   await client.query('BEGIN');
+   await client.query('INSERT INTO avis_core_v2.platform_connectors(connector_code,display_name,is_enabled,endpoint_url,credential_reference) VALUES($1,$2,true,$3,$4)',
+    [profileId,name,endpoint.url,'KEYVAULT:'+secret]);
+   await client.query("INSERT INTO avis_core_v2.bank_connector_profiles(profile_id,cash_account_id,protocol,local_bic,peer_bic,operations) VALUES($1,$2,$3,$4,$5,'{}')",
+    [profileId,nostro.cash_account_id,body.protocol,ABIQ_ISSUER.abiqCode,nostro.bic]);
+   await client.query('INSERT INTO avis_core_v2.fin_terminal_peer_addresses(profile_id,address,created_by) VALUES($1,$2,$3)',[profileId,endpoint.address,String(actor.id)]);
+   await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_PEER_REGISTERED',profileId]);
+   await client.query('COMMIT');
+  }catch(failure){await client.query('ROLLBACK').catch(()=>{});throw failure;}
+  finally{client.release?.();}
+  return {profileId,peers:await this.list(actor)};
+ }
+ // The peer server's address as its IP address and port, as the specification writes it ("10.240.18.95:8443"): over TLS for
+ // IP-to-IP, over HTTPS - with its path, where it has one - for API and ISO 20022.
+ #endpoint(protocol,value){
+  const match=typeof value==='string'?/^(\[[0-9A-Fa-f:.]+\]|\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})(\/[A-Za-z0-9._~\/-]{0,200})?$/.exec(value.trim()):null;
+  const host=match?match[1].replace(/^\[|\]$/g,''):'',port=Number(match?.[2]);
+  if(!match||!isIP(host)||!(port>=1&&port<=65535)||protocol==='IP_TO_IP'&&match[3])fault('INVALID_FIELD','address');
+  return {url:new URL((protocol==='IP_TO_IP'?'tls://':'https://')+match[1]+':'+port+(match[3]||'')).href,address:plainAddress(host)};
+ }
+ // The login the peer bank gave - the bank owner chose "Both": a certificate login (the peer's own issuer, the certificate and key
+ // the bank shows, a shared secret where requests are signed), or a user name and password, which a server over HTTPS takes (its
+ // issuer where the peer has its own). Over TLS (IP-to-IP) the bank shows its certificate.
+ #login(protocol,value){
+  const pem=field=>typeof value?.[field]==='string'&&value[field].length<=20000?value[field].trim():'';
+  const issuers=certificateBlocks(pem('ca'));
+  if(pem('ca')&&!issuers.length)fault('INVALID_FIELD','ca');
+  if(value?.kind==='certificate'){
+   const cert=pem('cert'),key=pem('key'),secret=typeof value.secret==='string'?value.secret:'';
+   if(!issuers.length)fault('INVALID_FIELD','ca');
+   if(!cert||!key)fault('INVALID_FIELD','cert');
+   try{tls.createSecureContext({cert,key});}catch{fault('INVALID_FIELD','cert');}
+   if(secret&&(Buffer.byteLength(secret)<32||Buffer.byteLength(secret)>1024||/[\x00-\x1f\x7f]/.test(secret)))fault('INVALID_FIELD','secret');
+   return {kind:'certificate',ca:issuers.join('\n'),cert,key,...(secret?{hmacSecret:secret}:{})};
+  }
+  if(value?.kind==='password'){
+   if(protocol==='IP_TO_IP')fault('FIN_REGISTER_LOGIN','login');
+   const user=typeof value.user==='string'?value.user.trim():'',password=typeof value.password==='string'?value.password:'';
+   if(!user||[...user].length>256||/[:\x00-\x1f\x7f]/.test(user))fault('INVALID_FIELD','user');
+   if(!password||[...password].length>256||/[\x00-\x1f\x7f]/.test(password))fault('INVALID_FIELD','password');
+   return {kind:'password',user,password,...(issuers.length?{ca:issuers.join('\n')}:{})};
+  }
+  fault('INVALID_FIELD','login');
  }
  async messages(actor,profileId){
   this.#administrator(actor);

@@ -175,7 +175,9 @@ FIN_DRAFT_REGISTERED:'This incoming transfer is registered and is not changed an
  FIN_PIN_MISSING:'PIN 1 and PIN 2 are not made yet.',FIN_CHECK_PIN_WRONG:'PIN 1 or PIN 2 is not correct.',
  FIN_WIRE_AMOUNT:'Enter the amount in EUR, above zero, with at most two decimals.',FIN_WIRE_BENEFICIARY:'Enter the beneficiary\'s name.',
  FIN_WIRE_ACCOUNT:'Enter the beneficiary\'s account number, at most 34 characters.',FIN_WIRE_NOSTRO:'This peer server has no active EUR NOSTRO account of its bank.',
- FIN_WIRE_INVALID:'The transfer does not pass its official schemas.'
+ FIN_WIRE_INVALID:'The transfer does not pass its official schemas.',
+ PEER_VAULT:'The Key Vault of the peer servers\' logins is not in place in Azure: nothing was registered.',
+ FIN_REGISTER_NOSTRO:'Select an active NOSTRO account whose bank has a BIC.',FIN_REGISTER_LOGIN:'IP-to-IP takes the certificate login.'
 };
 // finTerminalAccess: who avis.land says is behind this request's workstation admission (src/workstation-admission.mjs), and whether
 // the owner gave them FinTerminal access; tests give their own.
@@ -190,6 +192,9 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
  const workstationAdmission=new WorkstationAdmission(pool,{fetcher:workstationFetcher});
  const nostroStatements=new NostroStatements(pool),finAccess=new FinAccess(pool),finTerminal=new FinTerminal(pool,{pricing:transferOptions.finPricing}),finPeers=new FinPeers(pool,{...transferOptions.transport,terminal:finTerminal,access:finAccess});
  const finListener=new FinListener(pool,finPeers,transferOptions.finListener).watch();
+ // The peer servers' logins registered in the FinTerminal, read from Azure Key Vault (src/peer-vault.mjs): their issuers then reach
+ // the listening port too.
+ finPeers.vault?.watch?.(()=>finListener.refresh());
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  const server=http.createServer(async(req,res)=>{
   const requestId=randomBytes(8).toString('hex');
@@ -560,6 +565,8 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(path==='/api/fin-terminal/four-eyes')return send(res,200,await finAccess.fourEyes(actor,finPerson,body));
    if(path==='/api/fin-terminal/converter')return send(res,200,await finTerminal.route(actor,body));
    if(finPeer?.[1])return send(res,200,await finPeers.send(actor,finPeer[1],body));
+   // The FinTerminal's register of a peer server (src/fin-peer.mjs): its IP address is whitelisted for the listening port at once.
+   if(path==='/api/fin-terminal/peers'){const result=await finPeers.register(actor,body);await finListener.refresh();return send(res,200,result);}
    // Screen B's Cash Wire (NOSTRO) (src/fin-peer.mjs): Execute & Dispatch to a peer server, with PIN 1 and PIN 2 while 4-Eyes is on.
    const finWire=/^\/api\/fin-terminal\/peers\/([A-Z0-9_]{1,35})\/transfers$/.exec(path);
    if(finWire)return send(res,200,await finPeers.dispatch(actor,finPerson,finWire[1],body));

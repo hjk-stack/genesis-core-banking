@@ -95,6 +95,19 @@ for(const width of [260,390,820,1440])test('screen A on '+(width<500?'a phone':w
   for(const part of listening.parts)assert.ok(part.left>=0&&part.right<=width+1,'inside the window');
   await page.screenshot({path:'test-results/fin-peer-listening-'+width+'.png'});
   await page.locator('[data-fin-listen]').click();await page.waitForFunction(()=>document.querySelector('[data-fin-listen-state]').dataset.state==='CLOSED');
+  // The register's popup (the bank owner: "The register is in a popup"): opened by the "+" beside the Peer Server, the window's own
+  // modal dialog inside the window, its buttons at its foot - never in an upper corner; Cancel closes it.
+  await page.getByRole('button',{name:'Register peer server'}).click();
+  const popup=page.locator('[data-fin-peer-register]');await popup.waitFor();
+  await page.waitForFunction(()=>document.querySelector('[data-fin-peer-register-field="cashAccountId"]').options.length>0);
+  const shown=await page.evaluate(()=>{const box=element=>element.getBoundingClientRect().toJSON(),dialog=document.querySelector('[data-fin-peer-register]');
+   return {dialog:box(dialog),buttons:[...dialog.querySelectorAll('.fin-peer-register-actions button')].map(box),modal:dialog.matches(':modal'),
+    sideways:document.documentElement.scrollWidth>innerWidth,ground:getComputedStyle(dialog).backgroundColor};});
+  assert.deepEqual({modal:shown.modal,sideways:shown.sideways,ground:shown.ground},{modal:true,sideways:false,ground:'rgb(16, 27, 46)'});
+  assert.ok(shown.dialog.left>=0&&shown.dialog.right<=width+1&&shown.dialog.top>=0&&shown.dialog.bottom<=901,'the popup inside the window');
+  for(const button of shown.buttons)assert.ok(button.top>shown.dialog.top+shown.dialog.height/2,'its buttons at its foot');
+  await page.screenshot({path:'test-results/fin-peer-register-'+width+'.png'});
+  await page.getByRole('button',{name:'Cancel'}).click();await popup.waitFor({state:'hidden'});
   assert.deepEqual(errors,[]);
  }finally{await context.close();}
 });

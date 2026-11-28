@@ -88,6 +88,19 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
 .fin-peer-listen-state[data-state=LISTENING]{color:var(--fin-right)}
 .fin-peer-listen-state[data-state=NOT_LISTENING]{color:var(--fin-wrong)}
 .fin-peer-whitelist{display:grid;gap:4px;font-size:12.5px;color:var(--fin-muted)}
+/* The register of a peer server (the bank owner: "The register is in a popup"): the window's own modal dialog, in the middle of the
+   terminal, its buttons at its foot - never in an upper corner. */
+.fin-peer-register{width:min(560px,calc(100vw - 32px));max-height:calc(100vh - 32px);padding:0;border:1px solid var(--fin-line);border-radius:10px;background:var(--fin-panel);color:var(--fin-text)}
+.fin-peer-register::backdrop{background:rgba(4,8,16,.72)}
+.fin-peer-register-form{display:grid;gap:9px;padding:16px 18px 18px}
+.fin-peer-register h2{margin:0 0 2px;font-size:14px;font-weight:650}
+.fin-peer-register label{display:grid;gap:4px;font-size:12.5px;color:var(--fin-muted)}
+.fin-peer-register-login{display:grid;gap:9px}
+.fin-peer-register textarea{resize:vertical;font-size:12px}
+.fin-peer-register-problem{margin:0;font-size:12px;color:var(--fin-wrong)}
+.fin-peer-register-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:4px}
+.fin-peer-register-actions button{padding:8px 16px;border:1px solid var(--fin-line);border-radius:7px;background:var(--fin-ground);color:var(--fin-text);font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.fin-peer-register-actions .fin-primary{border-color:var(--fin-orange);background:var(--fin-orange);color:#1a1205}
 .fin-peer-addresses{display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0;list-style:none}
 .fin-peer-addresses li{display:flex;align-items:center;gap:4px;padding:2px 4px 2px 8px;border:1px solid var(--fin-line);border-radius:6px;color:var(--fin-text);font-size:12px}
 .fin-peer-addresses button{padding:0 4px;border:0;background:none;color:var(--fin-muted);font:inherit;font-size:14px;line-height:1;cursor:pointer}

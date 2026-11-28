@@ -19,9 +19,12 @@ DNS").
   listener  makes the certificate port 8443 shows to peer banks, once: its private key goes straight into the bank
          app's secret avis-connector-listener (the next bank deploy binds it as AVIS_CONNECTOR_LISTENER), its public
          part into the run's summary for the peer banks.
+  vault  makes the Key Vault of the peer banks' logins, once: the bank app gets an identity of its own where it has
+         none, the right to keep secrets there (get, list, set) and the vault's address as AVIS_PEER_VAULT.
 
 Secret values are read only to carry them over, and are never printed.
 """
+import hashlib
 import json
 import os
 import re
@@ -49,6 +52,12 @@ FIN_PORT = 8443
 LISTENER_SECRET = 'avis-connector-listener'
 LISTENER_HOST = 'bank.avispay.online'
 LISTENER_DAYS = 365
+# The bank owner: the FinTerminal register's login details are "stored only in Azure Key Vault", and the bank app "gets write
+# permission there". The register writes each peer server's login with the bank app's own identity and reads it back
+# (portal/src/peer-vault.mjs); the vault's access policy gives that identity the secrets' get, list and set - no more.
+VAULT_PURPOSE = 'fin-peer-logins'
+VAULT_SETTING = 'AVIS_PEER_VAULT'
+VAULT_PERMISSIONS = ('get', 'list', 'set')
 # An app that pulls its images with an identity of its own gets a new one when it moves, without the old one's right
 # to pull (the plan's finding): it pulls with the test server's own pull identity (deploy-uat.sh) where that one may
 # pull from the registry, or else with the registry login the test server's other apps pull with (deploy-uat.sh's
@@ -682,16 +691,56 @@ class Move:
         self.say('Its private key went only into the secret ' + LISTENER_SECRET + ' of ' + BANK + '; the next bank deploy binds it as'
                  ' AVIS_CONNECTOR_LISTENER. Peer banks get the public certificate below.')
 
+    def vault(self):
+        """The Key Vault of the peer banks' logins, made once in the bank's resource group: the bank app gets an identity of
+        its own where it has none, the right to keep secrets there (an access policy: get, list, set) and the vault's address
+        as AVIS_PEER_VAULT. Nothing is read from the vault or written into it here."""
+        path, version = self.path('app', BANK), self.version('app')
+        app = arm('get', path, version)
+        kinds = [kind.strip().lower() for kind in str((app.get('identity') or {}).get('type') or '').split(',')]
+        if 'systemassigned' not in kinds:
+            az('containerapp', 'identity', 'assign', '-g', RG, '-n', BANK, '--system-assigned')
+            app = arm('get', path, version)
+            self.say('The bank app has an identity of its own now.')
+        principal = (app.get('identity') or {}).get('principalId')
+        if not principal:
+            raise RuntimeError('The bank app has no identity of its own: nothing else changed.')
+        found = [item for item in az('keyvault', 'list', '-g', RG) or [] if (item.get('tags') or {}).get('purpose') == VAULT_PURPOSE]
+        if len(found) > 1:
+            raise Refused('More than one Key Vault for the peer banks\' logins: nothing changed.')
+        if found:
+            vault = az('keyvault', 'show', '-g', RG, '-n', found[0]['name'])
+        else:
+            # A vault's name is the world's only one: this subscription's own, the same at every run.
+            name = 'gbank-peers-' + hashlib.sha256((self.subscription + '/' + RG).encode()).hexdigest()[:8]
+            vault = az('keyvault', 'create', '-g', RG, '-n', name, '-l', app['location'], '--enable-rbac-authorization', 'false',
+                       '--tags', 'purpose=' + VAULT_PURPOSE)
+            self.say('Made: the Key Vault ' + name + ' for the peer banks\' logins.')
+        properties = vault.get('properties') or {}
+        if properties.get('enableRbacAuthorization'):
+            raise Refused('The Key Vault ' + vault['name'] + ' takes Azure roles, not access policies: nothing changed.')
+        uri = str(properties.get('vaultUri') or '')
+        if not re.fullmatch(r'https://[a-z][a-z0-9-]{1,22}[a-z0-9]\.vault\.azure\.net/?', uri):
+            raise RuntimeError('The Key Vault ' + vault['name'] + ' gave no address.')
+        az('keyvault', 'set-policy', '-g', RG, '-n', vault['name'], '--object-id', principal, '--secret-permissions', *VAULT_PERMISSIONS)
+        settings = {item.get('name'): item.get('value') for item in app['properties']['template']['containers'][0].get('env') or []}
+        if settings.get(VAULT_SETTING) != uri:
+            az('containerapp', 'update', '-g', RG, '-n', BANK, '--set-env-vars', VAULT_SETTING + '=' + uri)
+        self.say('The bank app keeps and reads the peer banks\' logins in ' + uri + ' (secrets: ' + ', '.join(VAULT_PERMISSIONS)
+                 + '), as ' + VAULT_SETTING + '.')
+
 
 def main(mode, hostname=''):
-    if mode not in ('plan', 'apply', 'bind', 'listener'):
-        raise SystemExit('mode must be plan, apply, bind or listener')
+    if mode not in ('plan', 'apply', 'bind', 'listener', 'vault'):
+        raise SystemExit('mode must be plan, apply, bind, listener or vault')
     move = Move(mode)
     try:
         if mode == 'bind':
             move.bind(hostname.strip().lower())
         elif mode == 'listener':
             move.listener()
+        elif mode == 'vault':
+            move.vault()
         else:
             state = move.survey()
             move.plan(state)
