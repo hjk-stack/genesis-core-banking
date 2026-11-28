@@ -113,6 +113,24 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
 .fin-routes select:focus{outline:none;border-color:var(--fin-orange);box-shadow:0 0 0 1px var(--fin-orange)}
 .fin-rates li,.fin-conversions li{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--fin-text);overflow-wrap:anywhere}
 .fin-convert-problem{margin:0;font-size:12px;color:var(--fin-wrong)}
+/* Screen B's Cash Wire (NOSTRO) (fin-wire.mjs): the peer server, the paying account, the amount and the beneficiary, the PINs while
+   4-Eyes is on, Execute & Dispatch, and what was sent with the peer's answer as the stream writes it. */
+.fin-wire{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));align-items:end;gap:10px 16px;margin:0 0 16px;padding:12px;border:1px solid var(--fin-line);border-radius:8px;background:var(--fin-ground)}
+.fin-wire h2{grid-column:1/-1;margin:0;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--fin-orange)}
+.fin-wire label{display:grid;gap:4px;min-width:0;font-size:12.5px;color:var(--fin-muted)}
+.fin-wire input,.fin-wire select{width:100%;min-width:0;padding:6px 8px;border:1px solid var(--fin-line);border-radius:6px;background:var(--fin-panel);color:var(--fin-text);font:inherit;font-size:13px}
+.fin-wire .fin-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.fin-wire input:focus,.fin-wire select:focus{outline:none;border-color:var(--fin-orange);box-shadow:0 0 0 1px var(--fin-orange)}
+.fin-wire [aria-invalid=true]{border-color:var(--fin-wrong);box-shadow:0 0 0 1px var(--fin-wrong)}
+.fin-wire-pair{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,130px),1fr));gap:6px;min-width:0}
+/* The two PINs on a row of their own, each wide enough for its holder's name. */
+.fin-wire-pins{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,220px),1fr));gap:6px 16px;min-width:0}
+.fin-wire button{padding:8px 14px;border:1px solid var(--fin-orange);border-radius:7px;background:var(--fin-orange);color:#1a1205;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.fin-wire button:disabled,.fin-wire select:disabled{opacity:.55;cursor:default}
+.fin-wire button[aria-busy=true]{cursor:progress}
+.fin-wire button:focus-visible{outline:2px solid var(--fin-orange);outline-offset:2px}
+.fin-wire-problem{grid-column:1/-1;margin:0;font-size:12px;color:var(--fin-wrong)}
+.fin-wire-stream{grid-column:1/-1;min-height:0;max-height:none}
 /* "Access & 4-Eyes" (fin-access.mjs): the authorised administrators by name, the 4-Eyes switch with its name, and its two PINs. */
 .fin-access{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:12px 16px 0;padding:10px 12px;border:1px solid var(--fin-line);border-radius:8px;background:var(--fin-panel)}
 .fin-access h2{margin:0;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--fin-orange)}

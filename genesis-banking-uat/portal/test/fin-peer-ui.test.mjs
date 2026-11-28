@@ -82,7 +82,8 @@ const STAMP=String.raw`\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC\]`;
 test('screen A offers the registered peers; INIT_SESSION goes to the peer, its acknowledgement comes back and the link is ready, counting its uptime',async()=>{
  const page=await terminal();try{
   const port=peerServer.address().port;
-  assert.deepEqual(page.peers(),['EXAMPLE-GW01 · localhost:'+port+' · SMPLFRPPXXX','EXAMPLE-GW02 · localhost:'+closedPort+' · SMPLFRPPXXX','EXAMPLE-GW03 · localhost:'+port+' · SMPLFRPPXXX']);
+  assert.deepEqual(page.peers(),['EXAMPLE-GW01 · IP-to-IP · localhost:'+port+' · SMPLFRPPXXX','EXAMPLE-GW02 · IP-to-IP · localhost:'+closedPort+' · SMPLFRPPXXX',
+   'EXAMPLE-GW03 · IP-to-IP · localhost:'+port+' · SMPLFRPPXXX']);
   assert.equal(page.$('[data-fin-peer-node]').textContent,'EXAMPLE-GW01');assert.equal(page.$('#fin-peer-title').textContent,'Peer Server Handshake & Direct IP Interaction — NODE: EXAMPLE-GW01');
   assert.equal(page.text.value,'HELLO EXAMPLE-GW01 // SESSION INIT EXMPDEFFXXX -> SMPLFRPPXXX // READY FOR MANUAL PACS.008 DISPATCH');
   assert.equal(page.link(),'Peer link: NOT CONNECTED');assert.deepEqual(page.lines(),[]);assert.equal(page.button.disabled,false);

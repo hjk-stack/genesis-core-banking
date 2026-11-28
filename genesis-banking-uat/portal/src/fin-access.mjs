@@ -70,6 +70,39 @@ export class FinAccess {
   return this.state(who);
  }
 
+ // Execute & Dispatch while 4-Eyes is on (the specification v3's "4-Eyes Maker-Checker PIN release"): PIN 1 and PIN 2, each
+ // checked against its own. A wrong one counts towards its lock as a wrong change does, although the dispatch is refused; both
+ // right, their counts start again. Off, no PIN is asked. The holders' names are kept with the transfer.
+ async check(person,body){
+  this.person(person);
+  const on=(await this.pool.query('SELECT four_eyes FROM avis_core_v2.fin_terminal_mode WHERE mode_id=1')).rows[0]?.four_eyes===true;
+  if(!on)return {fourEyes:false,checkers:[]};
+  const given=[pinOf(body?.pin1,'pin1'),pinOf(body?.pin2,'pin2')];
+  const client=await this.pool.connect();let counted=false;
+  try{
+   await client.query('BEGIN');
+   const rows=(await client.query('SELECT slot,holder_name,pin_hash,failed_attempts,locked_until>now() AS locked FROM avis_core_v2.fin_terminal_pins ORDER BY slot FOR UPDATE')).rows;
+   const slots=[1,2].map(slot=>rows.find(row=>Number(row.slot)===slot));
+   slots.forEach((row,index)=>{if(!row)fault('FIN_PIN_MISSING','pin'+(index+1),409);});
+   slots.forEach((row,index)=>{if(row.locked)fault('FIN_PIN_LOCKED','pin'+(index+1),423);});
+   const wrong=[];for(const [index,row] of slots.entries())if(!await samePin(given[index],row.pin_hash))wrong.push(index);
+   if(wrong.length){
+    let locked=false;
+    for(const index of wrong){
+     const failed=Number(slots[index].failed_attempts)+1;locked||=failed>=ATTEMPTS;
+     await client.query(`UPDATE avis_core_v2.fin_terminal_pins SET failed_attempts=CASE WHEN $2>=${ATTEMPTS} THEN 0 ELSE $2 END,
+      locked_until=CASE WHEN $2>=${ATTEMPTS} THEN now()+interval '15 minutes' ELSE locked_until END WHERE slot=$1`,[index+1,failed]);
+    }
+    await client.query('COMMIT');counted=true;
+    fault(locked?'FIN_PIN_LOCKED':'FIN_CHECK_PIN_WRONG','pin'+(wrong[0]+1),locked?423:422);
+   }
+   await client.query('UPDATE avis_core_v2.fin_terminal_pins SET failed_attempts=0 WHERE failed_attempts>0');
+   await client.query('COMMIT');
+   return {fourEyes:true,checkers:slots.map(row=>row.holder_name)};
+  }catch(failure){if(!counted)await client.query('ROLLBACK').catch(()=>{});throw failure;}
+  finally{client.release?.();}
+ }
+
  // The switch is the owner's alone.
  async fourEyes(actor,person,body){
   const who=this.person(person);

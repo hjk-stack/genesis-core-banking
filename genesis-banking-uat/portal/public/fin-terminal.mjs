@@ -4,6 +4,7 @@ import {createFinPeer} from './fin-peer.mjs';
 import {createFinSettlement} from './fin-settlement.mjs';
 import {createFinConverter} from './fin-converter.mjs';
 import {createFinAccess} from './fin-access.mjs';
+import {createFinWire} from './fin-wire.mjs';
 
 // The FinTerminal window opened by its switch on the Payments page (fin-terminal-switch.mjs). It shares the bank's sign-in
 // and shows itself only to a signed-in bank administrator the bank owner gave FinTerminal access (src/fin-access.mjs); its address
@@ -30,13 +31,16 @@ export async function startFinTerminal({root=document,fetcher=fetch,windowApi=ro
  }
  // Its sign-in is checked again whenever the bank signs in, out or changes workspace (fin-terminal-switch.mjs announces it,
  // from any of its pages) and whenever the terminal comes forward; a terminal whose administrator sign-in has ended closes.
- let checks=0,shown=false,csrf='',composer=null,peer=null,settlement=null;
+ let checks=0,shown=false,csrf='',composer=null,peer=null,settlement=null,wire=null,access=null;
  async function check(){
   const serial=++checks,session=await administratorSession(fetcher);if(serial!==checks)return;
   terminal.hidden=!session;csrf=session?.csrf||'';
   if(session){
    shown=true;
-   if(!composer){composer=createFinComposer({root,request});composer?.start();peer=createFinPeer({root,request});void peer?.start();settlement=createFinSettlement({root,request});settlement?.start();createFinConverter({root,request})?.start();createFinAccess({root,request})?.start();}
+   if(!composer){composer=createFinComposer({root,request});composer?.start();peer=createFinPeer({root,request});void peer?.start();settlement=createFinSettlement({root,request});settlement?.start();createFinConverter({root,request})?.start();
+    // A wire dispatched shows at once in the ledgers and in Screen A's stream; its PINs follow the 4-Eyes switch.
+    wire=createFinWire({root,request,onDispatched:()=>{void settlement?.refresh();void peer?.look();},onRefused:()=>void access?.refresh()});
+    access=createFinAccess({root,request,onState:state=>wire?.access(state)});access?.start();void wire?.start();}
    return;
   }
   // Closed once: the terminal's other requests that find the sign-in ended do not close it again.

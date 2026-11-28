@@ -171,7 +171,11 @@ FIN_DRAFT_REGISTERED:'This incoming transfer is registered and is not changed an
  LISTENER_CONFIGURATION:'The listening certificate (AVIS_CONNECTOR_LISTENER) is not in place in Azure.',
  FIN_TERMINAL_ACCESS:'You are not authorized to access this platform.',FIN_PIN:'Enter a PIN of 6 to 12 digits.',
  FIN_PIN_WRONG:'The current PIN is not correct.',FIN_PIN_LOCKED:'This PIN is locked for 15 minutes after five wrong entries.',
- FIN_FOUR_EYES:'Only the super administrator switches 4-Eyes on or off.'
+ FIN_FOUR_EYES:'Only the super administrator switches 4-Eyes on or off.',
+ FIN_PIN_MISSING:'PIN 1 and PIN 2 are not made yet.',FIN_CHECK_PIN_WRONG:'PIN 1 or PIN 2 is not correct.',
+ FIN_WIRE_AMOUNT:'Enter the amount in EUR, above zero, with at most two decimals.',FIN_WIRE_BENEFICIARY:'Enter the beneficiary\'s name.',
+ FIN_WIRE_IBAN:'The beneficiary\'s IBAN\'s check digits do not match.',FIN_WIRE_NOSTRO:'This peer server has no active EUR NOSTRO account of its bank.',
+ FIN_WIRE_INVALID:'The transfer does not pass its official schemas.'
 };
 // finTerminalAccess: who avis.land says is behind this request's workstation admission (src/workstation-admission.mjs), and whether
 // the owner gave them FinTerminal access; tests give their own.
@@ -184,7 +188,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
  const workstationFetcher=transferOptions.workstationFetcher||fetch;
  const workstationAuth=new WorkstationAdmissionAuthenticator(pool,{fetcher:workstationFetcher});
  const workstationAdmission=new WorkstationAdmission(pool,{fetcher:workstationFetcher});
- const nostroStatements=new NostroStatements(pool),finAccess=new FinAccess(pool),finTerminal=new FinTerminal(pool,{pricing:transferOptions.finPricing}),finPeers=new FinPeers(pool,{...transferOptions.transport,terminal:finTerminal});
+ const nostroStatements=new NostroStatements(pool),finAccess=new FinAccess(pool),finTerminal=new FinTerminal(pool,{pricing:transferOptions.finPricing}),finPeers=new FinPeers(pool,{...transferOptions.transport,terminal:finTerminal,access:finAccess});
  const finListener=new FinListener(pool,finPeers,transferOptions.finListener).watch();
  const send=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));};
  const server=http.createServer(async(req,res)=>{
@@ -350,7 +354,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const script=await readFile(new URL('./node_modules/pdfjs-dist/build'+path,import.meta.url));
     res.writeHead(200,{'content-type':'text/javascript; charset=utf-8','cache-control':'private, max-age=3600'});return res.end(script);
    }
-   if(req.method==='GET'&&['/','/card-message','/fin-terminal','/fin-terminal.mjs','/fin-terminal.css','/fin-terminal-switch.mjs','/fin-message.mjs','/fin-composer.mjs','/fin-peer.mjs','/fin-settlement.mjs','/fin-converter.mjs','/fin-access.mjs','/app.mjs','/open-account-register.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/nostro-clearing.mjs','/checkout-ip.mjs','/nostro-clearing.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
+   if(req.method==='GET'&&['/','/card-message','/fin-terminal','/fin-terminal.mjs','/fin-terminal.css','/fin-terminal-switch.mjs','/fin-message.mjs','/fin-composer.mjs','/fin-peer.mjs','/fin-settlement.mjs','/fin-converter.mjs','/fin-access.mjs','/fin-wire.mjs','/app.mjs','/open-account-register.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/nostro-clearing.mjs','/checkout-ip.mjs','/nostro-clearing.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
     const page=['/','/card-message','/fin-terminal'].includes(path),file=path==='/'?'index.html':page?'public'+path+'.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     // Always present the deployed UAT revision's current application source after an update.
@@ -535,6 +539,9 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(path==='/api/fin-terminal/four-eyes')return send(res,200,await finAccess.fourEyes(actor,finPerson,body));
    if(path==='/api/fin-terminal/converter')return send(res,200,await finTerminal.route(actor,body));
    if(finPeer?.[1])return send(res,200,await finPeers.send(actor,finPeer[1],body));
+   // Screen B's Cash Wire (NOSTRO) (src/fin-peer.mjs): Execute & Dispatch to a peer server, with PIN 1 and PIN 2 while 4-Eyes is on.
+   const finWire=/^\/api\/fin-terminal\/peers\/([A-Z0-9_]{1,35})\/transfers$/.exec(path);
+   if(finWire)return send(res,200,await finPeers.dispatch(actor,finPerson,finWire[1],body));
    if(path==='/api/fin-terminal/listener'){
     if(typeof body?.open!=='boolean')fault('INVALID_FIELD','open');
     return send(res,200,body.open?await finListener.open(actor,body):await finListener.close(actor));

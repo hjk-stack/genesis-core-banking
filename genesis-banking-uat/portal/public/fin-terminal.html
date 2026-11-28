@@ -102,6 +102,17 @@
 </footer>
 </section>
 <section class="fin-terminal-screen fin-settle" role="tabpanel" id="fin-screen-ip" aria-labelledby="fin-tab-ip" data-fin-screen="ip" hidden>
+<section class="fin-wire" aria-labelledby="fin-wire-title" data-fin-wire>
+<h2 id="fin-wire-title">Cash Wire (NOSTRO)</h2>
+<label><span>Peer Server</span><select data-fin-wire-peer disabled><option value="">No peer server registered</option></select></label>
+<label><span>Paying Account</span><select data-fin-wire-account disabled><option value="">No EUR account</option></select></label>
+<label><span>Settlement Amount (EUR)</span><input class="fin-code" data-fin-wire-amount maxlength="16" inputmode="decimal" autocomplete="off" spellcheck="false"></label>
+<label><span>Beneficiary Name &amp; IBAN</span><span class="fin-wire-pair"><input data-fin-wire-name maxlength="140" autocomplete="off" aria-label="Beneficiary Name" placeholder="Name"><input class="fin-code" data-fin-wire-iban maxlength="42" autocomplete="off" spellcheck="false" aria-label="Beneficiary IBAN" placeholder="IBAN"></span></label>
+<div class="fin-wire-pins" data-fin-wire-pins hidden><input class="fin-code" type="password" inputmode="numeric" maxlength="12" autocomplete="off" data-fin-wire-pin="1" aria-label="PIN 1" placeholder="PIN 1"><input class="fin-code" type="password" inputmode="numeric" maxlength="12" autocomplete="off" data-fin-wire-pin="2" aria-label="PIN 2" placeholder="PIN 2"></div>
+<button type="button" data-fin-wire-send disabled>Execute &amp; Dispatch</button>
+<p class="fin-wire-problem" role="alert" data-fin-wire-problem hidden></p>
+<ol class="fin-code fin-peer-stream fin-wire-stream" aria-labelledby="fin-wire-title" data-fin-wire-stream hidden></ol>
+</section>
 <section class="fin-convert" aria-labelledby="fin-convert-title" data-fin-converter>
 <h2 id="fin-convert-title">Fiat-to-Crypto/Stablecoin Selector</h2>
 <ul class="fin-routes" aria-labelledby="fin-convert-title" data-fin-routes></ul>
