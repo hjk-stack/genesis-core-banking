@@ -224,7 +224,9 @@ const SETTLED=['ACSC','ACCC'];
 const UNSENT=/^(CONNECTOR_CONFIGURATION|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|CERT_[A-Z_]+|UNABLE_TO_[A-Z_]+|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|ERR_TLS_CERT_ALTNAME_INVALID|ERR_SSL_[A-Z0-9_]*ALERT[A-Z0-9_]*|ERR_SSL_WRONG_VERSION_NUMBER|ERR_SSL_UNSUPPORTED_PROTOCOL|BANK_HTTP_4\d\d)$/;
 // The stream's words for it, the settled one as the specification's terminal writes a wire sent: "(NOSTRO & Core Synced)".
 const OUTCOMES={SETTLED:'NOSTRO & Core Synced',RETURNED:'returned to the account',HELD:'held in suspense'};
-const wireOf=(row,amount)=>({uetr:row.uetr,status:row.status,peerStatus:row.peer_status,reason:row.reason_code,amount,currency:row.currency_code,
+// A wire's amount in euros, as its ledger keeps it with two decimals.
+const cents=value=>{const [whole,fraction='']=String(value).split('.');return whole+'.'+fraction.padEnd(2,'0').slice(0,2);};
+const wireOf=row=>({uetr:row.uetr,status:row.status,peerStatus:row.peer_status,reason:row.reason_code,amount:cents(row.amount),currency:row.currency_code,
  creditorName:row.creditor_name,creditorIban:row.creditor_iban,fourEyes:row.four_eyes,checkers:row.checkers});
 
 export class FinPeers{
@@ -339,6 +341,7 @@ export class FinPeers{
  async dispatch(actor,person,profileId,body){
   this.#administrator(actor);
   const wire=this.#wire(body),peer=await this.#peer(profileId),credentials=this.credentials(peer.credential_reference);
+  await this.#recover();
   const {form,xml}=await this.terminal.cashWire(peer,wire),check=await this.access.check(person,body);
   const messageId=randomUUID(),text=form.amount+' '+form.currency+' -> '+form.creditorIban;
   await underConnectorLock(this.pool,async db=>{
@@ -356,25 +359,50 @@ export class FinPeers{
   });
   let answer=null,error=null;
   try{answer=await this.transmit(peer,xml,credentials,{minVersion:'TLSv1.3'});}catch(failure){error=diagnostic(failure);}
+  // What came back is kept as it came before it is read (review finding): a wire whose finishing fails is finished later from it
+  // (#recover), never sent again.
   const received=typeof answer==='string'&&answer.length?answer.replaceAll('\0',''):null;
-  const read=received&&await readPeerStatus(received,{localBic:peer.local_bic,peerBic:peer.peer_bic,businessMessageId:form.businessMessageId,uetr:form.uetr,own:await this.#own()});
+  await this.pool.query(`UPDATE avis_core_v2.fin_terminal_wires SET answer=$2,delivery_error=$3,delivered_at=now(),updated_at=now() WHERE uetr=$1 AND status='SENDING'`,
+   [form.uetr,received,error]);
+  return this.#finish(form.uetr);
+ }
+ // A wire sent, finished: the peer's answer read, what became of its money booked and both in the stream, in one transaction - booked
+ // for whoever dispatched it. Nothing kept of what came back, its result is unknown and its money held. Finished meanwhile, it is
+ // shown as it is.
+ async #finish(uetr){
+  const wire=(await this.pool.query(`SELECT w.*,m.business_message_id,m.event_text,p.local_bic,p.peer_bic FROM avis_core_v2.fin_terminal_wires w
+   JOIN avis_core_v2.fin_terminal_peer_messages m USING(message_id) JOIN avis_core_v2.bank_connector_profiles p ON p.profile_id=w.profile_id WHERE w.uetr=$1`,[uetr])).rows[0];
+  const known=wire.delivered_at!=null,error=wire.delivery_error;
+  const read=known&&wire.answer&&await readPeerStatus(wire.answer,{localBic:wire.local_bic,peerBic:wire.peer_bic,businessMessageId:wire.business_message_id,uetr,own:await this.#own()});
   const refused=read?.status==='NAK'||read?.status==='ACK'&&read.code==='RJCT';
-  const outcome=read?.status==='ACK'&&SETTLED.includes(read.code)?'SETTLED':refused||error&&UNSENT.test(error)?'RETURNED':'HELD';
+  const outcome=read?.status==='ACK'&&SETTLED.includes(read.code)?'SETTLED':refused||known&&error&&UNSENT.test(error)?'RETURNED':'HELD';
   const client=await this.pool.connect();let kept;
   try{
    await client.query('BEGIN');
-   const row=(await client.query('SELECT * FROM avis_core_v2.fin_terminal_wires WHERE uetr=$1 FOR UPDATE',[form.uetr])).rows[0];
-   const journalId=outcome==='HELD'?null:await this.terminal.finishWire(client,actor,row,outcome==='SETTLED',read?.businessMessageId||form.businessMessageId);
-   await client.query('UPDATE avis_core_v2.fin_terminal_peer_messages SET status=$2,error_code=$3,event_text=$4,updated_at=now() WHERE message_id=$1',
-    [messageId,error?'FAILED':'DELIVERED',error,text+' · '+OUTCOMES[outcome]]);
-   if(read)await client.query(`INSERT INTO avis_core_v2.fin_terminal_peer_messages(message_id,profile_id,direction,answer_to,message_type,business_message_id,event_code,event_parameters,event_text,status,error_code,content)
-    VALUES($1,$2,'IN',$3,$4,$5,$6,$7,$8,$9,$10,$11)`,[randomUUID(),peer.profile_id,messageId,read.type||null,read.businessMessageId||null,read.code||null,read.parameters||[],read.text||null,read.status,read.reason||null,received]);
-   kept=(await client.query(`UPDATE avis_core_v2.fin_terminal_wires SET status=$2,peer_status=$3,reason_code=$4,settle_journal_id=$5,updated_at=now() WHERE uetr=$1 RETURNING *`,
-    [form.uetr,outcome,read?.type===PACS002&&read.status==='ACK'?read.code:null,refused?read.parameters[1]||read.code:null,journalId])).rows[0];
+   kept=(await client.query('SELECT * FROM avis_core_v2.fin_terminal_wires WHERE uetr=$1 FOR UPDATE',[uetr])).rows[0];
+   if(kept.status==='SENDING'){
+    const journalId=outcome==='HELD'?null:await this.terminal.finishWire(client,{id:kept.dispatched_by},kept,outcome==='SETTLED',read?.businessMessageId||wire.business_message_id);
+    // Without a result the message stays as it was sent, shown without result once its sending is a minute old.
+    if(known)await client.query('UPDATE avis_core_v2.fin_terminal_peer_messages SET status=$2,error_code=$3,event_text=$4,updated_at=now() WHERE message_id=$1',
+     [kept.message_id,error?'FAILED':'DELIVERED',error,wire.event_text+' · '+OUTCOMES[outcome]]);
+    else await client.query('UPDATE avis_core_v2.fin_terminal_peer_messages SET event_text=$2 WHERE message_id=$1',[kept.message_id,wire.event_text+' · '+OUTCOMES[outcome]]);
+    if(read)await client.query(`INSERT INTO avis_core_v2.fin_terminal_peer_messages(message_id,profile_id,direction,answer_to,message_type,business_message_id,event_code,event_parameters,event_text,status,error_code,content)
+     VALUES($1,$2,'IN',$3,$4,$5,$6,$7,$8,$9,$10,$11)`,[randomUUID(),kept.profile_id,kept.message_id,read.type||null,read.businessMessageId||null,read.code||null,read.parameters||[],read.text||null,read.status,read.reason||null,wire.answer]);
+    kept=(await client.query(`UPDATE avis_core_v2.fin_terminal_wires SET status=$2,peer_status=$3,reason_code=$4,settle_journal_id=$5,updated_at=now() WHERE uetr=$1 RETURNING *`,
+     [uetr,outcome,read?.type===PACS002&&read.status==='ACK'?read.code:null,refused?read.parameters[1]||read.code:null,journalId])).rows[0];
+   }
    await client.query('COMMIT');
   }catch(failure){await client.query('ROLLBACK').catch(()=>{});throw failure;}
   finally{client.release?.();}
-  return {wire:wireOf(kept,form.amount),messages:(await this.pool.query(EXCHANGE,[messageId])).rows.map(messageOf)};
+  return {wire:wireOf(kept),messages:(await this.pool.query(EXCHANGE,[kept.message_id])).rows.map(messageOf)};
+ }
+ // Wires whose finishing never completed - the bank's database failed, or the bank stopped, after they left - finished at the next
+ // Execute & Dispatch: the transport gives up after 15 seconds, so a wire still sending a minute on has its result kept, or none.
+ // One that cannot be finished now is left for the next time; it never holds the others up.
+ async #recover(){
+  const stuck=(await this.pool.query(`SELECT uetr FROM avis_core_v2.fin_terminal_wires WHERE status='SENDING' AND updated_at<now()-interval '1 minute'
+   ORDER BY created_at LIMIT 20`)).rows;
+  for(const {uetr} of stuck)await this.#finish(uetr).catch(()=>null);
  }
  // A peer's own message, taken on the listening port once its TLS, certificate and IP address were checked (src/fin-listener.mjs):
  // kept as it came, with the bank's answer as it leaves; the listener tells what became of the answer.

@@ -172,6 +172,42 @@ test('a peer server not reached gives the money back at once; one that took the 
  }
 });
 
+test('a wire whose finishing failed after it left is finished at the next Execute & Dispatch from what came back - held when nothing was kept - and never sent again (review finding)',async()=>{
+ received.length=0;reply=xml=>status(xml,'ACSC');
+ // The bank's database fails once while a wire is finished, after the peer settled it.
+ let fail=true;
+ class Failing extends FinTerminal{async finishWire(...args){if(fail){fail=false;throw new Error('DATABASE_GONE');}return super.finishWire(...args);}}
+ const failing=new FinPeers(pool,{terminal:new Failing(pool),access,credentials:reference=>connectorCredentials(reference,env)});
+ const age=async uetr=>{const row=await kept(uetr);
+  await pool.query("UPDATE avis_core_v2.fin_terminal_wires SET updated_at=now()-interval '2 minutes' WHERE uetr=$1",[uetr]);
+  await pool.query("UPDATE avis_core_v2.fin_terminal_peer_messages SET updated_at=now()-interval '2 minutes' WHERE message_id=$1",[row.message_id]);};
+ const start=await money(),first=wire({amount:'100.00'});
+ await assert.rejects(failing.dispatch(admin,owner,'EXAMPLE_TLS_PEER',first),/DATABASE_GONE/);
+ let row=await kept(first.uetr);
+ assert.deepEqual([row.status,received.length,row.delivery_error],['SENDING',1,null]);assert.match(row.answer,/<TxSts>ACSC<\/TxSts>/);
+ assert.deepEqual(moved(start,await money()),{account:'-100.00',nostro:'0.00',held:'100.00',suspense:'100.00'});
+ // A minute on, the next Execute finishes it from the answer kept - settled - before its own wire goes.
+ await age(first.uetr);
+ const second=await failing.dispatch(admin,owner,'EXAMPLE_TLS_PEER',wire({amount:'10.00'}));
+ row=await kept(first.uetr);assert.deepEqual([second.wire.status,row.status,row.peer_status,received.length],['SETTLED','SETTLED','ACSC',2]);
+ assert.deepEqual(moved(start,await money()),{account:'-110.00',nostro:'-110.00',held:'0.00',suspense:'0.00'});
+ assert.deepEqual((await journals(first.uetr)).map(entry=>[entry.event_type,entry.actor_id]),[['FIN_OUTGOING_RESERVED',admin.id],['FIN_OUTGOING_SETTLED',admin.id]]);
+ const stream=(await peers.messages(admin,'EXAMPLE_TLS_PEER')).messages,out=stream.find(message=>message.messageId===row.message_id);
+ assert.deepEqual([out.status,out.text,stream.find(message=>message.answerTo===out.messageId)?.event],['DELIVERED','100.00 EUR -> '+BENEFICIARY+' · NOSTRO & Core Synced','ACSC']);
+ // Nothing kept of what came back (the bank stopped as it left): held, its money in suspense, shown without result.
+ fail=true;const third=wire({amount:'20.00'});
+ await assert.rejects(failing.dispatch(admin,owner,'EXAMPLE_TLS_PEER',third),/DATABASE_GONE/);
+ await pool.query('UPDATE avis_core_v2.fin_terminal_wires SET answer=NULL,delivery_error=NULL,delivered_at=NULL WHERE uetr=$1',[third.uetr]);await age(third.uetr);
+ const before=await money();await failing.dispatch(admin,owner,'EXAMPLE_TLS_PEER',wire({amount:'10.00'}));
+ row=await kept(third.uetr);assert.deepEqual([row.status,row.settle_journal_id],['HELD',null]);
+ assert.deepEqual(moved(before,await money()),{account:'-10.00',nostro:'-10.00',held:'0.00',suspense:'0.00'});
+ const held=(await peers.messages(admin,'EXAMPLE_TLS_PEER')).messages.find(message=>message.messageId===row.message_id);
+ assert.match(streamLine(held),/^>>> \[[^\]]+ UTC\] IP pacs\.008 NO RESULT \(Seq #\d{6}\) · 20\.00 EUR -> \S+ · held in suspense$/);
+ // Neither goes twice.
+ for(const order of [first,third])await assert.rejects(peers.dispatch(admin,owner,'EXAMPLE_TLS_PEER',order),refused('FIN_UETR_DUPLICATE',409));
+ assert.equal(received.length,4);
+});
+
 test('over a Bank API connector the transfer goes signed over HTTPS; ACCC settles it, a refusal before it was taken (HTTP 4xx) returns it',async()=>{
  received.length=0;reply=xml=>status(xml,'ACCC');
  let start=await money(),order=wire({amount:'1234.56',creditorIban:BENEFICIARY.toLowerCase().replace(/(.{4})/g,'$1 ').trim()});

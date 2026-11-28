@@ -17,6 +17,10 @@ CREATE TABLE avis_core_v2.fin_terminal_wires (
  status text NOT NULL DEFAULT 'SENDING' CHECK (status IN ('SENDING','SETTLED','RETURNED','HELD')),
  peer_status varchar(4),
  reason_code varchar(35),
+ -- What came back from the peer, kept as it came before it is read: a wire whose finishing failed is finished from it later.
+ answer text CHECK (octet_length(answer)<=65535),
+ delivery_error varchar(64),
+ delivered_at timestamptz,
  reserve_journal_id uuid NOT NULL UNIQUE REFERENCES avis_core_v2.ledger_journals(journal_id),
  settle_journal_id uuid UNIQUE REFERENCES avis_core_v2.ledger_journals(journal_id),
  four_eyes boolean NOT NULL,
