@@ -100,7 +100,7 @@ test('nothing is booked or kept for an incoming transfer that does not name its 
   [{form:incoming({senderBic:'SMPLFRPPXXX'}),selection},'FIN_NOSTRO_SENDER_MISMATCH','nostroAccountId'],
   [{form:incoming({settlementAccount:'NOSTRO-OTHER-9'}),selection},'FIN_NOSTRO_SENDER_MISMATCH','nostroAccountId'],
   [{form:incoming({amount:''}),selection},'FIN_INCOMING_INVALID','xml'],
-  [{form:incoming({debtorIban:'DE00000000000001234567'}),selection},'FIN_INCOMING_INVALID','xml'],
+  [{form:incoming({amount:'0.00'}),selection},'FIN_INCOMING_INVALID','xml'],
   [{form:incoming(),selection,draftId:randomUUID(),revision:1},'FIN_DRAFT_NOT_FOUND','draftId']])
   await assert.rejects(fin.register(admin,body),refused(code,field),code+' '+JSON.stringify(body.form?.settlement));
  await assert.rejects(fin.register(guest,{form:incoming(),selection}),e=>e.code==='FORBIDDEN'&&e.status===403);

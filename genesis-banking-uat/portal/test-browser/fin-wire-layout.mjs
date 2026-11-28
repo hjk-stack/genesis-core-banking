@@ -67,8 +67,9 @@ for(const width of [260,390,820,1440])test('Screen B\'s Cash Wire on '+(width<50
   await page.getByRole('tab',{name:'2 · Interbank Direct IP-to-IP Composer'}).click();
   const panel=page.locator('[data-fin-wire]'),send=panel.locator('[data-fin-wire-send]');
   await page.waitForFunction(()=>document.querySelectorAll('[data-fin-wire-peer] option').length===3&&!document.querySelector('[data-fin-wire-send]').disabled);
-  assert.deepEqual(await panel.locator('[data-fin-wire-peer] option').allTextContents(),['EXAMPLE-FRANKFURT-GW01 · IP-to-IP · SMPLFRPPXXX · EUR',
-   'EXAMPLE-PARIS-API · Bank API · SMPLFRPPXXX · EUR','EXAMPLE-ZURICH-ISO20022 · ISO 20022 · SMPLFRPPXXX · EUR']);
+  // The three types, each with its peer server (the bank owner: "Peer service selector is missing IP to IP, API, ISO20022").
+  assert.deepEqual(await page.evaluate(()=>[...document.querySelectorAll('[data-fin-wire-peer] optgroup')].map(group=>[group.label,[...group.children].map(option=>option.textContent)])),
+   [['IP-to-IP',['EXAMPLE-FRANKFURT-GW01 · SMPLFRPPXXX · EUR']],['API',['EXAMPLE-PARIS-API · SMPLFRPPXXX · EUR']],['ISO 20022',['EXAMPLE-ZURICH-ISO20022 · SMPLFRPPXXX · EUR']]]);
   await panel.locator('[data-fin-wire-amount]').fill('2500.00');await panel.locator('[data-fin-wire-name]').fill('Example Creditor SARL');
   await panel.locator('[data-fin-wire-iban]').fill(BENEFICIARY);
   await send.click();await panel.locator('[data-fin-wire-stream] li').nth(1).waitFor();

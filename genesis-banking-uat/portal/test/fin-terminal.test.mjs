@@ -225,8 +225,11 @@ test('the terminal has its two screens, the FIN composer first, chosen by a clic
   // Only what is real (step 4, screen A): with no peer bank registered none is offered, nothing can be sent, the link is not
   // connected and the stream is empty - no connection, session or answer is made up.
   await settle();
-  assert.deepEqual([...t.doc.querySelectorAll('[data-fin-peer-server] option')].map(option=>option.textContent),['No peer server registered']);
-  assert.deepEqual([t.doc.querySelector('[data-fin-peer-server]').disabled,t.doc.querySelector('[data-fin-peer-send]').disabled],[true,true]);
+  // The three types are shown all the same, each with none registered (the bank owner: "Peer service selector is missing IP to IP,
+  // API, ISO20022").
+  assert.deepEqual([...t.doc.querySelectorAll('[data-fin-peer-server] optgroup')].map(group=>[group.label,[...group.children].map(option=>[option.textContent,option.disabled])]),
+   [['IP-to-IP',[['None registered',true]]],['API',[['None registered',true]]],['ISO 20022',[['None registered',true]]]]);
+  assert.deepEqual([t.doc.querySelector('[data-fin-peer-server]').value,t.doc.querySelector('[data-fin-peer-server]').disabled,t.doc.querySelector('[data-fin-peer-send]').disabled],['',false,true]);
   assert.equal(t.doc.querySelector('[data-fin-peer-link]').textContent,'Peer link: NOT CONNECTED');
   assert.equal(t.doc.querySelector('[data-fin-peer-stream]').children.length,0);assert.equal(t.doc.querySelector('[data-fin-peer-node]').textContent,'—');
   assert.doesNotMatch(t.doc.body.textContent,/(?<!NOT )CONNECTED|mTLS|Peer IP|PEER_ACK|UNLOCKED|SENT|READY ·/);

@@ -132,12 +132,13 @@ test('a peer\'s credit transfer over IP is booked at once on the NOSTRO and AVIS
 });
 
 test('a transfer the bank cannot book is answered RJCT with the reason, and nothing is booked',async()=>{
- const before=await balances(),booked=transfer();
+ // Booked with any account number of the debtor's (the bank owner: "Accept all account numbers").
+ const before=await balances(),booked=transfer({debtorIban:'0012-345678-90'});
  // A UETR another draft of the terminal has already.
  const taken=transfer();await fin.save(admin,{form:{...taken,senderBic:BANK,receiverBic:PEER}});
  for(const [form,reason] of [[transfer({creditorIban:exampleIban('FR','00000000000000000000999')}),'AC03'],[transfer({creditorAgentBic:PEER}),'AC03'],
   [transfer({settlementAccount:'NOSTRO-OTHER-9'}),'NARR'],[transfer({settlement:'INDA'}),'NARR'],[transfer({currency:'USD'}),'AC03'],[taken,'DUPL'],
-  [transfer({debtorIban:'DE00000000000000000000'}),'NARR']]){
+  [transfer({amount:'0.00'}),'NARR']]){
   const [answer]=await exchange([buildFinMessage(form)]);
   assert.deepEqual([value(answer,'TxSts'),value(answer,'Cd'),value(answer,'OrgnlUETR')],['RJCT',reason,form.uetr],reason+' '+form.uetr);
   assert.ok(value(answer,'AddtlInf').length>0);

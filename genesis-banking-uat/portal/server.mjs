@@ -160,12 +160,12 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  FIN_MESSAGE_INVALID:'Write the ISO 20022 message as XML, without a document type.',
  FIN_BOOKING_ACCOUNT:'Select a Common or Suspense account in the message\'s currency.',FIN_NOSTRO_ACCOUNT:'Select an active NOSTRO account in the message\'s currency.',
  FIN_TOKEN_WALLET:'Select a "+" wallet; AG and AGi are not booked here.',
- FIN_BOOKING_MISMATCH:'The debtor\'s IBAN and BIC are not those of the chosen Common or Suspense account.',
+ FIN_BOOKING_MISMATCH:'The debtor\'s account and BIC are not those of the chosen Common or Suspense account.',
  FIN_NOSTRO_MISMATCH:'The receiver, INDA and the settlement account are not those of the chosen NOSTRO account.',
- FIN_CREDITOR_MISMATCH:'The creditor\'s IBAN and BIC and the receiver are not those of the chosen Common or Suspense account.',
+ FIN_CREDITOR_MISMATCH:'The creditor\'s account and BIC and the receiver are not those of the chosen Common or Suspense account.',
  FIN_NOSTRO_SENDER_MISMATCH:'The sender, INGA and the settlement account are not those of the chosen NOSTRO account.',
  FIN_INCOMING_INVALID:'Register a message that passes Validate XML.',FIN_CONVERT_RATE:'No live rate for the chosen wallet\'s asset now. Try again.',
- FIN_CONVERT_QUANTITY:'The amount converts to no token at four decimals.',FIN_WALLET_ADDRESS:'The chosen wallet has no receiving address on its chain.',FIN_IVMS101:'The IVMS101 travel-rule data is not complete: debtor name and IBAN, wallet holder.',
+ FIN_CONVERT_QUANTITY:'The amount converts to no token at four decimals.',FIN_WALLET_ADDRESS:'The chosen wallet has no receiving address on its chain.',FIN_IVMS101:'The IVMS101 travel-rule data is not complete: debtor name and account, wallet holder.',
 FIN_DRAFT_REGISTERED:'This incoming transfer is registered and is not changed any more.',
  FIN_LISTENING:'The listening port is open: close it to connect out.',FIN_SENDING:'A session message is on its way: open the port once it has its answer.',FIN_LISTENER_NO_PEER:'Whitelist a peer bank\'s IP address before opening the port.',
  LISTENER_CONFIGURATION:'The listening certificate (AVIS_CONNECTOR_LISTENER) is not in place in Azure.',
@@ -174,7 +174,7 @@ FIN_DRAFT_REGISTERED:'This incoming transfer is registered and is not changed an
  FIN_FOUR_EYES:'Only the super administrator switches 4-Eyes on or off.',
  FIN_PIN_MISSING:'PIN 1 and PIN 2 are not made yet.',FIN_CHECK_PIN_WRONG:'PIN 1 or PIN 2 is not correct.',
  FIN_WIRE_AMOUNT:'Enter the amount in EUR, above zero, with at most two decimals.',FIN_WIRE_BENEFICIARY:'Enter the beneficiary\'s name.',
- FIN_WIRE_IBAN:'The beneficiary\'s IBAN\'s check digits do not match.',FIN_WIRE_NOSTRO:'This peer server has no active EUR NOSTRO account of its bank.',
+ FIN_WIRE_ACCOUNT:'Enter the beneficiary\'s account number, at most 34 characters.',FIN_WIRE_NOSTRO:'This peer server has no active EUR NOSTRO account of its bank.',
  FIN_WIRE_INVALID:'The transfer does not pass its official schemas.'
 };
 // finTerminalAccess: who avis.land says is behind this request's workstation admission (src/workstation-admission.mjs), and whether

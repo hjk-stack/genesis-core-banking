@@ -1,9 +1,10 @@
-import {PROTOCOLS,streamLine} from './fin-peer.mjs';
+import {paintPeerChoice,streamLine} from './fin-peer.mjs';
 import {newUetr} from './fin-message.mjs';
 
 // Screen B's Cash Wire (NOSTRO) in the FinTerminal (fin-terminal.mjs), the specification v3's IP transfer with "Execute & Dispatch":
-// the amount in euros from AVISPay PLC's account to the beneficiary's name and IBAN, through a peer server the bank registered
-// (Administration, "Add bank connector": IP-to-IP, Bank API or ISO 20022), settled on the bank's NOSTRO there (src/fin-peer.mjs).
+// the amount in euros from AVISPay PLC's account to the beneficiary's name and account (an IBAN or any other account number), through
+// a peer server the bank registered (Administration, "Add bank connector": IP-to-IP, API or ISO 20022), settled on the bank's NOSTRO
+// there (src/fin-peer.mjs).
 // While 4-Eyes is on, PIN 1 and PIN 2 go with it. The pacs.008 sent and the peer's pacs.002 answer show under it as the stream
 // writes them.
 export function createFinWire({root=document,request,onDispatched=()=>{},onRefused=()=>{}}){
@@ -21,12 +22,11 @@ export function createFinWire({root=document,request,onDispatched=()=>{},onRefus
   for(const [key,input] of Object.entries(fields))if(key===field)input.setAttribute('aria-invalid','true');else input.removeAttribute('aria-invalid');
  }
  function paint(){
-  const peer=peerChoice.value,account=accountChoice.value,own=euro();
-  peerChoice.replaceChildren(...(peers.length?peers.map(item=>option(item.profileId,[item.name,PROTOCOLS[item.protocol],item.peerBic,item.currency].filter(Boolean).join(' · '))):[option('','No peer server registered')]));
-  if(peers.some(item=>item.profileId===peer))peerChoice.value=peer;
+  const account=accountChoice.value,own=euro();
+  paintPeerChoice(peerChoice,peers,item=>[item.name,item.peerBic,item.currency].filter(Boolean).join(' · '));
   accountChoice.replaceChildren(...(own.length?own.map(item=>option(item.accountId,[item.label,item.iban,item.currency].filter(Boolean).join(' · '))):[option('','No EUR account')]));
   if(own.some(item=>item.accountId===account))accountChoice.value=account;
-  peerChoice.disabled=!peers.length;accountChoice.disabled=!own.length;pinBox.hidden=!fourEyes;
+  accountChoice.disabled=!own.length;pinBox.hidden=!fourEyes;
   button.disabled=busy||!peers.length||!own.length;
  }
  // The 4-Eyes switch and the PINs' holders as the access panel reads them (fin-access.mjs).

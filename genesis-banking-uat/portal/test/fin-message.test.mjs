@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
-import {FIELDS,PACS008,blankForm,buildFinMessage,readFinMessage,normalizeForm,detailPieces,fieldProblems,ibanValid,leiValid,newMessageId} from '../public/fin-message.mjs';
+import {FIELDS,LIMITS,PACS008,COUNTRIES,REPORTING_CODES,blankForm,buildFinMessage,readFinMessage,normalizeForm,detailPieces,fieldProblems,ibanValid,newMessageId} from '../public/fin-message.mjs';
 import {validateFinMessage} from '../src/fin-terminal.mjs';
 import {exampleForm,exampleIban} from './helpers/fin-example.mjs';
 
@@ -24,7 +24,7 @@ test('a complete message passes both official schemas: the header against head.0
 
 test('optional parts left empty are left out, and the message still passes both schemas',async()=>{
  const form={...exampleForm()};
- for(const field of ['intermediaryBic','intermediaryLei','ultimateDebtorName','ultimateDebtorLei','ultimateCreditorName','ultimateCreditorLei','structuredReference','unstructuredRemittance','regulatoryCountry','regulatoryCode','regulatoryDetails'])form[field]='';
+ for(const field of ['intermediaryBic','intermediaryAddress','ultimateDebtorName','ultimateDebtorAddress','ultimateCreditorName','ultimateCreditorAddress','structuredReference','unstructuredRemittance','regulatoryCountry','regulatoryCode','regulatoryDetails'])form[field]='';
  for(const [settlement,method] of [['INDA','INDA'],['INGA','INGA']]){
   const xml=buildFinMessage({...form,settlement,priority:'NORM/NURG'});
   assert.equal((await validateFinMessage(xml)).valid,true,settlement);
@@ -33,7 +33,7 @@ test('optional parts left empty are left out, and the message still passes both 
 });
 
 test('the XML read back gives the same form: the form and the XML are kept in step both ways',()=>{
- for(const form of [exampleForm(),{...exampleForm(),settlement:'INGA',priority:'NORM/NURG',intermediaryLei:'',ultimateCreditorName:''}]){
+ for(const form of [exampleForm(),{...exampleForm(),settlement:'INGA',priority:'NORM/NURG',intermediaryBic:'',ultimateCreditorName:''}]){
   const read=readFinMessage(buildFinMessage(form),DOMParser);
   assert.equal(read.error,undefined);assert.deepEqual(read.form,normalizeForm(form));
  }
@@ -48,6 +48,15 @@ test('text with XML\'s own characters stays text, there and back',async()=>{
  assert.ok(xml.includes('<Nm>Müller &amp; Söhne &lt;Export&gt; &quot;GmbH&quot;</Nm>'));
  assert.equal((await validateFinMessage(xml)).valid,true);
  assert.deepEqual(readFinMessage(xml,DOMParser).form,normalizeForm(form));
+});
+
+test('a character beyond the basic plane is never cut in two between lines: lines count characters as the schema does (review finding)',async()=>{
+ const word='a'.repeat(69)+'\u{1F600}'+'b',lines=detailPieces(word,70);
+ assert.deepEqual(lines,['a'.repeat(69)+'\u{1F600}','b']);
+ assert.ok(lines.every(line=>!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(line)));
+ assert.deepEqual(detailPieces('\u{20000}'.repeat(36)),['\u{20000}'.repeat(35),'\u{20000}']);
+ const xml=buildFinMessage({...exampleForm(),ultimateDebtorAddress:word});
+ assert.deepEqual(await validateFinMessage(xml),{valid:true,errors:[]});
 });
 
 test('regulatory details longer than 35 characters go in several Inf elements, as the schema allows, and come back whole',()=>{
@@ -106,14 +115,65 @@ test('the message is checked whole: an envelope that does not read, or holds its
  assert.deepEqual(await validateFinMessage(xml),{valid:true,errors:[]});
 });
 
-test('what the schemas do not check: IBAN and LEI check digits, and an amount above zero',()=>{
+test('no LEI: the intermediary agent and the ultimate parties carry an address, in lines of 70 as the schema has it, and it comes back whole',async()=>{
+ // The bank owner: "Remove LEI register as many companies do not have LEI, instead must be address".
+ const long='Example Trade Centre, Building 4, Floor 12, 1 Example Avenue, Example City EX1 1AA, United Kingdom';
+ const form={...exampleForm(),intermediaryBic:'',intermediaryAddress:long},xml=buildFinMessage(form),flat=xml.replace(/\n\s*/g,'');
+ assert.doesNotMatch(xml,/<LEI>|<OrgId>/);
+ const lines=detailPieces(long,70);
+ assert.ok(lines.length===2&&lines.every(line=>line.length<=70),lines.join('|'));
+ assert.ok(flat.includes('<IntrmyAgt1><FinInstnId><PstlAdr>'+lines.map(line=>'<AdrLine>'+line+'</AdrLine>').join('')+'</PstlAdr></FinInstnId></IntrmyAgt1>'),flat);
+ assert.ok(flat.includes('<UltmtDbtr><Nm>Example Holding AG</Nm><PstlAdr><AdrLine>Examplestrasse 2, 8000 Example Town, Switzerland</AdrLine></PstlAdr></UltmtDbtr>'),flat);
+ assert.ok(flat.includes('<UltmtCdtr><Nm>Example Supplier Group</Nm><PstlAdr><AdrLine>3 Rue Exemple, 75000 Example Ville, France</AdrLine></PstlAdr></UltmtCdtr>'),flat);
+ assert.deepEqual(await validateFinMessage(xml),{valid:true,errors:[]});
+ assert.deepEqual(readFinMessage(xml,DOMParser).form,normalizeForm(form));
+ // At its longest an address still fits the schema's seven lines; written over several lines, it is one line of text.
+ const longest='Word '.repeat(28).trim();
+ assert.equal(longest.length,LIMITS.intermediaryAddress-1);
+ assert.equal((await validateFinMessage(buildFinMessage({...exampleForm(),ultimateCreditorAddress:longest}))).valid,true);
+ assert.equal(normalizeForm({ultimateDebtorAddress:' 2 Example Road \n Example Town '}).ultimateDebtorAddress,'2 Example Road Example Town');
+ assert.equal(FIELDS.some(field=>/Lei$/.test(field)),false);
+});
+
+test('any account number is taken: an IBAN goes as IBAN, any other number as the bank\'s own (Othr), with no check digits checked',async()=>{
+ // The bank owner: "Sender - Receiver IBAN is only an option most banks have not IBAN numbers. Accept all account numbers".
  const form=exampleForm();
- assert.ok(ibanValid(form.debtorIban)&&ibanValid(form.creditorIban)&&leiValid(form.intermediaryLei));
+ assert.ok(ibanValid(form.debtorIban)&&ibanValid(form.creditorIban));
  assert.deepEqual(fieldProblems(form),[]);
- const wrong=fieldProblems({...form,debtorIban:form.debtorIban.slice(0,-1)+((Number(form.debtorIban.at(-1))+1)%10),ultimateCreditorLei:form.ultimateCreditorLei.slice(0,-2)+'00',amount:'0.00'});
- assert.deepEqual(wrong.map(problem=>problem.field),['debtorIban','ultimateCreditorLei','amount']);
+ for(const [written,kept,element] of [[form.creditorIban.replace(/(.{4})/g,'$1 ').toLowerCase(),form.creditorIban,'<IBAN>'+form.creditorIban+'</IBAN>'],
+  [' 0012-345678-90 ','0012-345678-90','<Othr><Id>0012-345678-90</Id></Othr>'],
+  // An IBAN whose check digits do not match is another account number, taken as written.
+  [form.creditorIban.slice(0,-1)+((Number(form.creditorIban.at(-1))+1)%10),form.creditorIban.slice(0,-1)+((Number(form.creditorIban.at(-1))+1)%10),null]]){
+  const xml=buildFinMessage({...form,debtorIban:written,creditorIban:written}),flat=xml.replace(/\n\s*/g,'');
+  const id=element||'<Othr><Id>'+kept+'</Id></Othr>';
+  assert.equal(normalizeForm({creditorIban:written}).creditorIban,kept);
+  assert.ok(flat.includes('<DbtrAcct><Id>'+id+'</Id></DbtrAcct>')&&flat.includes('<CdtrAcct><Id>'+id+'</Id></CdtrAcct>'),flat);
+  assert.deepEqual(await validateFinMessage(xml),{valid:true,errors:[]});
+  const read=readFinMessage(xml,DOMParser).form;assert.equal(read.debtorIban,kept);assert.equal(read.creditorIban,kept);
+  assert.deepEqual(fieldProblems({...form,debtorIban:written,creditorIban:written}),[]);
+ }
+});
+
+test('what the schemas do not check: an amount above zero',()=>{
+ const form=exampleForm();
+ assert.deepEqual(fieldProblems({...form,amount:'0.00'}).map(problem=>problem.field),['amount']);
+ assert.deepEqual(fieldProblems({...form,amount:'12.123456'}).map(problem=>problem.field),['amount']);
  // Written in groups of four, an IBAN is the same IBAN; codes in capitals.
  assert.equal(normalizeForm({...form,debtorIban:form.debtorIban.replace(/(.{4})/g,'$1 ').toLowerCase()}).debtorIban,form.debtorIban);
+});
+
+test('the Authority Country is chosen from every country and the bank owner\'s 26 reporting codes, and goes in the regulatory reporting',async()=>{
+ // The bank owner: "Authority Country both fields must be selectors" and "Reporting codes are a selector".
+ assert.deepEqual(REPORTING_CODES.map(([code])=>code),['SALA','PENS','BONU','COMM','SUPP','GDDS','SCVE','TRAD','TAXS','VATX','WHLD','SSBE','INTC','TREA',
+  'ACCT','CASH','LOAN','INTE','DIVI','SECU','INSU','RENT','UTIL','CHAR','REFU','OTHR']);
+ assert.deepEqual(REPORTING_CODES.find(([code])=>code==='GDDS'),['GDDS','Purchase/Sale of Goods']);
+ assert.equal(COUNTRIES.length,250);assert.equal(new Set(COUNTRIES).size,250);
+ assert.ok(COUNTRIES.every(code=>/^[A-Z]{2}$/.test(code))&&['CH','DE','TN','US','GB','XK'].every(code=>COUNTRIES.includes(code)));
+ assert.deepEqual([...COUNTRIES].sort(),[...COUNTRIES]);
+ const xml=buildFinMessage({...exampleForm(),regulatoryCountry:'TN',regulatoryCode:'SALA'}),flat=xml.replace(/\n\s*/g,'');
+ assert.ok(flat.includes('<RgltryRptg><Authrty><Ctry>TN</Ctry></Authrty><Dtls><Cd>SALA</Cd><Inf>'),flat);
+ assert.deepEqual(await validateFinMessage(xml),{valid:true,errors:[]});
+ const read=readFinMessage(xml,DOMParser).form;assert.deepEqual([read.regulatoryCountry,read.regulatoryCode],['TN','SALA']);
 });
 
 test('a document type is never read, and broken XML leaves the form as it is',()=>{

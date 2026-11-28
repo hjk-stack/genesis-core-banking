@@ -19,8 +19,21 @@ const TAKEN={NOT_ISO20022:'not an ISO 20022 message',SCHEMA:'it does not pass it
 const untaken=message=>message.error==='NOT_SUPPORTED'?'a '+message.type+' message is not taken on this connection':TAKEN[message.error]||message.error||'';
 // The connector types the bank registers (Administration, "Add bank connector"); the bank owner: "Peer server is only our form or
 // connection IP-IP, API, ISO20022".
-export const PROTOCOLS=Object.freeze({IP_TO_IP:'IP-to-IP',BANK_API:'Bank API',SWIFT_ISO20022:'ISO 20022'});
-export const peerLabel=peer=>[peer.name,PROTOCOLS[peer.protocol],peer.address,peer.peerBic].filter(Boolean).join(' · ');
+export const PROTOCOLS=Object.freeze({IP_TO_IP:'IP-to-IP',BANK_API:'API',SWIFT_ISO20022:'ISO 20022'});
+export const peerLabel=peer=>[peer.name,peer.address,peer.peerBic].filter(Boolean).join(' · ');
+// A peer server selector shows the three types, each with the peer servers registered for it or none (the bank owner: "Peer service
+// selector is missing IP to IP, API, ISO20022"). The one chosen stays chosen while it is listed; with none registered at all the
+// selector reads "None registered".
+export function paintPeerChoice(select,peers,label){
+ const doc=select.ownerDocument,was=select.value;
+ const item=(value,text,disabled=false)=>{const option=doc.createElement('option');option.value=value;option.textContent=text;option.disabled=disabled;return option;};
+ select.replaceChildren(...Object.entries(PROTOCOLS).map(([protocol,name])=>{
+  const group=doc.createElement('optgroup'),own=peers.filter(peer=>peer.protocol===protocol);group.label=name;
+  group.append(...(own.length?own.map(peer=>item(peer.profileId,label(peer))):[item('','None registered',true)]));
+  return group;
+ }));
+ if(!peers.length)select.value='';else if(peers.some(peer=>peer.profileId===was))select.value=was;
+}
 // The stream is looked at again every few seconds while it is shown: another operator's messages come in too.
 const LOOK=5;
 
@@ -66,7 +79,6 @@ export function createFinPeer({root=document,request,view=root.defaultView||glob
  const addresses=$('[data-fin-peer-addresses]'),addressInput=$('[data-fin-peer-address]'),addressButton=$('[data-fin-peer-address-add]');
  let peers=[],current=null,suggested='',busy=false,shown='',timer=null,ticks=0,up=0,fetched=0,looks=0,listener=null,listenedAt=0,listenBusy=false,listenLooks=0;
  const chosen=()=>peers.find(peer=>peer.profileId===server.value)||null;
- const option=(value,label)=>{const item=root.createElement('option');item.value=value;item.textContent=label;return item;};
  function say(message){problem.textContent=message||'';problem.hidden=!message;}
  function suggest(){const next=suggestion(event.value,chosen());if(!text.value.trim()||text.value===suggested)text.value=next;suggested=next;}
  function paintLink(){
@@ -95,10 +107,7 @@ export function createFinPeer({root=document,request,view=root.defaultView||glob
   let result;try{result=await request('GET','/api/fin-terminal/peers/'+encodeURIComponent(profileId)+'/messages');}catch{return;}
   if(at===looks&&profileId===server.value)take(result);
  }
- function paintPeers(){
-  server.replaceChildren(...(peers.length?peers.map(peer=>option(peer.profileId,peerLabel(peer))):[option('','No peer server registered')]));
-  server.disabled=!peers.length;node.textContent=chosen()?.name||'—';paintSend();paintAddresses();
- }
+ function paintPeers(){paintPeerChoice(server,peers,peerLabel);node.textContent=chosen()?.name||'—';paintSend();paintAddresses();}
  // Nothing goes out while the listening port is open (the bank owner: "not both working at the same time").
  const listening=()=>listener?.open===true;
  function paintSend(){button.disabled=busy||!peers.length||listening();}

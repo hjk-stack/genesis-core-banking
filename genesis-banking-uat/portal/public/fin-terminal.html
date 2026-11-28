@@ -21,7 +21,7 @@
 <p class="fin-peer-link" role="status" data-fin-peer-link data-state="NOT_CONNECTED">Peer link: NOT CONNECTED</p>
 <div class="fin-peer-listen"><select data-fin-listen-time aria-label="Listening time"><option value="15">15 min</option><option value="60">1 h</option><option value="480">8 h</option></select><button type="button" data-fin-listen disabled>Open Port</button><span class="fin-peer-listen-state" role="status" data-fin-listen-state data-state="CLOSED">Port closed</span></div>
 <div class="fin-peer-out">
-<label><span>Peer Server</span><select data-fin-peer-server disabled><option value="">No peer server registered</option></select></label>
+<label><span>Peer Server</span><select data-fin-peer-server></select></label>
 <div class="fin-peer-whitelist"><span id="fin-peer-whitelist-title">Whitelisted IPs</span><ul class="fin-peer-addresses" aria-labelledby="fin-peer-whitelist-title" data-fin-peer-addresses></ul><span class="fin-with-button"><input class="fin-code" data-fin-peer-address maxlength="45" spellcheck="false" aria-label="Whitelisted IP address" placeholder="IP address" disabled><button type="button" data-fin-peer-address-add aria-label="Add IP address" title="Add" disabled>+</button></span></div>
 <label><span>Outgoing Welcome / Session Message (Transmitted to Peer Server)</span><textarea class="fin-code" data-fin-peer-text maxlength="1000" rows="3" spellcheck="false"></textarea></label>
 <div class="fin-peer-send"><select data-fin-peer-event aria-label="Session message"><option value="INIT">INIT_SESSION / READY</option><option value="HEARTBEAT">HEARTBEAT</option><option value="END">END_SESSION</option></select><button type="button" data-fin-peer-send disabled>Send to Peer Server</button></div>
@@ -48,7 +48,7 @@
 <label><span>Value Date</span><input class="fin-code" data-fin-field="valueDate" maxlength="10" placeholder="YYYY-MM-DD" spellcheck="false"></label>
 <label><span>Charge Bearer</span><select data-fin-field="chargeBearer"><option>SHAR</option><option>DEBT</option><option>CRED</option><option>SLEV</option></select></label>
 <label><span>Clearing System</span><select data-fin-field="settlement"><option value="CLRG/TGT">CLRG · TGT2 / T2</option><option value="INDA">INDA · instructed agent</option><option value="INGA">INGA · instructing agent</option></select></label>
-<label><span>Settlement Account</span><input class="fin-code" data-fin-field="settlementAccount" maxlength="42" spellcheck="false"></label>
+<label><span>Settlement Account</span><input class="fin-code" data-fin-field="settlementAccount" maxlength="42" readonly spellcheck="false"></label>
 </fieldset>
 </div>
 <fieldset class="fin-panel fin-panel-wide"><legend>Accounts</legend>
@@ -59,22 +59,22 @@
 <div class="fin-row">
 <fieldset class="fin-panel"><legend>Debtor Side</legend>
 <label><span>Debtor Name</span><input data-fin-field="debtorName" maxlength="140"></label>
-<label><span>Debtor IBAN</span><input class="fin-code" data-fin-field="debtorIban" maxlength="42" spellcheck="false"></label>
+<label><span>Debtor Account</span><input class="fin-code" data-fin-field="debtorIban" maxlength="42" spellcheck="false"></label>
 <label><span>Debtor Agent BIC</span><input class="fin-code" data-fin-field="debtorAgentBic" maxlength="11" spellcheck="false"></label>
 </fieldset>
 <fieldset class="fin-panel"><legend>Creditor Side</legend>
 <label><span>Creditor Name</span><input data-fin-field="creditorName" maxlength="140"></label>
-<label><span>Creditor IBAN</span><input class="fin-code" data-fin-field="creditorIban" maxlength="42" spellcheck="false"></label>
+<label><span>Creditor Account</span><input class="fin-code" data-fin-field="creditorIban" maxlength="42" spellcheck="false"></label>
 <label><span>Creditor Agent BIC</span><input class="fin-code" data-fin-field="creditorAgentBic" maxlength="11" spellcheck="false"></label>
 </fieldset>
 </div>
 <fieldset class="fin-panel fin-panel-wide"><legend>Intermediary Agent &amp; Ultimate Parties</legend>
 <label><span>Intermediary Agent BIC</span><input class="fin-code" data-fin-field="intermediaryBic" maxlength="11" spellcheck="false"></label>
-<label><span>Intermediary Agent LEI</span><input class="fin-code" data-fin-field="intermediaryLei" maxlength="20" spellcheck="false"></label>
+<label><span>Intermediary Agent Address</span><input data-fin-field="intermediaryAddress" maxlength="140"></label>
 <label><span>Ultimate Debtor Name</span><input data-fin-field="ultimateDebtorName" maxlength="140"></label>
-<label><span>Ultimate Debtor LEI</span><input class="fin-code" data-fin-field="ultimateDebtorLei" maxlength="20" spellcheck="false"></label>
+<label><span>Ultimate Debtor Address</span><input data-fin-field="ultimateDebtorAddress" maxlength="140"></label>
 <label><span>Ultimate Creditor Name</span><input data-fin-field="ultimateCreditorName" maxlength="140"></label>
-<label><span>Ultimate Creditor LEI</span><input class="fin-code" data-fin-field="ultimateCreditorLei" maxlength="20" spellcheck="false"></label>
+<label><span>Ultimate Creditor Address</span><input data-fin-field="ultimateCreditorAddress" maxlength="140"></label>
 </fieldset>
 <div class="fin-row">
 <fieldset class="fin-panel"><legend>Remittance Information</legend>
@@ -82,7 +82,7 @@
 <label><span>Unstructured Remittance</span><input data-fin-field="unstructuredRemittance" maxlength="140"></label>
 </fieldset>
 <fieldset class="fin-panel"><legend>Regulatory Reporting</legend>
-<label><span>Authority Country</span><span class="fin-pair"><input class="fin-code" data-fin-field="regulatoryCountry" maxlength="2" spellcheck="false" aria-label="Authority Country"><input class="fin-code" data-fin-field="regulatoryCode" maxlength="10" spellcheck="false" aria-label="Reporting Code" placeholder="INF"></span></label>
+<label><span>Authority Country</span><span class="fin-pair"><select data-fin-field="regulatoryCountry" aria-label="Authority Country"><option value="">—</option></select><select data-fin-field="regulatoryCode" aria-label="Reporting Code"><option value="">—</option></select></span></label>
 <label><span>Regulatory Details</span><textarea data-fin-field="regulatoryDetails" maxlength="359" rows="3"></textarea></label>
 </fieldset>
 </div>
@@ -104,10 +104,10 @@
 <section class="fin-terminal-screen fin-settle" role="tabpanel" id="fin-screen-ip" aria-labelledby="fin-tab-ip" data-fin-screen="ip" hidden>
 <section class="fin-wire" aria-labelledby="fin-wire-title" data-fin-wire>
 <h2 id="fin-wire-title">Cash Wire (NOSTRO)</h2>
-<label><span>Peer Server</span><select data-fin-wire-peer disabled><option value="">No peer server registered</option></select></label>
+<label><span>Peer Server</span><select data-fin-wire-peer></select></label>
 <label><span>Paying Account</span><select data-fin-wire-account disabled><option value="">No EUR account</option></select></label>
 <label><span>Settlement Amount (EUR)</span><input class="fin-code" data-fin-wire-amount maxlength="16" inputmode="decimal" autocomplete="off" spellcheck="false"></label>
-<label><span>Beneficiary Name &amp; IBAN</span><span class="fin-wire-pair"><input data-fin-wire-name maxlength="140" autocomplete="off" aria-label="Beneficiary Name" placeholder="Name"><input class="fin-code" data-fin-wire-iban maxlength="42" autocomplete="off" spellcheck="false" aria-label="Beneficiary IBAN" placeholder="IBAN"></span></label>
+<label><span>Beneficiary Name &amp; Account</span><span class="fin-wire-pair"><input data-fin-wire-name maxlength="140" autocomplete="off" aria-label="Beneficiary Name" placeholder="Name"><input class="fin-code" data-fin-wire-iban maxlength="42" autocomplete="off" spellcheck="false" aria-label="Beneficiary Account" placeholder="Account"></span></label>
 <div class="fin-wire-pins" data-fin-wire-pins hidden><input class="fin-code" type="password" inputmode="numeric" maxlength="12" autocomplete="off" data-fin-wire-pin="1" aria-label="PIN 1" placeholder="PIN 1"><input class="fin-code" type="password" inputmode="numeric" maxlength="12" autocomplete="off" data-fin-wire-pin="2" aria-label="PIN 2" placeholder="PIN 2"></div>
 <button type="button" data-fin-wire-send disabled>Execute &amp; Dispatch</button>
 <p class="fin-wire-problem" role="alert" data-fin-wire-problem hidden></p>

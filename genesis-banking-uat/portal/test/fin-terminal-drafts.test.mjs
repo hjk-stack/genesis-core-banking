@@ -76,12 +76,17 @@ test('an IBAN written in groups of four is counted without its spaces: the longe
  for(const iban of [longest+'0',grouped+'0'])await assert.rejects(fin.save(admin,{form:form({debtorIban:iban})}),e=>e.code==='INVALID_FIELD'&&e.field==='debtorIban');
 });
 
-test('an unfinished draft is kept, marked as not passing: an empty name, a missing amount, a wrong IBAN check digit',async()=>{
- const iban=exampleForm().debtorIban,wrong=iban.slice(0,-1)+((Number(iban.at(-1))+1)%10);
- for(const overrides of [{debtorName:''},{amount:''},{debtorIban:wrong}]){
+test('an unfinished draft is kept, marked as not passing: an empty name, a missing amount, an amount of zero',async()=>{
+ for(const overrides of [{debtorName:''},{amount:''},{amount:'0.00'}]){
   const saved=await fin.save(admin,{form:form(overrides)});
   assert.equal(saved.schemaValid,false,JSON.stringify(overrides));
   assert.deepEqual((await fin.draft(admin,saved.draftId)).form,normalizeForm({...saved.form}));
+ }
+ // Any account number passes (the bank owner: "Accept all account numbers"): an IBAN whose check digits do not match, or a bank's own.
+ const iban=exampleForm().debtorIban,wrong=iban.slice(0,-1)+((Number(iban.at(-1))+1)%10);
+ for(const debtorIban of [wrong,'0012-345678-90']){
+  const saved=await fin.save(admin,{form:form({debtorIban})});
+  assert.deepEqual([saved.schemaValid,saved.form.debtorIban],[true,debtorIban]);
  }
 });
 

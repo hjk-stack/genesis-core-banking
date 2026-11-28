@@ -5,7 +5,7 @@ import {validateXML} from 'xmllint-wasm';
 import {XMLParser} from 'fast-xml-parser';
 import {fault} from './core.mjs';
 import {sendBankMessage,connectorCredentials} from './payment-transport.mjs';
-import {HEAD,PACS008,newMessageId,readFinMessage,ibanValid} from '../public/fin-message.mjs';
+import {HEAD,PACS008,LIMITS,newMessageId,readFinMessage,normalizeForm} from '../public/fin-message.mjs';
 import {ABIQ_ISSUER} from './avispay-core-accounts.mjs';
 import {ServerDOMParser} from './fin-xml.mjs';
 import {FinTerminal} from './fin-terminal.mjs';
@@ -319,8 +319,9 @@ export class FinPeers{
   finally{client.release?.();}
   return this.messages(actor,profileId);
  }
- // What the operator wrote for a wire: the paying account, the amount in euros, the beneficiary's name and IBAN, and its UETR, made in
- // the terminal (public/fin-wire.mjs) - Execute sent twice is one wire.
+ // What the operator wrote for a wire: the paying account, the amount in euros, the beneficiary's name and account, and its UETR, made
+ // in the terminal (public/fin-wire.mjs) - Execute sent twice is one wire. The account is an IBAN or any other account number, taken
+ // without a further check (the bank owner: "Accept all account numbers").
  #wire(body){
   const uetr=typeof body?.uetr==='string'?body.uetr.toLowerCase():'',bookingAccountId=typeof body?.bookingAccountId==='string'?body.bookingAccountId.toLowerCase():'';
   if(!UETR.test(uetr))fault('INVALID_FIELD','uetr');
@@ -329,8 +330,8 @@ export class FinPeers{
   if(!/^[0-9]{1,13}(\.[0-9]{1,2})?$/.test(amount)||!/[1-9]/.test(amount))fault('FIN_WIRE_AMOUNT','amount');
   const creditorName=typeof body?.creditorName==='string'?body.creditorName.trim():'';
   if(!creditorName||[...creditorName].length>140||/[\x00-\x1f\x7f]/.test(creditorName))fault('FIN_WIRE_BENEFICIARY','creditorName');
-  const creditorIban=typeof body?.creditorIban==='string'?body.creditorIban.replace(/\s+/g,'').toUpperCase():'';
-  if(!ibanValid(creditorIban))fault('FIN_WIRE_IBAN','creditorIban');
+  const creditorIban=normalizeForm({creditorIban:typeof body?.creditorIban==='string'?body.creditorIban:''}).creditorIban;
+  if(!creditorIban||creditorIban.length>LIMITS.creditorIban||/[\x00-\x1f\x7f]/.test(creditorIban))fault('FIN_WIRE_ACCOUNT','creditorIban');
   return {uetr,bookingAccountId,amount,creditorName,creditorIban};
  }
  // Screen B's Cash Wire (NOSTRO), the specification v3's "Execute & Dispatch": AVISPay PLC's account pays a beneficiary at the peer
