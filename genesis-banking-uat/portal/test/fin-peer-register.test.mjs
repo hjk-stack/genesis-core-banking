@@ -2,7 +2,6 @@ import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import tls from 'node:tls';
 import https from 'node:https';
-import {randomUUID} from 'node:crypto';
 import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -11,7 +10,6 @@ import {JSDOM} from 'jsdom';
 import {PGlite} from '@electric-sql/pglite';
 import pg from 'pg';
 import {migrate} from '../src/migrate.mjs';
-import {AccountManagement} from '../src/account-management.mjs';
 import {FinPeers} from '../src/fin-peer.mjs';
 import {PeerVault,peerLogin} from '../src/peer-vault.mjs';
 import {connectorCredentials,sendBankMessage,authenticateMessage,frame} from '../src/payment-transport.mjs';
@@ -22,12 +20,13 @@ import {startFinTerminal} from '../public/fin-terminal.mjs';
 // Requested by the bank owner: "+IP register must be active for registered senders IP by incoming. The register is in a popup with IP
 // and Bank name and login details into the receiver sever. (or for debit into the sender service and first login) the data gets
 // stored in a drop down for reuse", the login details stored only in Azure Key Vault - certificate or user name and password, the
-// bank owner chose "Both". Azure's token service and Key Vault are played here by their REST answers; the peers are real servers on
-// this machine, known by their IP address.
+// bank owner chose "Both" - and the peer's bank by its BIC, without a NOSTRO ("Remove from the Peer register the NOSTRO account as the
+// nostro account is the job of the incoming transfer registration"). Azure's token service and Key Vault are played here by their
+// REST answers; the peers are real servers on this machine, known by their IP address.
 const admin={id:'fin-peer-register-admin',username:'fin-peer-register',admin:true},guest={id:'guest',admin:false};
 const NS='urn:iso:std:iso:20022:tech:xsd:',VAULT='https://gbank-peers-example.vault.azure.net',PEER_BIC='SMPLFRPPXXX',OWN_BIC='AVIPTN64XXX';
 const VAULT_ENV={AVIS_PEER_VAULT:VAULT+'/',IDENTITY_ENDPOINT:'http://identity.example.test/msi/token',IDENTITY_HEADER:'example-identity-header'};
-let pool,db,dir,certs,nostro,plainNostro,noBicNostro,tlsServer,httpsServer,received,secrets,asked,vaultDown,states=new Map(),onLastPage=null;
+let pool,db,dir,certs,tlsServer,httpsServer,received,secrets,asked,vaultDown,states=new Map(),onLastPage=null;
 const refused=(code,field,status)=>error=>error.code===code&&(field===undefined||error.field===field)&&(status===undefined||error.status===status);
 // Azure as the bank app reaches it with its own identity: the token service, then the vault's secrets.
 async function azure(url,init={}){
@@ -89,14 +88,6 @@ before(async()=>{
   res.end(acknowledgement());
  });
  await new Promise(resolve=>tlsServer.listen(0,'127.0.0.1',resolve));await new Promise(resolve=>httpsServer.listen(0,'127.0.0.1',resolve));
- const bank=new AccountManagement(pool,{directory:{env:{}}});
- nostro=await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example NOSTRO',bic:PEER_BIC,accountNumber:'NOSTRO-EXAMPLE-1',currency:'EUR'},randomUUID());
- // A NOSTRO account closed in the register is offered no more.
- plainNostro=await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example closed NOSTRO',bic:'EXMPCHZZXXX',accountNumber:'NOSTRO-EXAMPLE-2',currency:'EUR'},randomUUID());
- await pool.query('UPDATE avis_core_v2.external_cash_accounts SET is_active=false WHERE cash_account_id=$1',[plainNostro.id]);
- // One kept from before without its bank's BIC: the peer's BIC is the NOSTRO bank's, so it is not offered either.
- noBicNostro=await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example NOSTRO without BIC',bic:'EXMPGB2LXXX',accountNumber:'NOSTRO-EXAMPLE-3',currency:'EUR'},randomUUID());
- await pool.query('UPDATE avis_core_v2.external_cash_accounts SET bic_code=NULL WHERE cash_account_id=$1',[noBicNostro.id]);
 });
 after(async()=>{
  await new Promise(resolve=>tlsServer?.close(resolve));if(httpsServer){httpsServer.closeAllConnections();await new Promise(resolve=>httpsServer.close(resolve));}
@@ -108,11 +99,14 @@ const counts=async()=>Object.fromEntries(await Promise.all(['platform_connectors
 
 test('a peer server registered with its certificate login: its login only in Key Vault, its IP address whitelisted, offered for reuse and reached at once',async()=>{
  const peers=new FinPeers(pool,{vault:vault()});asked.length=0;received.length=0;
- const result=await peers.register(admin,{name:'Example Peer Bank',protocol:'IP_TO_IP',address:'127.0.0.1:'+tlsServer.address().port,cashAccountId:nostro.id,login:certificateLogin()});
+ const result=await peers.register(admin,{name:'Example Peer Bank',bic:PEER_BIC,protocol:'IP_TO_IP',address:'127.0.0.1:'+tlsServer.address().port,login:certificateLogin()});
  assert.match(result.profileId,/^FIN_EXAMPLE_PEER_BANK_[0-9A-F]{6}$/);
  const peer=result.peers.find(item=>item.profileId===result.profileId);
  assert.deepEqual(peer,{profileId:result.profileId,name:'Example Peer Bank',protocol:'IP_TO_IP',address:'127.0.0.1:'+tlsServer.address().port,transport:'TLS',
-  localBic:OWN_BIC,peerBic:PEER_BIC,currency:'EUR',addresses:['127.0.0.1']});
+  localBic:OWN_BIC,peerBic:PEER_BIC,currency:null,addresses:['127.0.0.1']});
+ // Its bank by its BIC, no NOSTRO: a transfer settles through the NOSTRO chosen with it, or the bank's in its currency.
+ assert.deepEqual((await pool.query('SELECT cash_account_id,peer_bic FROM avis_core_v2.bank_connector_profiles WHERE profile_id=$1',[result.profileId])).rows[0],
+  {cash_account_id:null,peer_bic:PEER_BIC});
  // The login went to Key Vault with the bank app's own identity - and nowhere else: the database names it only.
  const secret='fin-peer-'+result.profileId.toLowerCase().replaceAll('_','-');
  assert.deepEqual(JSON.parse(secrets.get(secret)),{kind:'certificate',ca:certs.peer.cert.trim(),cert:certs.bank.cert.trim(),key:certs.bank.key.trim()});
@@ -133,27 +127,29 @@ test('a peer server registered with its certificate login: its login only in Key
 test('a peer server over HTTPS with the user name and password its bank gave: sent with them (HTTP Basic), never over IP-to-IP',async()=>{
  const peers=new FinPeers(pool,{vault:vault()});received.length=0;
  const login={kind:'password',user:'example-user',password:'example-first-login',ca:certs.peer.cert};
- const result=await peers.register(admin,{name:'Example API Bank',protocol:'BANK_API',address:'127.0.0.1:'+httpsServer.address().port+'/iso20022/session',cashAccountId:nostro.id,login});
+ // The BIC as written, in small letters and with spaces, is kept as a BIC is written.
+ const result=await peers.register(admin,{name:'Example API Bank',bic:' smpl fr pp xxx ',protocol:'BANK_API',address:'127.0.0.1:'+httpsServer.address().port+'/iso20022/session',login});
  const peer=result.peers.find(item=>item.profileId===result.profileId);
- assert.deepEqual([peer.protocol,peer.transport,peer.addresses],['BANK_API','HTTPS',['127.0.0.1']]);
+ assert.deepEqual([peer.protocol,peer.transport,peer.addresses,peer.peerBic],['BANK_API','HTTPS',['127.0.0.1'],PEER_BIC]);
  const sent=await peers.send(admin,result.profileId,{event:'INIT',text:'HELLO'});
  assert.equal(sent.link.state,'READY');
  // The user name and password went as HTTP Basic authentication, and no signature without a shared secret.
  assert.deepEqual(received.map(item=>[item.peer,item.authorization,item.signature]),[['HTTPS','Basic '+Buffer.from('example-user:example-first-login').toString('base64'),null]]);
  // Over TLS the bank shows its certificate: a user name and password are refused there, and nothing is kept.
  const before=await counts(),stored=secrets.size;
- await assert.rejects(peers.register(admin,{name:'Example Peer Bank',protocol:'IP_TO_IP',address:'127.0.0.1:'+tlsServer.address().port,cashAccountId:nostro.id,login}),refused('FIN_REGISTER_LOGIN','login'));
+ await assert.rejects(peers.register(admin,{name:'Example Peer Bank',bic:PEER_BIC,protocol:'IP_TO_IP',address:'127.0.0.1:'+tlsServer.address().port,login}),refused('FIN_REGISTER_LOGIN','login'));
  assert.deepEqual([await counts(),secrets.size],[before,stored]);
 });
 
-test('nothing is registered or kept with a field wrong, a NOSTRO account not active, or Key Vault out of reach - and only for a bank administrator',async()=>{
+test('nothing is registered or kept with a field wrong, a BIC that is none, or Key Vault out of reach - and only for a bank administrator',async()=>{
  const peers=new FinPeers(pool,{vault:vault()});
- const body=(changes={})=>({name:'Example Peer Bank',protocol:'IP_TO_IP',address:'127.0.0.1:8443',cashAccountId:nostro.id,login:certificateLogin(),...changes});
+ const body=(changes={})=>({name:'Example Peer Bank',bic:PEER_BIC,protocol:'IP_TO_IP',address:'127.0.0.1:8443',login:certificateLogin(),...changes});
  const before=await counts(),stored=secrets.size;
  for(const [changes,code,field] of [[{name:' '},'INVALID_FIELD','name'],[{name:'x'.repeat(101)},'INVALID_FIELD','name'],[{protocol:'SFTP'},'INVALID_FIELD','protocol'],
   [{address:'bank.example.test:8443'},'INVALID_FIELD','address'],[{address:'127.0.0.1'},'INVALID_FIELD','address'],[{address:'127.0.0.1:70000'},'INVALID_FIELD','address'],
   [{address:'127.0.0.1:8443/path'},'INVALID_FIELD','address'],[{address:'999.1.1.1:8443'},'INVALID_FIELD','address'],
-  [{cashAccountId:plainNostro.id},'FIN_REGISTER_NOSTRO','cashAccountId'],[{cashAccountId:noBicNostro.id},'FIN_REGISTER_NOSTRO','cashAccountId'],[{cashAccountId:randomUUID()},'FIN_REGISTER_NOSTRO','cashAccountId'],
+  [{bic:undefined},'FIN_REGISTER_BIC','bic'],[{bic:''},'FIN_REGISTER_BIC','bic'],[{bic:'SMPLFRP'},'FIN_REGISTER_BIC','bic'],[{bic:'SMPLFRPPXX'},'FIN_REGISTER_BIC','bic'],
+  [{bic:'SMPLFRPPXXXX'},'FIN_REGISTER_BIC','bic'],[{bic:'5MPLFRPPXXX'},'FIN_REGISTER_BIC','bic'],[{bic:'SMPL-FRPP'},'FIN_REGISTER_BIC','bic'],[{bic:42},'FIN_REGISTER_BIC','bic'],
   [{login:{...certificateLogin(),ca:'not a certificate'}},'INVALID_FIELD','ca'],[{login:{...certificateLogin(),ca:''}},'INVALID_FIELD','ca'],
   [{login:{...certificateLogin(),key:certs.peer.key}},'INVALID_FIELD','cert'],[{login:{...certificateLogin(),secret:'short'}},'INVALID_FIELD','secret'],
   [{protocol:'BANK_API',login:{kind:'password',user:'example:user',password:'x'}},'INVALID_FIELD','user'],[{protocol:'BANK_API',login:{kind:'password',user:'example-user',password:''}},'INVALID_FIELD','password'],
@@ -170,7 +166,7 @@ test('nothing is registered or kept with a field wrong, a NOSTRO account not act
 
 test('a login in Key Vault is a connector\'s credentials: a certificate or a user name and password, nothing else; a missing one is not configured',async()=>{
  const peers=new FinPeers(pool,{vault:vault()});
- const {profileId}=await peers.register(admin,{name:'Example Secret Bank',protocol:'SWIFT_ISO20022',address:'127.0.0.1:443',cashAccountId:nostro.id,
+ const {profileId}=await peers.register(admin,{name:'Example Secret Bank',bic:PEER_BIC,protocol:'SWIFT_ISO20022',address:'127.0.0.1:443',
   login:{...certificateLogin(),secret:'example-shared-secret-of-32-bytes-at-least'}});
  const reference='KEYVAULT:fin-peer-'+profileId.toLowerCase().replaceAll('_','-');
  assert.equal(connectorCredentials(reference).hmacSecret,'example-shared-secret-of-32-bytes-at-least');
@@ -183,7 +179,7 @@ test('a login in Key Vault is a connector\'s credentials: a certificate or a use
 
 test('a refresh read to its end is what the bank holds: a login deleted, disabled, unreadable or broken in Key Vault goes; a failed refresh or a login written meanwhile changes nothing (review finding)',async()=>{
  const peers=new FinPeers(pool,{vault:vault()}),secretOf=profileId=>'fin-peer-'+profileId.toLowerCase().replaceAll('_','-');
- const register=async name=>secretOf((await peers.register(admin,{name,protocol:'SWIFT_ISO20022',address:'127.0.0.1:443',cashAccountId:nostro.id,login:certificateLogin()})).profileId);
+ const register=async name=>secretOf((await peers.register(admin,{name,bic:PEER_BIC,protocol:'SWIFT_ISO20022',address:'127.0.0.1:443',login:certificateLogin()})).profileId);
  const known=name=>{try{connectorCredentials('KEYVAULT:'+name);return true;}catch{return false;}};
  const kept=await register('Example Kept Bank'),deleted=await register('Example Deleted Bank'),disabled=await register('Example Disabled Bank');
  const forbidden=await register('Example Forbidden Bank'),broken=await register('Example Broken Bank');
@@ -209,13 +205,15 @@ test('over HTTP: a signed-in bank administrator with FinTerminal access register
   const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:admin.username,password:'fixture'})});
   const cookie=login.headers.get('set-cookie').split(';')[0],{csrf}=await login.json();
   const post=(body,headers={})=>fetch(base+'/api/fin-terminal/peers',{method:'POST',headers:{origin:base,cookie,'content-type':'application/json',...headers},body:JSON.stringify(body)});
-  const body={name:'Example Desk Bank',protocol:'IP_TO_IP',address:'127.0.0.2:8443',cashAccountId:nostro.id,login:certificateLogin()};
+  const body={name:'Example Desk Bank',bic:PEER_BIC,protocol:'IP_TO_IP',address:'127.0.0.2:8443',login:certificateLogin()};
   assert.equal((await post(body)).status,403);
   const made=await post(body,{'x-csrf-token':csrf});assert.equal(made.status,200);
   const {profileId,peers}=await made.json();
   assert.deepEqual(peers.find(item=>item.profileId===profileId).addresses,['127.0.0.2']);
   const refusedLogin=await post({...body,login:{kind:'password',user:'example-user',password:'example'}},{'x-csrf-token':csrf});
   assert.equal(refusedLogin.status,422);assert.deepEqual(await refusedLogin.json().then(item=>[item.code,item.message,item.field]),['FIN_REGISTER_LOGIN','IP-to-IP takes the certificate login.','login']);
+  const refusedBic=await post({...body,bic:'SMPLFRPP-X'},{'x-csrf-token':csrf});
+  assert.equal(refusedBic.status,422);assert.deepEqual(await refusedBic.json().then(item=>[item.code,item.message,item.field]),['FIN_REGISTER_BIC','Enter the bank\'s BIC: 8 or 11 letters and digits.','bic']);
  }finally{await new Promise(resolve=>server.close(resolve));}
 });
 
@@ -240,33 +238,38 @@ test('the register\'s popup: "+" beside the Peer Server opens it; registered, th
   const before=known();
   // The popup is a part of its own: the composer's "Register incoming" stays the composer's only.
   assert.deepEqual([...doc.querySelectorAll('[data-fin-register]')].map(item=>item.textContent),['Register incoming']);
-  // The "+" beside the Peer Server, never in an upper corner: it opens the popup, the NOSTRO accounts offered being the active ones.
+  // The "+" beside the Peer Server, never in an upper corner: it opens the popup - the bank's name and BIC, its type, address and
+  // login; no NOSTRO.
   assert.equal($('[data-fin-peer-register-open]').closest('label').querySelector('span').textContent,'Peer Server');
   assert.equal(dialog.hasAttribute('open'),false);$('[data-fin-peer-register-open]').click();assert.equal(dialog.hasAttribute('open'),true);
-  await until(()=>field('cashAccountId').options.length&&field('cashAccountId').options[0].value,'the NOSTRO accounts');
-  assert.deepEqual([...field('cashAccountId').options].map(option=>option.textContent),['Example NOSTRO · SMPLFRPPXXX · NOSTRO-EXAMPLE-1 · EUR']);
+  assert.deepEqual([...dialog.querySelectorAll('[data-fin-peer-register-field]')].map(input=>input.dataset.finPeerRegisterField),
+   ['name','bic','protocol','address','kind','ca','cert','key','secret','user','password']);
+  assert.equal(field('bic').closest('label').querySelector('span').textContent,'Bank BIC');
   assert.deepEqual([...field('protocol').options].map(option=>option.textContent),['IP-to-IP','API','ISO 20022']);
   // The login as the peer bank gave it: its certificate login, or its user name and password.
   assert.deepEqual([...dialog.querySelectorAll('[data-fin-peer-register-login]')].map(part=>part.hidden),[false,true]);
   type('kind','password');assert.deepEqual([...dialog.querySelectorAll('[data-fin-peer-register-login]')].map(part=>part.hidden),[true,false]);
   type('kind','certificate');
   // Refused: the reason in the popup, its field marked, what was written kept for the correction.
-  type('name','Example Popup Bank');type('address','127.0.0.3');type('ca',certs.peer.cert);type('cert',certs.bank.cert);type('key',certs.bank.key);
+  type('name','Example Popup Bank');type('bic','SMPL');type('address','127.0.0.3');type('ca',certs.peer.cert);type('cert',certs.bank.cert);type('key',certs.bank.key);
   dialog.querySelector('[data-fin-peer-register-save]').click();
   await until(()=>!dialog.querySelector('[data-fin-peer-register-problem]').hidden,'the refusal');
-  assert.equal(dialog.querySelector('[data-fin-peer-register-problem]').textContent,'Check this field.');
-  assert.equal(field('address').getAttribute('aria-invalid'),'true');assert.equal(field('name').value,'Example Popup Bank');assert.equal(dialog.hasAttribute('open'),true);
+  assert.equal(dialog.querySelector('[data-fin-peer-register-problem]').textContent,'Enter the bank\'s BIC: 8 or 11 letters and digits.');
+  assert.equal(field('bic').getAttribute('aria-invalid'),'true');
+  type('bic',PEER_BIC);dialog.querySelector('[data-fin-peer-register-save]').click();
+  await until(()=>dialog.querySelector('[data-fin-peer-register-problem]').textContent==='Check this field.','the next refusal');
+  assert.equal(field('address').getAttribute('aria-invalid'),'true');assert.equal(field('bic').hasAttribute('aria-invalid'),false);assert.equal(field('name').value,'Example Popup Bank');assert.equal(dialog.hasAttribute('open'),true);
   // Registered: the popup closes and is emptied, the new server is chosen with its whitelisted IP address, and Screen B offers it.
   type('address','127.0.0.3:8443');dialog.querySelector('[data-fin-peer-register-save]').click();
   await until(()=>!dialog.hasAttribute('open'),'the register');
-  assert.deepEqual(posted.at(-1),{name:'Example Popup Bank',protocol:'IP_TO_IP',address:'127.0.0.3:8443',cashAccountId:nostro.id,
+  assert.deepEqual(posted.at(-1),{name:'Example Popup Bank',bic:PEER_BIC,protocol:'IP_TO_IP',address:'127.0.0.3:8443',
    login:{kind:'certificate',ca:certs.peer.cert,cert:certs.bank.cert,key:certs.bank.key,secret:''}});
   const added=known().find(value=>!before.includes(value));
   assert.match(added,/^FIN_EXAMPLE_POPUP_BANK_[0-9A-F]{6}$/);assert.equal($('[data-fin-peer-server]').value,added);
   assert.equal($('[data-fin-peer-node]').textContent,'Example Popup Bank');
   assert.deepEqual([...doc.querySelectorAll('[data-fin-peer-addresses] li .fin-code')].map(item=>item.textContent),['127.0.0.3']);
   assert.ok([...doc.querySelectorAll('[data-fin-wire-peer] option')].some(option=>option.value===added));
-  assert.ok(['name','address','ca','cert','key','secret','user','password'].every(name=>field(name).value===''));
+  assert.ok(['name','bic','address','ca','cert','key','secret','user','password'].every(name=>field(name).value===''));
   // Opened and left with Cancel, nothing written stays.
   $('[data-fin-peer-register-open]').click();type('password','example-left-behind');dialog.querySelector('[data-fin-peer-register-cancel]').click();
   assert.equal(dialog.hasAttribute('open'),false);assert.equal(field('password').value,'');

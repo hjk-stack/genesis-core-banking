@@ -18,7 +18,7 @@ import {exampleForm} from './helpers/fin-example.mjs';
 // Requested by the bank owner with the FinTerminal ISO 20022 specification, screen 1 "FIN - ISO 20022 Composer": "live two-way
 // XML synchronization", XSD validation, the UETR made and a duplicate refused, drafts. The window talks to the real bank server.
 const admin={id:'fin-composer-admin',username:'fin-composer',admin:true};
-let pool,db,server,base,cookie,commonEur,commonUsd,nostroEur,walletUsdc;
+let pool,db,server,base,cookie,commonEur,commonUsd,nostroEur,nostroUsd,walletUsdc;
 const sent=[];
 before(async()=>{
  if(process.env.TEST_DATABASE_URL){const url=new URL(process.env.TEST_DATABASE_URL);assert.equal(url.pathname,'/avispay_ci');
@@ -32,7 +32,7 @@ before(async()=>{
  const bank=new AccountManagement(pool,{directory:{env:{}}});
  [commonEur,commonUsd]=(await bank.openAccount(admin,{accountType:'COMMON',fullName:'Example Common',currencies:['EUR','USD']},randomUUID())).managedAccounts;
  nostroEur=await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example NOSTRO',bic:'EXMPCHZZXXX',accountNumber:'NOSTRO-EXAMPLE-1',currency:'EUR'},randomUUID());
- await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example Dollar NOSTRO',bic:'EXMPUS33XXX',accountNumber:'NOSTRO-EXAMPLE-2',currency:'USD'},randomUUID());
+ nostroUsd=await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example Dollar NOSTRO',bic:'EXMPUS33XXX',accountNumber:'NOSTRO-EXAMPLE-2',currency:'USD'},randomUUID());
  const holder=(await bank.openCustomer(admin,{fullName:'Example Holder',accountType:'PERSONAL',currencies:['EUR']},randomUUID())).userId;
  walletUsdc=await cryptoLedgerAccount(pool,{userId:holder,currency:'USDC',network:'ETHEREUM'});
  await cryptoLedgerAccount(pool,{userId:holder,currency:'AG',network:'ETHEREUM'});
@@ -80,7 +80,11 @@ test('a new message: its own UETR and message ID, the spec\'s defaults, and its 
   const uetr=page.field('uetr').value;
   assert.match(uetr,/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);assert.equal(page.field('uetr').readOnly,true);
   assert.equal(uetrOf(page.xml.value),uetr);assert.match(page.field('businessMessageId').value,/^FT\d{14}[A-Z0-9]{4}$/);
-  assert.deepEqual(['messageType','priority','currency','chargeBearer','settlement','endToEndId'].map(name=>page.field(name).value),['pacs.008.001.08','HIGH/URGP','EUR','SHAR','CLRG/TGT','NOTPROVIDED']);
+  // Its NOSTRO by default (the bank owner: "the nostro is selected by the currency not by the BIC and default we are using
+  // Tunisia"): here the only one in euros, the message settled through it.
+  await until(()=>page.$('[data-fin-choice="nostroAccountId"]').value===nostroEur.id,'the default NOSTRO');
+  assert.deepEqual(['messageType','priority','currency','chargeBearer','settlement','settlementAccount','endToEndId'].map(name=>page.field(name).value),
+   ['pacs.008.001.08','HIGH/URGP','EUR','SHAR','INDA','NOSTRO-EXAMPLE-1','NOTPROVIDED']);
   assert.equal(page.verdict(),'XSD: not checked');assert.equal(page.state(),'New message');
   // Every field of the form is written in the XML from the start, the form and the XML the same message.
   assert.equal(page.xml.value,buildFinMessage(Object.fromEntries([...page.doc.querySelectorAll('[data-fin-field]')].map(input=>[input.dataset.finField,input.value]))));
@@ -174,16 +178,19 @@ test('addresses instead of LEIs, any account number, and the Authority Country\'
  }finally{page.close();}
 });
 
-test('the settlement account is the chosen NOSTRO\'s only: read-only, written by the NOSTRO account chosen and gone with it',async()=>{
- // The bank owner: "Nostro accounts are registered and must select via the listed NOSTROS and no need any further check".
+test('the settlement account is the chosen NOSTRO\'s only: read-only, written by the NOSTRO account chosen and gone with it; the Receiver BIC is never the NOSTRO\'s',async()=>{
+ // The bank owner: "Nostro accounts are registered and must select via the listed NOSTROS and no need any further check", and "the
+ // nostro is selected by the currency not by the BIC".
  const page=await composer();try{
   const nostro=page.$('[data-fin-choice="nostroAccountId"]'),values=()=>['receiverBic','settlement','settlementAccount'].map(name=>page.field(name).value);
-  await until(()=>nostro.options.length>1,'the accounts');
-  assert.equal(page.field('settlementAccount').readOnly,true);
-  page.fill(exampleForm());page.pick('nostroAccountId',nostroEur.id);
-  assert.deepEqual(values(),['EXMPCHZZXXX','INDA','NOSTRO-EXAMPLE-1']);
+  await until(()=>nostro.value===nostroEur.id,'the default NOSTRO');
+  assert.equal(page.field('settlementAccount').readOnly,true);assert.deepEqual(values(),['','INDA','NOSTRO-EXAMPLE-1']);
+  // Another settlement method written lets the NOSTRO go with its account; chosen again, it writes them, the Receiver BIC as written.
+  page.fill(exampleForm());assert.deepEqual([nostro.value,...values()],['','SMPLFRPPXXX','CLRG/TGT','']);
+  page.pick('nostroAccountId',nostroEur.id);
+  assert.deepEqual(values(),['SMPLFRPPXXX','INDA','NOSTRO-EXAMPLE-1']);
   page.pick('nostroAccountId','');
-  assert.deepEqual(values(),['','INDA','']);assert.doesNotMatch(page.xml.value,/NOSTRO-EXAMPLE-1|<SttlmAcct>/);
+  assert.deepEqual(values(),['SMPLFRPPXXX','INDA','']);assert.doesNotMatch(page.xml.value,/NOSTRO-EXAMPLE-1|<SttlmAcct>/);
   assert.equal(page.state(),'New message · not saved');
   // Written in the XML instead, another settlement account lets the NOSTRO go and goes with it (review finding).
   page.pick('nostroAccountId',nostroEur.id);
@@ -270,23 +277,24 @@ test('Accounts: a Common or Suspense account and a NOSTRO account write the mess
   assert.deepEqual(['debtorName','debtorIban','debtorAgentBic'].map(name=>page.field(name).value),[account.institution,account.iban,account.bic]);
   assert.ok(page.xml.value.includes('<IBAN>'+account.iban+'</IBAN>'));
   page.pick('nostroAccountId',nostroEur.id);
-  assert.deepEqual(['receiverBic','settlement','settlementAccount'].map(name=>page.field(name).value),['EXMPCHZZXXX','INDA','NOSTRO-EXAMPLE-1']);
+  assert.deepEqual(['receiverBic','settlement','settlementAccount'].map(name=>page.field(name).value),['SMPLFRPPXXX','INDA','NOSTRO-EXAMPLE-1']);
   assert.ok(page.xml.value.replace(/\n\s*/g,'').includes('<SttlmInf><SttlmMtd>INDA</SttlmMtd><SttlmAcct><Id><Othr><Id>NOSTRO-EXAMPLE-1</Id></Othr></Id></SttlmAcct></SttlmInf>'));
   page.pick('tokenWalletId',walletUsdc);
   assert.equal(page.state(),'New message · not saved');
   await page.press('[data-fin-save]');assert.equal(page.state(),'Draft saved · revision 1');assert.equal(page.verdict(),'XSD: PASSED');
   const draftId=page.$('[data-fin-drafts]').value;
-  await page.press('[data-fin-new]');assert.deepEqual(chosen(),['','','']);
+  // A new message has the NOSTRO by default only; nothing is written in it, so the draft opened next replaces it as it is.
+  await page.press('[data-fin-new]');assert.deepEqual([...chosen(),page.state()],['',nostroEur.id,'','New message']);
   await page.choose(draftId);assert.deepEqual(chosen(),[commonEur.id,nostroEur.id,walletUsdc]);
   // A field that names a chosen account, written otherwise, lets that account go; the others stay (review finding).
   page.type('debtorAgentBic','EXMPDEFFXXX');assert.deepEqual(chosen(),['',nostroEur.id,walletUsdc]);
   await page.writeXml(page.xml.value.replace('<Id>NOSTRO-EXAMPLE-1</Id>','<Id>NOSTRO-OTHER-9</Id>'));assert.deepEqual(chosen(),['','',walletUsdc]);
   page.pick('bookingAccountId',commonEur.id);page.pick('nostroAccountId',nostroEur.id);assert.deepEqual(chosen(),[commonEur.id,nostroEur.id,walletUsdc]);
-  // Another currency: the accounts chosen in euros are let go with the fields they wrote, the dollar ones are offered; the wallet
-  // stays (review finding).
+  // Another currency: the accounts chosen in euros are let go with the fields they wrote, the dollar ones are offered and the
+  // dollar NOSTRO chosen by default; the wallet stays (review finding).
   page.type('currency','USD');
-  assert.deepEqual(chosen(),['','',walletUsdc]);
-  assert.deepEqual(['debtorName','debtorIban','debtorAgentBic','receiverBic','settlementAccount','settlement'].map(name=>page.field(name).value),['','','','','','INDA']);
+  assert.deepEqual(chosen(),['',nostroUsd.id,walletUsdc]);
+  assert.deepEqual(['debtorName','debtorIban','debtorAgentBic','receiverBic','settlementAccount','settlement'].map(name=>page.field(name).value),['','','','SMPLFRPPXXX','NOSTRO-EXAMPLE-2','INDA']);
   assert.doesNotMatch(page.xml.value,/NOSTRO-EXAMPLE-1|EXMPCHZZXXX/);
   assert.deepEqual(texts('bookingAccountId'),['—','Example Common · '+commonUsd.abiqIban+' · USD']);
   assert.deepEqual(texts('nostroAccountId'),['—','Example Dollar NOSTRO · NOSTRO-EXAMPLE-2 · USD']);
@@ -294,7 +302,7 @@ test('Accounts: a Common or Suspense account and a NOSTRO account write the mess
 });
 
 // The bank owner: "We now register an incoming transfer so AVISPay PLC is the receiver".
-test('Incoming: the chosen account is the creditor and the NOSTRO\'s bank the sender (INGA); registered, the transfer is kept as it is',async()=>{
+test('Incoming: the chosen account is the creditor; the NOSTRO is where the bank books it and writes nothing in the message; registered, the transfer is kept as it is',async()=>{
  const page=await composer();try{
   const select=name=>page.$('[data-fin-choice="'+name+'"]'),turn=page.$('[data-fin-direction]'),register=page.$('[data-fin-register]'),save=page.$('[data-fin-save]');
   const values=names=>names.map(name=>page.field(name).value);
@@ -303,10 +311,11 @@ test('Incoming: the chosen account is the creditor and the NOSTRO\'s bank the se
   page.fill(exampleForm());page.pick('bookingAccountId',commonEur.id);page.pick('nostroAccountId',nostroEur.id);
   const account=(await new FinTerminal(pool).accounts(admin)).bookingAccounts.find(item=>item.accountId===commonEur.id);
   // Turned to incoming, the chosen accounts go to the other side; what they wrote as the debtor's is emptied for the sender's own.
+  // The NOSTRO stays chosen and lets go of the settlement account it wrote: the sender and its settlement are the sender's.
   turn.value='INCOMING';turn.dispatchEvent(new page.dom.window.Event('change',{bubbles:true}));
   assert.equal(register.hidden,false);
   assert.deepEqual(values(['creditorName','creditorIban','creditorAgentBic','receiverBic']),[account.institution,account.iban,account.bic,account.bic]);
-  assert.deepEqual(values(['senderBic','settlement','settlementAccount']),['EXMPCHZZXXX','INGA','NOSTRO-EXAMPLE-1']);
+  assert.deepEqual(values(['senderBic','settlement','settlementAccount']),['EXMPDEFFXXX','INDA','']);
   assert.deepEqual(values(['debtorName','debtorIban','debtorAgentBic']),['','','']);
   assert.deepEqual([select('bookingAccountId').value,select('nostroAccountId').value],[commonEur.id,nostroEur.id]);
   page.fill({debtorName:'Example Debtor GmbH',debtorIban:exampleForm().debtorIban,debtorAgentBic:'EXMPDEFFXXX'});
@@ -320,7 +329,7 @@ test('Incoming: the chosen account is the creditor and the NOSTRO\'s bank the se
   assert.deepEqual([turn.value,turn.disabled,register.hidden,save.hidden],['OUTGOING',false,true,false]);
   await page.choose(draftId);
   assert.deepEqual([turn.value,page.state(),register.hidden,save.hidden],['INCOMING','Incoming booked · ACSC',true,true]);
-  assert.deepEqual(values(['creditorIban','senderBic','settlement']),[account.iban,'EXMPCHZZXXX','INGA']);
+  assert.deepEqual(values(['creditorIban','senderBic','settlement']),[account.iban,'EXMPDEFFXXX','INDA']);
  }finally{page.close();}
 });
 
@@ -331,4 +340,32 @@ test('the bank serves the composer\'s programs from its own address under its ow
   assert.equal(await response.text(),await readFile(new URL('../public/'+file,import.meta.url),'utf8'));
  }
  assert.equal(normalizeForm(exampleForm()).debtorIban,exampleForm().debtorIban);
+});
+
+// The bank owner: "the nostro is selected by the currency not by the BIC and default we are using Tunisia".
+test('the NOSTRO by default: the currency\'s only one, or of several the one at the Tunisian bank - none of several elsewhere; one let go by hand stays let go',async()=>{
+ const bank=new AccountManagement(pool,{directory:{env:{}}});
+ const nostro=(institutionName,bic,accountNumber,currency)=>bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName,bic,accountNumber,currency},randomUUID());
+ await nostro('Example Pound NOSTRO','EXMPGB2LXXX','NOSTRO-EXAMPLE-GBP-1','GBP');const tunis=await nostro('Example Tunis NOSTRO','EXMPTNTTXXX','NOSTRO-EXAMPLE-GBP-2','GBP');
+ await nostro('Example Franc NOSTRO','EXMPCHZZXXX','NOSTRO-EXAMPLE-CHF-1','CHF');await nostro('Example Other Franc NOSTRO','EXMPDEFFXXX','NOSTRO-EXAMPLE-CHF-2','CHF');
+ const long=await nostro('Example Krone NOSTRO','EXMPNOKKXXX','NOSTRO-'+'0'.repeat(40),'NOK');
+ const page=await composer();try{
+  const select=page.$('[data-fin-choice="nostroAccountId"]'),values=()=>[select.value,...['receiverBic','settlement','settlementAccount'].map(name=>page.field(name).value)];
+  await until(()=>select.value===nostroEur.id,'the default NOSTRO');
+  // In pounds, of two the one at the Tunisian bank: the message settled through it, the Receiver BIC as written.
+  page.type('receiverBic','SMPLFRPPXXX');page.type('currency','GBP');
+  assert.deepEqual(values(),[tunis.id,'SMPLFRPPXXX','INDA','NOSTRO-EXAMPLE-GBP-2']);
+  // In Swiss francs, two and none in Tunisia: none is chosen.
+  page.type('currency','CHF');assert.deepEqual(values(),['','SMPLFRPPXXX','INDA','']);
+  // Back in euros, the one there; let go by hand, it stays let go.
+  page.type('currency','EUR');assert.equal(select.value,nostroEur.id);
+  page.pick('nostroAccountId','');page.type('amount','10.00');assert.equal(select.value,'');
+  // A NOSTRO whose number a message cannot name as its settlement account: offered for an incoming transfer only, and let go when the
+  // message turns outgoing (review finding).
+  const turn=page.$('[data-fin-direction]'),offered=()=>[...select.options].map(option=>option.value).filter(Boolean);
+  page.type('currency','NOK');assert.deepEqual([select.value,offered()],['',[]]);
+  turn.value='INCOMING';turn.dispatchEvent(new page.dom.window.Event('change',{bubbles:true}));assert.deepEqual(offered(),[long.id]);
+  page.pick('nostroAccountId',long.id);assert.equal(page.field('settlementAccount').value,'');
+  turn.value='OUTGOING';turn.dispatchEvent(new page.dom.window.Event('change',{bubbles:true}));assert.deepEqual([select.value,offered()],['',[]]);
+ }finally{page.close();}
 });

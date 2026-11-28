@@ -19,12 +19,12 @@ export function listenerCredentials(env=process.env){
  try{tls.createSecureContext({cert:credentials.cert,key:credentials.key});}catch{fault('LISTENER_CONFIGURATION',null,503);}
  return credentials;
 }
-// The whitelisted addresses of the bank's connectors to peer banks (src/fin-peer.mjs, PEER_PROTOCOLS), enabled and on an active
-// clearing account.
+// The whitelisted addresses of the bank's connectors to peer banks (src/fin-peer.mjs, PEERS), enabled - one registered with a
+// NOSTRO before, while that NOSTRO is active.
 const PEER_ADDRESSES=`SELECT host(w.address) AS address,p.profile_id,c.credential_reference
  FROM avis_core_v2.fin_terminal_peer_addresses w JOIN avis_core_v2.bank_connector_profiles p USING(profile_id)
- JOIN avis_core_v2.platform_connectors c ON c.connector_code=p.profile_id JOIN avis_core_v2.external_cash_accounts a USING(cash_account_id)
- WHERE p.protocol IN ('IP_TO_IP','BANK_API','SWIFT_ISO20022') AND c.is_enabled AND a.is_active`;
+ JOIN avis_core_v2.platform_connectors c ON c.connector_code=p.profile_id LEFT JOIN avis_core_v2.external_cash_accounts a ON a.cash_account_id=p.cash_account_id
+ WHERE p.protocol IN ('IP_TO_IP','BANK_API','SWIFT_ISO20022') AND c.is_enabled AND (p.cash_account_id IS NULL OR a.is_active)`;
 const WINDOW='SELECT now() AS now,l.open_until,l.changed_at FROM (SELECT 1) one LEFT JOIN avis_core_v2.fin_terminal_listener l ON l.listener_id=1';
 // A session message on its way out (finished within the transport's 15 seconds; one older never finished).
 const SENDING=`SELECT 1 FROM avis_core_v2.fin_terminal_peer_messages WHERE direction='OUT' AND answer_to IS NULL AND status='SENDING'

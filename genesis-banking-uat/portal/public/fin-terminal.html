@@ -34,9 +34,9 @@
 <form class="fin-peer-register-form" data-fin-peer-register-form autocomplete="off" novalidate>
 <h2 id="fin-peer-register-title">Register Peer Server</h2>
 <label><span>Bank Name</span><input data-fin-peer-register-field="name" maxlength="100"></label>
+<label><span>Bank BIC</span><input class="fin-code" data-fin-peer-register-field="bic" maxlength="11" autocomplete="off" spellcheck="false"></label>
 <label><span>Type</span><select data-fin-peer-register-field="protocol"><option value="IP_TO_IP">IP-to-IP</option><option value="BANK_API">API</option><option value="SWIFT_ISO20022">ISO 20022</option></select></label>
 <label><span>IP : Port</span><input class="fin-code" data-fin-peer-register-field="address" maxlength="260" spellcheck="false" placeholder="IP:port"></label>
-<label><span>NOSTRO Account</span><select data-fin-peer-register-field="cashAccountId"></select></label>
 <label><span>Login</span><select data-fin-peer-register-field="kind"><option value="certificate">Certificate</option><option value="password">User Name &amp; Password</option></select></label>
 <label><span>Peer Certificate (CA)</span><textarea class="fin-code" data-fin-peer-register-field="ca" rows="3" spellcheck="false"></textarea></label>
 <div class="fin-peer-register-login" data-fin-peer-register-login="certificate">

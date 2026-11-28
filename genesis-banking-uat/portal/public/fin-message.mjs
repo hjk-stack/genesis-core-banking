@@ -176,3 +176,11 @@ export function fieldProblems(input){
  if(f.amount&&!(/^[0-9]{1,13}(\.[0-9]{1,5})?$/.test(f.amount)&&/[1-9]/.test(f.amount)))problems.push({field:'amount',message:'The amount is a number above zero with at most five decimals.'});
  return problems;
 }
+// The NOSTRO account a message settles through by default - by its currency, not by a BIC (the bank owner: "the nostro is selected
+// by the currency not by the BIC and default we are using Tunisia"): of the active NOSTRO accounts in that currency the only one,
+// or of several the one at the Tunisian bank (its BIC's country, TN); none otherwise.
+export function defaultNostro(accounts,currency){
+ const held=accounts.filter(account=>account.active&&account.currency===currency);
+ const chosen=held.length===1?held:held.filter(account=>/^[A-Z]{4}TN/.test(String(account.bic||'').toUpperCase()));
+ return chosen.length===1?chosen[0]:null;
+}

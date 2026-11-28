@@ -424,7 +424,7 @@ test('Transact: the composer\'s outgoing message goes to the Peer Server chosen 
  assert.deepEqual([fromDraft.draft.draftId,fromDraft.draft.registered,fromDraft.wire.status],[saved.draftId,true,'SETTLED']);
 });
 
-test('Transact sends and books nothing for an incoming message, one that does not pass Validate XML, without its accounts, through another NOSTRO, between other banks, while the port listens, without the PINs under 4-Eyes, or for anyone but an administrator',async()=>{
+test('Transact sends and books nothing for an incoming message, one that does not pass Validate XML, without its accounts, between other banks, while the port listens, without the PINs under 4-Eyes, or for anyone but an administrator',async()=>{
  received.length=0;reply=xml=>status(xml,'ACSC');
  const start=await money(),wires=await count('fin_terminal_wires'),drafts=await count('fin_terminal_drafts');
  for(const [order,code,field] of [[{...composed(),direction:'INCOMING'},'FIN_TRANSACT_DIRECTION','direction'],[composed({amount:'0.00'}),'FIN_TRANSACT_INVALID','xml'],
@@ -434,8 +434,6 @@ test('Transact sends and books nothing for an incoming message, one that does no
   [composed({senderBic:'SMPLDEFFXXX'}),'FIN_TRANSACT_SENDER','senderBic'],[composed({receiverBic:'SMPLDEFFXXX'}),'FIN_TRANSACT_RECEIVER','receiverBic'],
   [composed({amount:'1000000000.00'}),'INSUFFICIENT_FUNDS','amount']])
   await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',order),error=>error.code===code&&error.field===field,code);
- // The NOSTRO chosen is not the one registered for the Peer Server.
- await assert.rejects(peers.transact(admin,owner,'EXAMPLE_USD_PEER',composed()),refused('FIN_TRANSACT_NOSTRO',409));
  await assert.rejects(peers.transact(admin,owner,'EXAMPLE_UNKNOWN',composed()),refused('CONNECTOR_NOT_FOUND',404));
  await assert.rejects(peers.transact(guest,owner,'EXAMPLE_TLS_PEER',composed()),refused('FORBIDDEN',403));
  await assert.rejects(peers.transact(admin,{...owner,finTerminal:false},'EXAMPLE_TLS_PEER',composed()),refused('FIN_TERMINAL_ACCESS',403));
@@ -451,6 +449,33 @@ test('Transact sends and books nothing for an incoming message, one that does no
  assert.deepEqual([await count('fin_terminal_wires'),await count('fin_terminal_drafts'),received.length],[wires,drafts,0]);
 });
 
+// The bank owner: "Remove from the Peer register the NOSTRO account as the nostro account is the job of the incoming transfer
+// registration. Outgoing transfers from common accounts are delivered by ISO20022 direct via API connector service and settled by
+// our NOSTRO": the Peer Server is its bank's, by its BIC; the NOSTRO a transfer or a Debit settles through is the one chosen with it.
+test('Transact and Debit settle on the NOSTRO chosen with the message, through a Peer Server registered without a NOSTRO or with another one; Screen B\'s Cash Wire still takes only a peer with its EUR NOSTRO',async()=>{
+ // A Peer Server as the FinTerminal's register keeps it now: its bank by its BIC, no NOSTRO.
+ await pool.query(`INSERT INTO avis_core_v2.platform_connectors(connector_code,display_name,is_enabled,endpoint_url,credential_reference)
+  VALUES('EXAMPLE_BIC_PEER','EXAMPLE-BIC',true,$1,$2)`,['tls://localhost:'+tlsServer.address().port,CREDENTIAL]);
+ await pool.query("INSERT INTO avis_core_v2.bank_connector_profiles(profile_id,cash_account_id,protocol,local_bic,peer_bic,operations) VALUES('EXAMPLE_BIC_PEER',NULL,'IP_TO_IP',$1,$2,'{}')",[BANK,PEER]);
+ assert.deepEqual((await peers.list(admin)).filter(peer=>['EXAMPLE_BIC_PEER','EXAMPLE_USD_PEER'].includes(peer.profileId)).map(peer=>[peer.profileId,peer.peerBic,peer.currency]),
+  [['EXAMPLE_BIC_PEER',PEER,null],['EXAMPLE_USD_PEER',PEER,'USD']]);
+ const start=await money();
+ for(const profileId of ['EXAMPLE_BIC_PEER','EXAMPLE_USD_PEER']){
+  received.length=0;reply=xml=>status(xml,'ACSC');
+  const paid=await peers.transact(admin,owner,profileId,composed({amount:'20.00'})),wired=await kept(paid.wire.uetr);
+  assert.deepEqual([paid.wire.status,received.length,wired.profile_id,wired.nostro_cash_account_id],['SETTLED',1,profileId,nostro.id]);
+  received.length=0;reply=xml=>debitStatus(xml,'ACSC');
+  const collected=await peers.transact(admin,owner,profileId,debited({amount:'5.00'})),row=await debit(collected.debit.uetr);
+  assert.deepEqual([collected.debit.status,received.length,row.profile_id,row.nostro_cash_account_id],['SETTLED',1,profileId,nostro.id]);
+ }
+ // Paid twice and collected twice, on the EUR NOSTRO chosen.
+ assert.deepEqual(moved(start,await money()),{account:'-30.00',nostro:'-30.00',held:'0.00',suspense:'0.00'});
+ // Screen B's Cash Wire is left as it is: a peer without its EUR NOSTRO is refused there, nothing sent.
+ received.length=0;
+ await assert.rejects(peers.dispatch(admin,owner,'EXAMPLE_BIC_PEER',wire({amount:'10.00'})),refused('FIN_WIRE_NOSTRO',409));
+ assert.equal(received.length,0);assert.deepEqual(moved(start,await money()),{account:'-30.00',nostro:'-30.00',held:'0.00',suspense:'0.00'});
+});
+
 test('Screen 1\'s Transact: closed until the message passes Validate XML with its accounts and a Peer Server; pressed, it shows it is pressed, goes once, and the message is closed',async()=>{
  const {server,base,cookie}=await signIn(()=>owner),html=await readFile(new URL('../public/fin-terminal.html',import.meta.url),'utf8');
  const dom=new JSDOM(html,{url:base+'/fin-terminal'}),doc=dom.window.document,asked=[];let held=null;
@@ -464,8 +489,12 @@ test('Screen 1\'s Transact: closed until the message passes Validate XML with it
   const offered=(selector,value)=>[...doc.querySelectorAll(selector+' option')].some(option=>option.value===value);
   await until(()=>offered('[data-fin-choice="nostroAccountId"]',nostro.id)&&offered('[data-fin-peer-server]','EXAMPLE_TLS_PEER'),'the accounts and the peer servers');
   assert.deepEqual([transact.hidden,transact.disabled,transact.textContent],[false,true,'Transact']);
-  pick('[data-fin-peer-server]','EXAMPLE_TLS_PEER');pick('[data-fin-choice="bookingAccountId"]',account.accountId);pick('[data-fin-choice="nostroAccountId"]',nostro.id);
-  for(const [name,value] of Object.entries({senderBic:BANK,amount:'40.00',creditorName:'Example Creditor SARL',creditorIban:BENEFICIARY,creditorAgentBic:PEER}))type(name,value);
+  // The NOSTRO in euros is chosen by default (the bank owner: "the nostro is selected by the currency not by the BIC and default we
+  // are using Tunisia"); the Sender and the Receiver BIC are the Peer Server's banks, written as they are.
+  await until(()=>$('[data-fin-choice="nostroAccountId"]').value===nostro.id,'the default NOSTRO');
+  pick('[data-fin-peer-server]','EXAMPLE_TLS_PEER');pick('[data-fin-choice="bookingAccountId"]',account.accountId);
+  assert.deepEqual([field('receiverBic').value,field('settlement').value,field('settlementAccount').value],['','INDA','NOSTRO-EXAMPLE-1']);
+  for(const [name,value] of Object.entries({senderBic:BANK,receiverBic:PEER,amount:'40.00',creditorName:'Example Creditor SARL',creditorIban:BENEFICIARY,creditorAgentBic:PEER}))type(name,value);
   assert.equal(transact.disabled,true,'not before Validate XML');
   $('[data-fin-validate]').click();await until(()=>$('[data-fin-xsd]').textContent==='XSD: PASSED'&&!transact.disabled,'the check');
   // Changed after its check: closed again until it is checked again.
@@ -621,7 +650,6 @@ test('a Debit sends and books nothing without its debtor, their account or the m
   // An amount that converts to no token is refused before it leaves.
   [debited({amount:'0.00004'},{tokenWalletId:wallet}),'FIN_CONVERT_QUANTITY','amount']])
   await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',order),error=>error.code===code&&error.field===field,code);
- await assert.rejects(peers.transact(admin,owner,'EXAMPLE_USD_PEER',debited()),refused('FIN_TRANSACT_NOSTRO',409));
  await assert.rejects(peers.transact(guest,owner,'EXAMPLE_TLS_PEER',debited()),refused('FORBIDDEN',403));
  await pool.query(`INSERT INTO avis_core_v2.fin_terminal_listener(listener_id,open_until,changed_by) VALUES(1,now()+interval '15 minutes','fin-debit-test')
   ON CONFLICT(listener_id) DO UPDATE SET open_until=EXCLUDED.open_until`);
@@ -668,7 +696,7 @@ test('a settled Debit is booked against what it was sent with: its wallet hidden
  }
 });
 
-test('Screen 1\'s Debit: the message type and the mandate go with it, the accounts write the creditor\'s side and the debtor\'s bank; Transact sends it once and the message is closed',async()=>{
+test('Screen 1\'s Debit: the message type and the mandate go with it, the accounts write the creditor\'s side and the clearing through the NOSTRO; Transact sends it once and the message is closed',async()=>{
  const {server,base,cookie}=await signIn(()=>owner),html=await readFile(new URL('../public/fin-terminal.html',import.meta.url),'utf8');
  const dom=new JSDOM(html,{url:base+'/fin-terminal'}),doc=dom.window.document,asked=[];
  try{
@@ -686,8 +714,8 @@ test('Screen 1\'s Debit: the message type and the mandate go with it, the accoun
   pick('[data-fin-direction]','DEBIT');
   assert.deepEqual([field('messageType').value,mandate.hidden,transact.hidden,transact.disabled],['pacs.003.001.08',false,false,true]);
   assert.deepEqual(['debtorName','debtorIban','debtorAgentBic','creditorName','creditorIban','creditorAgentBic','receiverBic','settlement','settlementAccount'].map(name=>field(name).value),
-   ['','','',account.institution,account.iban,account.bic,PEER,'INDA','NOSTRO-EXAMPLE-1']);
-  for(const [name,value] of Object.entries({senderBic:BANK,amount:'25.00',debtorName:'Example Debtor GmbH',debtorIban:DEBTOR,debtorAgentBic:PEER,
+   ['','','',account.institution,account.iban,account.bic,'','INDA','NOSTRO-EXAMPLE-1']);
+  for(const [name,value] of Object.entries({senderBic:BANK,receiverBic:PEER,amount:'25.00',debtorName:'Example Debtor GmbH',debtorIban:DEBTOR,debtorAgentBic:PEER,
    mandateId:'MANDATE-EXAMPLE-0002',mandateSignatureDate:'2026-10-02'}))type(name,value);
   assert.match($('[data-fin-xml]').value,/<FIToFICstmrDrctDbt>[\s\S]*<MndtId>MANDATE-EXAMPLE-0002<\/MndtId>\s*<DtOfSgntr>2026-10-02<\/DtOfSgntr>/);
   $('[data-fin-validate]').click();await until(()=>$('[data-fin-xsd]').textContent==='XSD: PASSED'&&!transact.disabled,'the check');

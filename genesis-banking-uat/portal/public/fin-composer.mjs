@@ -1,4 +1,4 @@
-import {FIELDS,PACS008,PACS003,COUNTRIES,REPORTING_CODES,blankForm,buildFinMessage,readFinMessage,normalizeForm,newUetr} from './fin-message.mjs';
+import {FIELDS,PACS008,PACS003,COUNTRIES,REPORTING_CODES,blankForm,buildFinMessage,readFinMessage,normalizeForm,newUetr,defaultNostro} from './fin-message.mjs';
 
 // Screen 1 of the FinTerminal (fin-terminal.mjs), the "FIN - ISO 20022 Composer" of the bank owner's specification: the form
 // and its XML kept in step both ways (fin-message.mjs), the XML checked against the official schemas on the server
@@ -78,10 +78,13 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  const named=(code,name)=>name&&name!==code?code+' · '+name:code;
  for(const [field,items] of [['regulatoryCountry',COUNTRIES.map(code=>[code,regions?.of(code)])],['regulatoryCode',REPORTING_CODES]])
   $('[data-fin-field="'+field+'"]')?.replaceChildren(option('','—'),...items.map(([code,name])=>option(code,named(code,name))));
+ // The NOSTRO accounts a message can go with: incoming, any - it is where the bank books what arrived; outgoing and for a Debit,
+ // one whose number the message can name as its settlement account (review finding).
+ const usable=()=>accounts.nostroAccounts.filter(account=>direction==='INCOMING'||account.settles!==false);
  function paintChoices(){
   const currency=normalizeForm(form).currency,lists={
    bookingAccountId:accounts.bookingAccounts.filter(account=>account.currency===currency).map(account=>[account.accountId,[account.label,account.iban,account.currency].join(' · ')]),
-   nostroAccountId:accounts.nostroAccounts.filter(account=>account.currency===currency).map(account=>[account.accountId,[account.institution,account.account,account.currency].join(' · ')+(account.active?'':' · inactive'),account.active]),
+   nostroAccountId:usable().filter(account=>account.currency===currency).map(account=>[account.accountId,[account.institution,account.account,account.currency].join(' · ')+(account.active?'':' · inactive'),account.active]),
    tokenWalletId:accounts.tokenWallets.map(wallet=>[wallet.accountId,[wallet.holder,wallet.currency,wallet.network].join(' · ')])};
   for(const select of choices){
    const name=select.dataset.finChoice,items=lists[name];
@@ -91,26 +94,26 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   }
  }
  // A chosen account writes the message's fields it stands for. Outgoing, the Common or Suspense account is the debtor's account
- // at the bank and the NOSTRO account is the receiver's bank and the account the transfer settles through there (INDA, SttlmAcct).
+ // at the bank and the NOSTRO account the account the transfer settles through (INDA, SttlmAcct). The NOSTRO never writes a bank's
+ // BIC (the bank owner: "the nostro is selected by the currency not by the BIC"): the sender and the receiver are the Peer
+ // Server's banks, as Transact checks.
  // Incoming, the Common or Suspense account is the creditor's, AVISPay PLC's, and its bank the receiver; the NOSTRO account is
- // the sender's bank, where the money arrives (INGA, SttlmAcct). A Debit, the Common or Suspense account is the creditor's; the
- // NOSTRO account is the receiver's bank - the debtor's - and the account the money is cleared through there (INDA, SttlmAcct).
+ // where the bank books what arrived, and writes nothing: the message stays as its sender wrote it. A Debit, the Common or
+ // Suspense account is the creditor's; the NOSTRO account is the account the money is cleared through (INDA, SttlmAcct).
  const fills={
   bookingAccountId:id=>{const account=accounts.bookingAccounts.find(item=>item.accountId===id);return account&&(direction==='OUTGOING'
    ?{debtorName:account.institution,debtorIban:account.iban,debtorAgentBic:account.bic}
    :{creditorName:account.institution,creditorIban:account.iban,creditorAgentBic:account.bic,...(direction==='INCOMING'?{receiverBic:account.bic}:{})});},
-  nostroAccountId:id=>{const account=accounts.nostroAccounts.find(item=>item.accountId===id);return account&&(direction==='INCOMING'
-   ?{...(account.bic?{senderBic:account.bic}:{}),settlement:'INGA',settlementAccount:account.account}
-   :{...(account.bic?{receiverBic:account.bic}:{}),settlement:'INDA',settlementAccount:account.account});},
+  nostroAccountId:id=>{const account=accounts.nostroAccounts.find(item=>item.accountId===id);return account&&(direction==='INCOMING'?{}:{settlement:'INDA',settlementAccount:account.account});},
   tokenWalletId:()=>null};
  // The fields that name a chosen account: written otherwise, the message no longer goes with that account (review finding).
- const binds={OUTGOING:{bookingAccountId:['debtorIban','debtorAgentBic'],nostroAccountId:['receiverBic','settlement','settlementAccount']},
-  INCOMING:{bookingAccountId:['creditorIban','creditorAgentBic','receiverBic'],nostroAccountId:['senderBic','settlement','settlementAccount']},
-  DEBIT:{bookingAccountId:['creditorIban','creditorAgentBic'],nostroAccountId:['receiverBic','settlement','settlementAccount']}};
+ const binds={OUTGOING:{bookingAccountId:['debtorIban','debtorAgentBic'],nostroAccountId:['settlement','settlementAccount']},
+  INCOMING:{bookingAccountId:['creditorIban','creditorAgentBic','receiverBic'],nostroAccountId:[]},
+  DEBIT:{bookingAccountId:['creditorIban','creditorAgentBic'],nostroAccountId:['settlement','settlementAccount']}};
  // The fields a chosen account wrote that are let go with it: all but the settlement method.
- const wrote={OUTGOING:{bookingAccountId:['debtorName','debtorIban','debtorAgentBic'],nostroAccountId:['receiverBic','settlementAccount']},
-  INCOMING:{bookingAccountId:['creditorName','creditorIban','creditorAgentBic','receiverBic'],nostroAccountId:['senderBic','settlementAccount']},
-  DEBIT:{bookingAccountId:['creditorName','creditorIban','creditorAgentBic'],nostroAccountId:['receiverBic','settlementAccount']}};
+ const wrote={OUTGOING:{bookingAccountId:['debtorName','debtorIban','debtorAgentBic'],nostroAccountId:['settlementAccount']},
+  INCOMING:{bookingAccountId:['creditorName','creditorIban','creditorAgentBic','receiverBic'],nostroAccountId:[]},
+  DEBIT:{bookingAccountId:['creditorName','creditorIban','creditorAgentBic'],nostroAccountId:['settlementAccount']}};
  const bound=(name,now=normalizeForm(form))=>{
   const fill=selection[name]&&fills[name](selection[name]);if(!fill)return null;
   const filled=normalizeForm({...form,...fill});
@@ -122,6 +125,15 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   if(fill)for(const field of wrote[direction][name])if(field in fill&&normalizeForm({...form,...fill})[field]===now[field])clear[field]='';
   return clear;
  };
+ // The NOSTRO chosen by default (the bank owner: "the nostro is selected by the currency not by the BIC and default we are using
+ // Tunisia"): for a new message, and for another currency, the currency's only NOSTRO account or, of several, the one at the
+ // Tunisian bank (defaultNostro) - as if chosen by hand. One chosen or let go by hand stays so.
+ function preselect(){
+  const account=registered||selection.nostroAccountId?null:defaultNostro(usable(),normalizeForm(form).currency);
+  if(!account)return false;
+  selection={...selection,nostroAccountId:account.accountId};form={...form,...fills.nostroAccountId(account.accountId)};
+  return true;
+ }
  // The settlement account is written by the NOSTRO account chosen only (the bank owner: "Nostro accounts are registered and must
  // select via the listed NOSTROS"): none chosen, what the former one wrote that still says so goes with it.
  for(const select of choices)select.addEventListener('change',()=>{
@@ -138,10 +150,11 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   let clear={};const now=normalizeForm(form),was=JSON.stringify(selection),moved=now.currency!==normalizeForm(before).currency;
   if(moved)for(const name of ['bookingAccountId','nostroAccountId']){clear={...clear,...unwritten(name,now)};selection={...selection,[name]:''};}
   for(const name of Object.keys(binds[direction]))if(bound(name,now)===false)selection={...selection,[name]:''};
-  // The settlement account is the chosen NOSTRO account's only (the bank owner: "must select via the listed NOSTROS"): one the XML
-  // writes without it goes (review finding).
-  if(!selection.nostroAccountId&&now.settlementAccount)clear={...clear,settlementAccount:''};
+  // Outgoing and for a Debit, the settlement account is the chosen NOSTRO account's only (the bank owner: "must select via the
+  // listed NOSTROS"): one the XML writes without it goes (review finding). Incoming, it is the sender's.
+  if(direction!=='INCOMING'&&!selection.nostroAccountId&&now.settlementAccount)clear={...clear,settlementAccount:''};
   if(Object.keys(clear).length){form={...form,...clear};paint();write();}
+  if(moved&&preselect()){paint();write();}
   if(moved||JSON.stringify(selection)!==was)paintChoices();
  }
  // Turned to another direction, the chosen accounts go to the other side: what they wrote on the side they leave is emptied
@@ -153,6 +166,9 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   const now=normalizeForm(form);let clear={messageType:next==='DEBIT'?PACS003:PACS008,...(direction==='DEBIT'?{mandateId:'',mandateSignatureDate:''}:{})};
   for(const name of ['bookingAccountId','nostroAccountId']){if(bound(name,now)===false)selection={...selection,[name]:''};else clear={...clear,...unwritten(name,now)};}
   direction=next;
+  // A NOSTRO the message cannot name goes when it is no longer incoming (review finding).
+  if(selection.nostroAccountId&&accounts.nostroAccounts.some(account=>account.accountId===selection.nostroAccountId)&&
+   !usable().some(account=>account.accountId===selection.nostroAccountId))selection={...selection,nostroAccountId:''};
   for(const name of ['bookingAccountId','nostroAccountId'])if(selection[name])clear={...clear,...fills[name](selection[name])};
   form={...form,...clear};broken=null;paint();paintChoices();write();paintDirection();changed();
  }
@@ -252,7 +268,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  const chosen=kept=>Object.fromEntries(CHOICES.map(name=>[name,typeof kept?.[name]==='string'?kept[name]:'']));
  function start(){
   form=blankForm(new Date());selection=noChoice();draft=null;dirty=false;broken=null;refused=null;direction='OUTGOING';registered=false;converted=null;
-  passed=-1;transacted=null;paint();paintChoices();write();show('unchecked','XSD: not checked');paintState();paintDirection();
+  passed=-1;transacted=null;preselect();paint();paintChoices();write();show('unchecked','XSD: not checked');paintState();paintDirection();
  }
  async function open(draftId){
   const {draft:loaded}=await request('GET','/api/fin-terminal/drafts/'+encodeURIComponent(draftId));
@@ -263,6 +279,8 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  async function listAccounts(){
   let listed;try{listed=(await request('GET','/api/fin-terminal/accounts'))?.accounts;}catch{return;}
   accounts={bookingAccounts:[],nostroAccounts:[],tokenWallets:[],...Object.fromEntries(Object.entries(listed||{}).filter(([,rows])=>Array.isArray(rows)))};
+  // A new message nothing is written in yet takes the default NOSTRO now; one already written stays as it is written.
+  if(!draft&&!dirty&&preselect()){paint();write();}
   paintChoices();
  }
  // Another message replaces this one only once this one is kept: it is saved as a draft first - a registered incoming transfer

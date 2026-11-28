@@ -85,6 +85,26 @@ test('an incoming draft is saved first and registered from it, at the revision i
  assert.deepEqual([after.nostro-before.nostro,after.account-before.account],[99050n,99050n]);
 });
 
+// The bank owner: "the nostro is selected by the currency not by the BIC": incoming, the NOSTRO is where the bank books what
+// arrived, whichever bank sent it and however it says it was settled.
+test('the NOSTRO chosen books an incoming transfer whatever the message says of its sender and its settlement',async()=>{
+ const selection={bookingAccountId:suspense.id,nostroAccountId:nostro.id},before=await balances();
+ for(const written of [incoming({senderBic:'SMPLFRPPXXX'}),incoming({settlement:'INDA',settlementAccount:''}),incoming({settlementAccount:'PEER-ACCOUNT-7'})]){
+  const registered=await fin.register(admin,{form:written,selection});
+  assert.deepEqual([registered.registered,registered.selection.nostroAccountId,registered.xml],[true,nostro.id,buildFinMessage(normalizeForm(written))]);
+ }
+ const after=await balances();
+ assert.deepEqual([after.nostro-before.nostro,after.account-before.account],[375000000n,375000000n]);
+ // A NOSTRO whose number is longer than a message's settlement account books an incoming transfer too (review finding); an outgoing
+ // message cannot settle through it.
+ const long=await new AccountManagement(pool,{directory:{env:{}}}).registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example Long NOSTRO',
+  bic:'EXMPNL2AXXX',accountNumber:'NOSTRO-'+'0'.repeat(40),currency:'EUR'},randomUUID());
+ try{
+  assert.equal((await fin.register(admin,{form:incoming(),selection:{...selection,nostroAccountId:long.id}})).selection.nostroAccountId,long.id);
+  await assert.rejects(fin.save(admin,{form:{...incoming(),settlement:'INDA'},selection:{nostroAccountId:long.id}}),refused('FIN_NOSTRO_ACCOUNT','nostroAccountId'));
+ }finally{await pool.query('UPDATE avis_core_v2.external_cash_accounts SET is_active=false WHERE cash_account_id=$1',[long.id]);}
+});
+
 test('nothing is booked or kept for an incoming transfer that does not name its accounts as chosen or does not pass its check',async()=>{
  const selection={bookingAccountId:suspense.id,nostroAccountId:nostro.id},before=await registrations();
  for(const [body,code,field] of [
@@ -96,9 +116,6 @@ test('nothing is booked or kept for an incoming transfer that does not name its 
   [{form:incoming({creditorAgentBic:'SMPLFRPPXXX'}),selection},'FIN_CREDITOR_MISMATCH','bookingAccountId'],
   // AVISPay PLC's bank is the message's receiver too (review finding).
   [{form:incoming({receiverBic:'SMPLFRPPXXX'}),selection},'FIN_CREDITOR_MISMATCH','bookingAccountId'],
-  [{form:incoming({settlement:'INDA'}),selection},'FIN_NOSTRO_SENDER_MISMATCH','nostroAccountId'],
-  [{form:incoming({senderBic:'SMPLFRPPXXX'}),selection},'FIN_NOSTRO_SENDER_MISMATCH','nostroAccountId'],
-  [{form:incoming({settlementAccount:'NOSTRO-OTHER-9'}),selection},'FIN_NOSTRO_SENDER_MISMATCH','nostroAccountId'],
   [{form:incoming({amount:''}),selection},'FIN_INCOMING_INVALID','xml'],
   [{form:incoming({amount:'0.00'}),selection},'FIN_INCOMING_INVALID','xml'],
   [{form:incoming(),selection,draftId:randomUUID(),revision:1},'FIN_DRAFT_NOT_FOUND','draftId']])
@@ -125,7 +142,8 @@ test('over HTTP: a signed-in bank administrator with the session\'s CSRF token r
   const again=await post({draftId:draft.draftId,revision:draft.revision,form:draft.form,selection});
   assert.equal(again.status,409);assert.deepEqual((({code,field,message})=>({code,field,message}))(await again.json()),
    {code:'FIN_DRAFT_REGISTERED',field:'draftId',message:'This incoming transfer is registered and is not changed any more.'});
-  const outgoing=await post({form:incoming({settlement:'INDA'}),selection});
-  assert.equal(outgoing.status,409);assert.equal((await outgoing.json()).message,'The sender, INGA and the settlement account are not those of the chosen NOSTRO account.');
+  const elsewhere=await post({form:incoming({creditorAgentBic:'SMPLFRPPXXX'}),selection});
+  assert.equal(elsewhere.status,409);
+  assert.equal((await elsewhere.json()).message,'The creditor\'s account and BIC and the receiver are not those of the chosen Common or Suspense account.');
  }finally{await new Promise(resolve=>server.close(resolve))}
 });

@@ -148,9 +148,10 @@ test('the accounts to choose: the Common and Suspense accounts, the NOSTRO regis
  assert.match(booking[commonEur.id].bic,/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/);assert.ok(booking[commonEur.id].institution);
  assert.equal(booking[sender.accountId],undefined,'a customer account is not booked against here');
  const nostros=Object.fromEntries(listed.nostroAccounts.map(account=>[account.accountId,account]));
- assert.deepEqual(nostros[nostro.id],{accountId:nostro.id,institution:'Example NOSTRO',bic:'EXMPDEFFXXX',account:'NOSTRO-EXAMPLE-1',accountName:'',currency:'EUR',active:true});
+ assert.deepEqual(nostros[nostro.id],{accountId:nostro.id,institution:'Example NOSTRO',bic:'EXMPDEFFXXX',account:'NOSTRO-EXAMPLE-1',accountName:'',currency:'EUR',active:true,settles:true});
  assert.equal(nostros[nostroUsd.id].currency,'USD');assert.equal(nostros[closed.id].active,false);
- assert.equal(nostros[longNumber.id],undefined,'a number longer than the settlement account holds is not offered');
+ // A number longer than the settlement account holds is offered for an incoming transfer only: nothing of it is written in the message.
+ assert.equal(nostros[longNumber.id].settles,false);
  const offered=listed.tokenWallets.map(wallet=>wallet.accountId);
  assert.deepEqual(listed.tokenWallets.find(wallet=>wallet.accountId===wallets.usdc),{accountId:wallets.usdc,holder:'Example Sender',currency:'USDC',network:'ETHEREUM',name:'USDC'});
  for(const excluded of [wallets.ag,wallets.agi,wallets.custody,commonEur.id])assert.ok(!offered.includes(excluded),excluded);
@@ -158,12 +159,12 @@ test('the accounts to choose: the Common and Suspense accounts, the NOSTRO regis
  for(const actor of [guest,{id:admin.id+':customer:'+holder,admin:false,customerUserId:String(holder)}])await assert.rejects(fin.accounts(actor),refused('FORBIDDEN'));
 });
 
-// A message as the terminal writes it for chosen accounts: the debtor's account, the receiver, INDA and the settlement account.
+// A message as the terminal writes it for chosen accounts: the debtor's account, INDA and the settlement account.
 async function written(selection,overrides={}){
  const listed=await fin.accounts(admin),booking=listed.bookingAccounts.find(account=>account.accountId===selection.bookingAccountId),
   nostroAccount=listed.nostroAccounts.find(account=>account.accountId===selection.nostroAccountId);
  return form({...(booking?{debtorName:booking.institution,debtorIban:booking.iban,debtorAgentBic:booking.bic}:{}),
-  ...(nostroAccount?{receiverBic:nostroAccount.bic,settlement:'INDA',settlementAccount:nostroAccount.account}:{}),...overrides});
+  ...(nostroAccount?{settlement:'INDA',settlementAccount:nostroAccount.account}:{}),...overrides});
 }
 
 test('a draft keeps its chosen accounts; each must be one the terminal offers, in the message\'s currency',async()=>{
@@ -184,10 +185,12 @@ test('a draft keeps its chosen accounts; each must be one the terminal offers, i
  // A message that names other accounts than the ones chosen is refused (review finding).
  for(const [choice,overrides,code] of [
   [{bookingAccountId:commonEur.id},{debtorIban:exampleForm().debtorIban},'FIN_BOOKING_MISMATCH'],[{bookingAccountId:commonEur.id},{debtorAgentBic:'EXMPDEFFXXX'},'FIN_BOOKING_MISMATCH'],
-  [{nostroAccountId:nostro.id},{settlement:'CLRG/TGT'},'FIN_NOSTRO_MISMATCH'],[{nostroAccountId:nostro.id},{settlementAccount:'NOSTRO-OTHER-9'},'FIN_NOSTRO_MISMATCH'],
-  [{nostroAccountId:nostro.id},{receiverBic:'SMPLFRPPXXX'},'FIN_NOSTRO_MISMATCH']])
+  [{nostroAccountId:nostro.id},{settlement:'CLRG/TGT'},'FIN_NOSTRO_MISMATCH'],[{nostroAccountId:nostro.id},{settlementAccount:'NOSTRO-OTHER-9'},'FIN_NOSTRO_MISMATCH']])
   await assert.rejects(fin.save(admin,{form:await written(choice,overrides),selection:choice}),e=>e.code===code&&e.status===409&&e.field===Object.keys(choice)[0],code+' '+JSON.stringify(overrides));
  assert.equal(await count(),before);
+ // The NOSTRO is never a bank's BIC (the bank owner: "the nostro is selected by the currency not by the BIC"): the receiver is any bank.
+ for(const receiverBic of ['SMPLFRPPXXX','EXMPDEFFXXX'])
+  assert.equal((await fin.save(admin,{form:await written({nostroAccountId:nostro.id},{receiverBic}),selection:{nostroAccountId:nostro.id}})).selection.nostroAccountId,nostro.id);
  // In dollars, the dollar accounts are the ones to choose.
  const dollars={bookingAccountId:commonUsd.id,nostroAccountId:nostroUsd.id};
  assert.deepEqual((await fin.save(admin,{form:await written(dollars,{currency:'USD'}),selection:{...dollars,bookingAccountId:commonUsd.id.toUpperCase()}})).selection,

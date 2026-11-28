@@ -6,7 +6,7 @@ import {SovereignCore,fault,money,decimal} from './core.mjs';
 import {RECEIVING_OWNERS} from './checkout-ip-settlement.mjs';
 import {cryptoLedgerAccount} from './crypto/rolling-ledger.mjs';
 import {MetaMaskPricing} from './metamask-pricing.mjs';
-import {FIELDS,LIMITS,HEAD,PACS008,PACS003,blankForm,buildFinMessage,normalizeForm,fieldProblems} from '../public/fin-message.mjs';
+import {FIELDS,LIMITS,HEAD,PACS008,PACS003,blankForm,buildFinMessage,normalizeForm,fieldProblems,defaultNostro} from '../public/fin-message.mjs';
 
 // The FinTerminal's composer on the server: requested by the bank owner with the FinTerminal ISO 20022 specification,
 // screen 1 "FIN - ISO 20022 Composer". A message is checked against the official schemas (schemas/head.001.001.02.xsd from
@@ -84,9 +84,11 @@ const settlementNumber=value=>normalizeForm({settlementAccount:String(value??'')
 const fitsSettlement=row=>{const number=settlementNumber(row.iban_or_account_no);return number.length>0&&number.length<=LIMITS.settlementAccount;};
 const CHOICES={bookingAccountId:'booking_account_id',nostroAccountId:'nostro_cash_account_id',tokenWalletId:'token_wallet_account_id'};
 // The bank owner: "We now register an incoming transfer so AVISPay PLC is the receiver". An outgoing message names the chosen
-// Common or Suspense account as the debtor's and the NOSTRO as the receiver (INDA); an incoming one names that account as the
-// creditor's and the NOSTRO, where the money arrives, as the sender (INGA). A Debit (the bank owner: "There is missing a function:
-// Debit") names that account as the creditor's, and the NOSTRO at the debtor's bank as the receiver (INDA).
+// Common or Suspense account as the debtor's and settles through the NOSTRO (INDA, its account); an incoming one names that
+// account as the creditor's, and the NOSTRO is where the bank books it. A Debit (the bank owner: "There is missing a function:
+// Debit") names that account as the creditor's, and is cleared through the NOSTRO (INDA, its account). The NOSTRO goes by the
+// currency, not by a BIC (the bank owner: "the nostro is selected by the currency not by the BIC"): the sender and the receiver
+// are the banks of the message.
 const DIRECTIONS=['OUTGOING','INCOMING','DEBIT'];
 // Why a peer's credit transfer is not booked, as its status answer says it (pacs.002 RJCT): the ISO 20022 status reason code and
 // the bank's words for it.
@@ -94,8 +96,7 @@ const REJECTED={
  FIN_INCOMING_INVALID:{reason:'NARR',text:'The transfer does not pass as the FinTerminal writes it: its fields or its amount.'},
  FIN_BOOKING_ACCOUNT:{reason:'AC03',text:'The creditor\'s account is not an AVISPay PLC account in this currency.'},
  FIN_CREDITOR_MISMATCH:{reason:'AC03',text:'The creditor\'s agent and the receiver are not the bank of the creditor\'s account.'},
- FIN_NOSTRO_ACCOUNT:{reason:'NARR',text:'The bank holds no active NOSTRO account at this peer in this currency.'},
- FIN_NOSTRO_SENDER_MISMATCH:{reason:'NARR',text:'Not settled INGA on the bank\'s NOSTRO account at this peer, sent by this peer.'},
+ FIN_NOSTRO_ACCOUNT:{reason:'NARR',text:'The bank holds no active NOSTRO account in this currency.'},
  FIN_UETR_DUPLICATE:{reason:'DUPL',text:'This UETR names another payment already.'},
  FIN_CONVERT_RATE:{reason:'NARR',text:'No live rate for converting into the account\'s wallet now.'},
  FIN_CONVERT_QUANTITY:{reason:'NARR',text:'The amount converts to no token at four decimals.'},
@@ -187,10 +188,10 @@ export class FinTerminal{
   return input;
  }
  // A chosen account is one of the lists the terminal offers, in the message's currency where it holds money in one, and the
- // message says it (review finding): outgoing, the debtor's account and BIC are the Common or Suspense account's, the receiver,
- // INDA and the settlement account the NOSTRO account's; incoming, the creditor's account and BIC, the sender, INGA and the
- // settlement account. The NOSTRO's number is used as the register keeps it, without a further check (the bank owner: "Nostro
- // accounts are registered and must select via the listed NOSTROS and no need any further check").
+ // message says it (review finding): outgoing, the debtor's account and BIC are the Common or Suspense account's, INDA and the
+ // settlement account the NOSTRO account's; incoming, the creditor's account and BIC. The NOSTRO's number is used as the register
+ // keeps it, without a further check (the bank owner: "Nostro accounts are registered and must select via the listed NOSTROS and
+ // no need any further check"), and never its BIC: the bank owner, "the nostro is selected by the currency not by the BIC".
  async #checkSelection(db,selection,form,direction='OUTGOING'){
   const incoming=direction==='INCOMING',debit=direction==='DEBIT';
   if(selection.bookingAccountId){
@@ -204,9 +205,10 @@ export class FinTerminal{
   }
   if(selection.nostroAccountId){
    const row=(await db.query(NOSTRO+' WHERE cash_account_id=$1 AND currency_code=$2 AND is_active',[selection.nostroAccountId,form.currency])).rows[0];
-   if(!row||!fitsSettlement(row))fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
-   if(form.settlement!==(incoming?'INGA':'INDA')||form.settlementAccount!==settlementNumber(row.iban_or_account_no)||
-    (row.bic_code&&form[incoming?'senderBic':'receiverBic']!==row.bic_code.toUpperCase()))fault(incoming?'FIN_NOSTRO_SENDER_MISMATCH':'FIN_NOSTRO_MISMATCH','nostroAccountId',409);
+   // Incoming, the NOSTRO is where the bank books what arrived: the message stays as the sender wrote it, and the NOSTRO's number
+   // need not fit in it (review finding).
+   if(!row||!incoming&&!fitsSettlement(row))fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
+   if(!incoming&&(form.settlement!=='INDA'||form.settlementAccount!==settlementNumber(row.iban_or_account_no)))fault('FIN_NOSTRO_MISMATCH','nostroAccountId',409);
   }
   if(selection.tokenWalletId&&!(await db.query(WALLETS+' AND l.account_id=$1',[selection.tokenWalletId])).rows.length)fault('FIN_TOKEN_WALLET','tokenWalletId',409);
  }
@@ -218,8 +220,10 @@ export class FinTerminal{
   return {
    bookingAccounts:booking.map(row=>({accountId:row.account_id,type:row.owner_type==='COMMON_POOL'?'COMMON':'SUSPENSE',label:row.label,
     currency:row.currency_code,iban:row.abiq_iban,bic:row.abiq_bic,institution:row.institution_name})),
-   nostroAccounts:nostro.filter(fitsSettlement).map(row=>({accountId:row.cash_account_id,institution:row.institution_name,bic:row.bic_code||'',
-    account:row.iban_or_account_no,accountName:row.account_name||'',currency:row.currency_code,active:row.is_active===true})),
+   // Every NOSTRO, and whether a message can name it as its settlement account (settles): an outgoing message or a Debit settles
+   // through one it can name; an incoming transfer is booked on any, nothing of it written in the message (review finding).
+   nostroAccounts:nostro.map(row=>({accountId:row.cash_account_id,institution:row.institution_name,bic:row.bic_code||'',
+    account:row.iban_or_account_no,accountName:row.account_name||'',currency:row.currency_code,active:row.is_active===true,settles:fitsSettlement(row)})),
    tokenWallets:wallets.map(row=>({accountId:row.account_id,holder:row.full_name,currency:row.currency_code,network:row.network,name:row.name||row.currency_code}))
   };
  }
@@ -529,7 +533,8 @@ export class FinTerminal{
    settled?null:wire.reserve_journal_id);
  }
  // Under MANUAL INTERVENTION a peer's transfer is checked as one registered and held for the operator: kept as an incoming draft
- // on AVISPay PLC's account and the NOSTRO it names, nothing booked; the operator registers it in the composer.
+ // on AVISPay PLC's account and the bank's NOSTRO in its currency where there is one, nothing booked; the operator registers it in
+ // the composer.
  async #hold(client,actor,{form,xml,selection}){
   if(await this.#uetrTaken(client,form.uetr,null))fault('FIN_UETR_DUPLICATE','uetr',409);
   await this.#checkSelection(client,selection,form,'INCOMING');
@@ -537,45 +542,57 @@ export class FinTerminal{
   await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_INCOMING_HELD',row.draft_id]);
   return row;
  }
- // A transfer taken before is answered as it was - booked or converted, or held - when every field that makes the payment is the same, from the
- // same peer's NOSTRO; otherwise its UETR names another payment (review finding: not only the amount, currency and creditor).
- async #replay(client,peer,form){
-  const before=(await client.query(`SELECT d.form,d.direction,d.nostro_cash_account_id,d.registered_journal_id,c.asset,c.quantity::text AS quantity,c.tx_hash AS hash
+ // The NOSTRO a peer's transfer is booked on: the bank's in the transfer's currency - the bank owner: "the nostro is selected by
+ // the currency not by the BIC and default we are using Tunisia", and "attention could be received many other currencies" - its
+ // only one there, or of several the one at the Tunisian bank (defaultNostro). None: the transfer waits for Register incoming,
+ // where the operator chooses it.
+ async #currencyNostro(db,form){
+  const rows=(await db.query(NOSTRO+' WHERE currency_code=$1 AND is_active ORDER BY cash_account_id',[form.currency])).rows;
+  return defaultNostro(rows.map(row=>({accountId:row.cash_account_id,bic:row.bic_code,currency:row.currency_code,active:row.is_active})),form.currency)?.accountId??null;
+ }
+ // A transfer taken before is answered as it was - booked or converted, or held - when every field that makes the payment is the
+ // same; otherwise its UETR names another payment (review finding: not only the amount, currency and creditor). The NOSTRO it was
+ // booked on is the bank's choice, not the message's.
+ async #replay(client,form){
+  const before=(await client.query(`SELECT d.form,d.direction,d.registered_journal_id,c.asset,c.quantity::text AS quantity,c.tx_hash AS hash
    FROM avis_core_v2.fin_terminal_drafts d LEFT JOIN avis_core_v2.fin_terminal_conversions c ON c.draft_id=d.draft_id WHERE d.uetr=$1`,[form.uetr])).rows[0];
   if(!before)return null;
-  if(before.direction!=='INCOMING'||before.nostro_cash_account_id!==peer.cash_account_id||PAYMENT_FIELDS.some(field=>(before.form[field]??'')!==form[field]))
+  if(before.direction!=='INCOMING'||PAYMENT_FIELDS.some(field=>(before.form[field]??'')!==form[field]))
    return {status:'RJCT',...REJECTED.FIN_UETR_DUPLICATE};
   return before.registered_journal_id?booked(form,before.asset?before:null):HELD;
  }
  // A peer bank's credit transfer taken on the listening port (src/fin-peer.mjs), the FinTerminal specification v3's
  // receive_ip2ip_pacs008 - "Auto-parses incoming credits, validates XSD, and returns pacs.002 (ACSC)" while ROBOTIC STP is active:
- // booked at once as one registered by hand, on the bank's NOSTRO at that peer (its connector's clearing account) and on AVISPay
- // PLC's account its creditor's IBAN names, in the transaction that keeps the message and the bank's answer - or, the account
- // routed into a wallet (quoteIncoming), converted into that wallet instead: "AUTO_CRYPTO". Under MANUAL INTERVENTION it is held
- // for the operator, ACTC (review finding: the switch decides). One the bank cannot book is answered RJCT with the reason, nothing
- // kept; the same transfer again is answered as before.
+ // booked at once as one registered by hand, on the bank's NOSTRO in its currency (#currencyNostro) and on AVISPay PLC's account
+ // its creditor's IBAN names, in the transaction that keeps the message and the bank's answer - or, the account routed into a
+ // wallet (quoteIncoming), converted into that wallet instead: "AUTO_CRYPTO". Under MANUAL INTERVENTION, or with no NOSTRO of the
+ // bank for it, it is held for the operator, ACTC (review finding: the switch decides; the bank owner: "the nostro account is the
+ // job of the incoming transfer registration"). One the bank cannot book is answered RJCT with the reason, nothing kept; the same
+ // transfer again is answered as before.
  async receiveIncoming(client,peer,input,quote=null){
   let form;try{form=this.#form(input);}catch{return {status:'RJCT',...REJECTED.FIN_INCOMING_INVALID};}
   // One delivery of a transfer at a time: the same transfer delivered twice at once is answered the second time as the first was
   // (review finding).
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended('avis_core_v2:fin-incoming:'||$1,0))",[form.uetr]);
-  const before=await this.#replay(client,peer,form);if(before)return before;
+  const before=await this.#replay(client,form);if(before)return before;
   const xml=buildFinMessage(form);
   if(fieldProblems(form).length||!(await validateFinMessage(xml)).valid)return {status:'RJCT',...REJECTED.FIN_INCOMING_INVALID};
   const account=(await client.query(BOOKING+' AND b.abiq_iban=$2 AND a.currency_code=$3 ORDER BY a.account_id LIMIT 1',[RECEIVING_OWNERS,form.creditorIban,form.currency])).rows[0];
   if(!account)return {status:'RJCT',...REJECTED.FIN_BOOKING_ACCOUNT};
+  const nostro=await this.#currencyNostro(client,form);
   // The mode and the account's route as they are now, held until the transfer is taken: a quote read before the transaction for
   // another route - or none - is read again (review finding).
   const robotic=(await client.query('SELECT robotic_stp FROM avis_core_v2.fin_terminal_mode WHERE mode_id=1 FOR SHARE')).rows[0]?.robotic_stp===true;
-  const route=robotic?(await client.query('SELECT token_wallet_account_id FROM avis_core_v2.fin_terminal_crypto_routes WHERE booking_account_id=$1 FOR SHARE',
+  const automatic=robotic&&nostro!==null;
+  const route=automatic?(await client.query('SELECT token_wallet_account_id FROM avis_core_v2.fin_terminal_crypto_routes WHERE booking_account_id=$1 FOR SHARE',
    [account.account_id])).rows[0]?.token_wallet_account_id??null:null;
-  if(robotic&&route!==(quote?.wallet?.account_id??quote?.walletId??null))return {stale:true,status:'RJCT',...REJECTED.FIN_CONVERT_ROUTE};
-  if(robotic&&quote?.failed)return {status:'RJCT',...REJECTED[quote.failed]};
+  if(automatic&&route!==(quote?.wallet?.account_id??quote?.walletId??null))return {stale:true,status:'RJCT',...REJECTED.FIN_CONVERT_ROUTE};
+  if(automatic&&quote?.failed)return {status:'RJCT',...REJECTED[quote.failed]};
   await client.query('SAVEPOINT fin_incoming');
   try{
-   const actor={id:'listener:'+peer.profile_id},wallet=robotic?quote?.wallet??null:null;
-   const selection={bookingAccountId:account.account_id,nostroAccountId:peer.cash_account_id,tokenWalletId:wallet?.account_id??null};
-   if(!robotic){await this.#hold(client,actor,{form,xml,selection});await client.query('RELEASE SAVEPOINT fin_incoming');return HELD;}
+   const actor={id:'listener:'+peer.profile_id},wallet=automatic?quote?.wallet??null:null;
+   const selection={bookingAccountId:account.account_id,nostroAccountId:nostro,tokenWalletId:wallet?.account_id??null};
+   if(!automatic){await this.#hold(client,actor,{form,xml,selection});await client.query('RELEASE SAVEPOINT fin_incoming');return HELD;}
    const converted=wallet?await this.#convert(client,actor,{form,xml,selection,wallet,quote,mode:'ROBOTIC'}):(await this.#book(client,actor,{form,xml,selection}),null);
    await client.query('RELEASE SAVEPOINT fin_incoming');
    return booked(form,converted);

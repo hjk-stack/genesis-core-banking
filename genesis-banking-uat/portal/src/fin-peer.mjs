@@ -186,17 +186,18 @@ export async function underConnectorLock(pool,work){
  finally{client.release?.();}
 }
 
-// The bank's connectors to peer banks (Administration, "Add bank connector"), enabled and on an active clearing account - every type
-// that form registers. The bank owner: "Peer server is only our form or connection IP-IP, API, ISO20022".
-const PEERS=`SELECT p.profile_id,p.protocol,c.display_name,c.endpoint_url,c.credential_reference,p.local_bic,p.peer_bic,cash_account_id,a.currency_code
+// The bank's connectors to peer banks (Administration, "Add bank connector", and the FinTerminal's register), enabled - every type
+// that form registers. The bank owner: "Peer server is only our form or connection IP-IP, API, ISO20022". A peer server registered
+// in the FinTerminal has no NOSTRO of its own (the bank owner: "Remove from the Peer register the NOSTRO account"); one registered
+// with a NOSTRO before is offered while that NOSTRO is active.
+const PEERS=`SELECT p.profile_id,p.protocol,c.display_name,c.endpoint_url,c.credential_reference,p.local_bic,p.peer_bic,p.cash_account_id,a.currency_code
  FROM avis_core_v2.bank_connector_profiles p JOIN avis_core_v2.platform_connectors c ON c.connector_code=p.profile_id
- JOIN avis_core_v2.external_cash_accounts a USING(cash_account_id)
- WHERE p.protocol IN ('IP_TO_IP','BANK_API','SWIFT_ISO20022') AND c.is_enabled AND a.is_active`;
+ LEFT JOIN avis_core_v2.external_cash_accounts a ON a.cash_account_id=p.cash_account_id
+ WHERE p.protocol IN ('IP_TO_IP','BANK_API','SWIFT_ISO20022') AND c.is_enabled AND (p.cash_account_id IS NULL OR a.is_active)`;
 const PROFILE=/^[A-Z0-9_]{1,35}$/;
-// A peer server registered in the FinTerminal: one of the three types, on an active NOSTRO whose bank has a BIC.
+// A peer server registered in the FinTerminal: one of the three types, its bank named by its BIC.
 const REGISTER_PROTOCOLS=['IP_TO_IP','BANK_API','SWIFT_ISO20022'];
-const NOSTRO_OF=`SELECT cash_account_id,upper(bic_code) AS bic FROM avis_core_v2.external_cash_accounts
- WHERE cash_account_id=$1 AND is_active AND upper(bic_code) ~ '^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$'`;
+const BIC=/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/;
 // The X.509 certificates of a PEM bundle that read as certificates.
 const certificateBlocks=bundle=>(String(bundle||'').match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g)||[])
  .filter(item=>{try{new X509Certificate(item);return true;}catch{return false;}});
@@ -300,17 +301,19 @@ export class FinPeers{
  }
  // A peer server registered in the FinTerminal's popup. The bank owner: "+IP register must be active for registered senders IP by
  // incoming. The register is in a popup with IP and Bank name and login details into the receiver sever. (or for debit into the
- // sender service and first login) the data gets stored in a drop down for reuse". Its bank, its type, its address and the NOSTRO
- // it settles on (its bank's BIC is the peer's) become a connector, its IP address is whitelisted for the listening port, and its
- // login goes to Azure Key Vault only (src/peer-vault.mjs) - first, so that nothing is registered without it.
+ // sender service and first login) the data gets stored in a drop down for reuse". Its bank by its BIC, its type and its address
+ // become a connector, its IP address is whitelisted for the listening port, and its login goes to Azure Key Vault only
+ // (src/peer-vault.mjs) - first, so that nothing is registered without it. No NOSTRO: the bank owner, "the nostro account is the
+ // job of the incoming transfer registration" - a transfer settles through the NOSTRO chosen with it; one that arrives is booked on
+ // the bank's NOSTRO in its currency.
  async register(actor,body){
   this.#administrator(actor);
   const name=typeof body?.name==='string'?body.name.trim():'';
   if(!name||[...name].length>100||/[\x00-\x1f\x7f]/.test(name))fault('INVALID_FIELD','name');
+  const bic=typeof body?.bic==='string'?body.bic.replace(/\s+/g,'').toUpperCase():'';
+  if(!BIC.test(bic))fault('FIN_REGISTER_BIC','bic');
   if(!REGISTER_PROTOCOLS.includes(body?.protocol))fault('INVALID_FIELD','protocol');
   const endpoint=this.#endpoint(body.protocol,body.address),login=this.#login(body.protocol,body.login);
-  const nostro=typeof body.cashAccountId==='string'&&ID.test(body.cashAccountId.toLowerCase())?(await this.pool.query(NOSTRO_OF,[body.cashAccountId.toLowerCase()])).rows[0]:null;
-  if(!nostro)fault('FIN_REGISTER_NOSTRO','cashAccountId',409);
   const slug=name.toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,20).replace(/_+$/,'')||'PEER';
   const profileId='FIN_'+slug+'_'+randomBytes(3).toString('hex').toUpperCase(),secret='fin-peer-'+profileId.toLowerCase().replaceAll('_','-');
   await this.vault.put(secret,login);
@@ -319,8 +322,8 @@ export class FinPeers{
    await client.query('BEGIN');
    await client.query('INSERT INTO avis_core_v2.platform_connectors(connector_code,display_name,is_enabled,endpoint_url,credential_reference) VALUES($1,$2,true,$3,$4)',
     [profileId,name,endpoint.url,'KEYVAULT:'+secret]);
-   await client.query("INSERT INTO avis_core_v2.bank_connector_profiles(profile_id,cash_account_id,protocol,local_bic,peer_bic,operations) VALUES($1,$2,$3,$4,$5,'{}')",
-    [profileId,nostro.cash_account_id,body.protocol,ABIQ_ISSUER.abiqCode,nostro.bic]);
+   await client.query("INSERT INTO avis_core_v2.bank_connector_profiles(profile_id,cash_account_id,protocol,local_bic,peer_bic,operations) VALUES($1,NULL,$2,$3,$4,'{}')",
+    [profileId,body.protocol,ABIQ_ISSUER.abiqCode,bic]);
    await client.query('INSERT INTO avis_core_v2.fin_terminal_peer_addresses(profile_id,address,created_by) VALUES($1,$2,$3)',[profileId,endpoint.address,String(actor.id)]);
    await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_PEER_REGISTERED',profileId]);
    await client.query('COMMIT');
@@ -422,16 +425,17 @@ export class FinPeers{
   const wire=this.#wire(body),peer=await this.#peer(profileId),credentials=this.credentials(peer.credential_reference);
   await this.#recover();
   const {form,xml}=await this.terminal.cashWire(peer,wire),check=await this.access.check(person,body);
-  return this.#execute(actor,person,peer,credentials,check,{form,xml,bookingAccountId:wire.bookingAccountId,
+  return this.#execute(actor,person,peer,credentials,check,{form,xml,bookingAccountId:wire.bookingAccountId,nostroAccountId:peer.cash_account_id,
    reserve:db=>this.terminal.reserveWire(db,actor,{form,bookingAccountId:wire.bookingAccountId,nostroAccountId:peer.cash_account_id})});
  }
  // Screen 1's Transact: the composer's outgoing message (src/fin-terminal.mjs, transactable) executed as a Cash Wire is, to the
- // Peer Server chosen above it - the bank sending as itself to that server's bank, through the NOSTRO registered for it - with
- // PIN 1 and PIN 2 while 4-Eyes is on. Its message is closed with it (reserveTransact): the same message again is refused.
+ // Peer Server chosen above it - the bank sending as itself to that server's bank - settled through the NOSTRO chosen with it (the
+ // bank owner: "Outgoing transfers from common accounts are delivered by ISO20022 direct via API connector service and settled by
+ // our NOSTRO"), with PIN 1 and PIN 2 while 4-Eyes is on. Its message is closed with it (reserveTransact): the same message again
+ // is refused.
  async transact(actor,person,profileId,body){
   this.#administrator(actor);
   const peer=await this.#peer(profileId),credentials=this.credentials(peer.credential_reference),message=await this.terminal.transactable(actor,body);
-  if(message.selection.nostroAccountId!==peer.cash_account_id)fault('FIN_TRANSACT_NOSTRO','nostroAccountId',409);
   if(message.form.senderBic!==peer.local_bic)fault('FIN_TRANSACT_SENDER','senderBic',409);
   if(message.form.receiverBic!==peer.peer_bic)fault('FIN_TRANSACT_RECEIVER','receiverBic',409);
   await this.#recover();
@@ -439,11 +443,11 @@ export class FinPeers{
   if(message.direction==='DEBIT')return this.#debit(actor,person,peer,credentials,check,message);
   let draftId=null;
   const result=await this.#execute(actor,person,peer,credentials,check,{form:message.form,xml:message.xml,bookingAccountId:message.selection.bookingAccountId,
-   reserve:async db=>{const reserved=await this.terminal.reserveTransact(db,actor,message);draftId=reserved.draftId;return reserved;}});
+   nostroAccountId:message.selection.nostroAccountId,reserve:async db=>{const reserved=await this.terminal.reserveTransact(db,actor,message);draftId=reserved.draftId;return reserved;}});
   return {...result,draft:await this.terminal.draft(actor,draftId)};
  }
  // One execution for both: under the connector lock (#gate) the money is reserved and the message kept before it leaves.
- async #execute(actor,person,peer,credentials,check,{form,xml,bookingAccountId,reserve}){
+ async #execute(actor,person,peer,credentials,check,{form,xml,bookingAccountId,nostroAccountId,reserve}){
   const messageId=randomUUID(),text=form.amount+' '+form.currency+' -> '+form.creditorIban;
   await underConnectorLock(this.pool,async db=>{
    await this.#gate(db,check);
@@ -452,7 +456,7 @@ export class FinPeers{
     VALUES($1,$2,'OUT',$3,$4,$5,$6,'SENDING',$7,$8)`,[messageId,peer.profile_id,PACS008,form.businessMessageId,[form.uetr],text,xml,String(actor.id)]);
    await db.query(`INSERT INTO avis_core_v2.fin_terminal_wires(uetr,message_id,profile_id,booking_account_id,nostro_cash_account_id,suspense_account_id,amount,currency_code,
     creditor_name,creditor_iban,reserve_journal_id,four_eyes,checkers,dispatched_by,dispatched_by_name) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-    [form.uetr,messageId,peer.profile_id,bookingAccountId,peer.cash_account_id,reserved.suspense,form.amount,form.currency,form.creditorName,form.creditorIban,
+    [form.uetr,messageId,peer.profile_id,bookingAccountId,nostroAccountId,reserved.suspense,form.amount,form.currency,form.creditorName,form.creditorIban,
      reserved.journalId,check.fourEyes,check.checkers,String(actor.id),person.name]);
    await db.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_OUTGOING_DISPATCHED',form.uetr]);
   });

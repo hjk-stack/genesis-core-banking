@@ -161,9 +161,8 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  FIN_BOOKING_ACCOUNT:'Select a Common or Suspense account in the message\'s currency.',FIN_NOSTRO_ACCOUNT:'Select an active NOSTRO account in the message\'s currency.',
  FIN_TOKEN_WALLET:'Select a "+" wallet; AG and AGi are not booked here.',
  FIN_BOOKING_MISMATCH:'The debtor\'s account and BIC are not those of the chosen Common or Suspense account.',
- FIN_NOSTRO_MISMATCH:'The receiver, INDA and the settlement account are not those of the chosen NOSTRO account.',
+ FIN_NOSTRO_MISMATCH:'INDA and the settlement account are not those of the chosen NOSTRO account.',
  FIN_CREDITOR_MISMATCH:'The creditor\'s account and BIC and the receiver are not those of the chosen Common or Suspense account.',
- FIN_NOSTRO_SENDER_MISMATCH:'The sender, INGA and the settlement account are not those of the chosen NOSTRO account.',
  FIN_INCOMING_INVALID:'Register a message that passes Validate XML.',FIN_CONVERT_RATE:'No live rate for the chosen wallet\'s asset now. Try again.',
  FIN_CONVERT_QUANTITY:'The amount converts to no token at four decimals.',FIN_WALLET_ADDRESS:'The chosen wallet has no receiving address on its chain.',FIN_IVMS101:'The IVMS101 travel-rule data is not complete: debtor name and account, wallet holder.',
 FIN_DRAFT_REGISTERED:'This incoming transfer is registered and is not changed any more.',
@@ -180,10 +179,10 @@ FIN_DRAFT_REGISTERED:'This incoming transfer is registered and is not changed an
  FIN_DEBIT_CREDITOR_MISMATCH:'The creditor\'s account and BIC are not those of the chosen Common or Suspense account.',
  FIN_DEBIT_DEBTOR:'Enter the debtor\'s name.',FIN_DEBIT_ACCOUNT:'Enter the debtor\'s account number.',
  FIN_DEBIT_MANDATE:'Enter the authorisation\'s number and the date it was signed.',
- FIN_TRANSACT_NOSTRO:'Choose the NOSTRO account registered for this Peer Server.',FIN_TRANSACT_SENDER:'The Sender BIC is not the bank\'s own BIC at this Peer Server.',
+ FIN_TRANSACT_SENDER:'The Sender BIC is not the bank\'s own BIC at this Peer Server.',
  FIN_TRANSACT_RECEIVER:'The Receiver BIC is not this Peer Server\'s bank.',FIN_TRANSACTED:'This transaction is executed: it is not changed or sent again.',
  PEER_VAULT:'The Key Vault of the peer servers\' logins is not in place in Azure: nothing was registered.',
- FIN_REGISTER_NOSTRO:'Select an active NOSTRO account whose bank has a BIC.',FIN_REGISTER_LOGIN:'IP-to-IP takes the certificate login.'
+ FIN_REGISTER_BIC:'Enter the bank\'s BIC: 8 or 11 letters and digits.',FIN_REGISTER_LOGIN:'IP-to-IP takes the certificate login.'
 };
 // finTerminalAccess: who avis.land says is behind this request's workstation admission (src/workstation-admission.mjs), and whether
 // the owner gave them FinTerminal access; tests give their own.
