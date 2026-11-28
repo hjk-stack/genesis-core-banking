@@ -157,8 +157,13 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
 .fin-four-eyes{flex:0 0 auto;padding:6px 12px;border:1px solid var(--fin-orange);border-radius:7px;background:rgba(245,159,11,.12);color:var(--fin-orange);font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;cursor:pointer;white-space:nowrap}
 .fin-four-eyes[data-state=ON]{border-color:var(--fin-right);background:rgba(52,211,153,.12);color:var(--fin-right)}
 .fin-four-eyes:disabled{cursor:default}
-.fin-four-eyes:focus-visible,.fin-pin button:focus-visible,.fin-pin input:focus-visible{outline:2px solid var(--fin-orange);outline-offset:2px}
+.fin-four-eyes:focus-visible,.fin-pins-open:focus-visible,.fin-pin button:focus-visible,.fin-pin input:focus-visible{outline:2px solid var(--fin-orange);outline-offset:2px}
+/* The PIN menu: closed, only its button shows; open, the two PINs fold out under it. */
+.fin-pins-open{flex:0 0 auto;padding:6px 12px;border:1px solid var(--fin-orange);border-radius:7px;background:transparent;color:var(--fin-orange);font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;cursor:pointer;white-space:nowrap}
+.fin-pins-open::after{content:'';display:inline-block;width:5px;height:5px;margin-left:8px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:translateY(-2px) rotate(45deg)}
+.fin-pins-open[aria-expanded=true]::after{transform:translateY(1px) rotate(-135deg)}
 .fin-pins{display:flex;flex-wrap:wrap;gap:8px 20px;width:100%}
+.fin-pins[hidden]{display:none}
 .fin-pin{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}
 .fin-pin-holder{font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--fin-muted);overflow-wrap:anywhere}
 .fin-pin input{width:9.5em;max-width:100%;padding:6px 8px;border:1px solid var(--fin-line);border-radius:6px;background:var(--fin-ground);color:var(--fin-text);font:inherit}
