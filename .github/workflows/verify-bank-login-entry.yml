@@ -36,3 +36,8 @@ jobs:
       - name: Verify bank homepage navigation and private admission
         working-directory: genesis-banking-uat/portal
         run: node --test --test-concurrency=1 test/staff-access-page.test.mjs test/workstation-admission.test.mjs
+      - name: Verify bank sign-in redirect in real Chromium
+        working-directory: genesis-banking-uat/portal
+        run: |
+          npx playwright install --with-deps chromium
+          node --test test-browser/staff-access-page.mjs
