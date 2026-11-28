@@ -174,7 +174,7 @@ export function createFinPeer({root=document,request,view=root.defaultView||glob
  function chose(){node.textContent=chosen()?.name||'—';say('');suggest();paintAddresses();current=null;paintStream([]);paintLink();onChosen(chosen());void look();}
  server.addEventListener('change',chose);
  // The register of a peer server, in its popup (the bank owner: "+IP register ... The register is in a popup with IP and Bank name
- // and login details ... the data gets stored in a drop down for reuse"): its bank, type, address, NOSTRO and login - a certificate
+ // and login details ... the data gets stored in a drop down for reuse"): its bank, BIC, type, address and login - a certificate
  // login, or a user name and password (the bank owner chose "Both") - go to the bank, the login on to Azure Key Vault only
  // (src/fin-peer.mjs, register). Registered, the server is chosen here and offered on Screen B too. What was written in the popup
  // is emptied whenever it closes: a login is never kept in the page.
@@ -182,24 +182,17 @@ export function createFinPeer({root=document,request,view=root.defaultView||glob
  if(dialog&&opener){
   const field=name=>dialog.querySelector('[data-fin-peer-register-field="'+name+'"]'),fields=[...dialog.querySelectorAll('[data-fin-peer-register-field]')];
   const logins=[...dialog.querySelectorAll('[data-fin-peer-register-login]')],problemLine=dialog.querySelector('[data-fin-peer-register-problem]'),save=dialog.querySelector('[data-fin-peer-register-save]');
-  const option=(value,label)=>{const item=root.createElement('option');item.value=value;item.textContent=label;return item;};
   const showLogin=()=>{for(const part of logins)part.hidden=part.dataset.finPeerRegisterLogin!==field('kind').value;};
   const tell=(message,name)=>{problemLine.textContent=message||'';problemLine.hidden=!message;for(const input of fields)if(name&&input===field(name))input.setAttribute('aria-invalid','true');else input.removeAttribute('aria-invalid');};
   const empty=()=>{for(const input of fields)if(input.tagName!=='SELECT')input.value='';tell('');};
-  // The NOSTRO accounts a peer server settles on: the active ones whose bank has a BIC - it is the peer's.
-  async function nostros(){
-   let listed;try{listed=(await request('GET','/api/fin-terminal/accounts'))?.accounts?.nostroAccounts;}catch{listed=null;}
-   const rows=(Array.isArray(listed)?listed:[]).filter(row=>row.active&&row.bic);
-   field('cashAccountId').replaceChildren(...(rows.length?rows.map(row=>option(row.accountId,[row.institution,row.bic,row.account,row.currency].filter(Boolean).join(' · '))):[option('','No NOSTRO account with a BIC')]));
-  }
-  opener.addEventListener('click',()=>{empty();showLogin();void nostros();dialog.showModal();field('name').focus();});
+  opener.addEventListener('click',()=>{empty();showLogin();dialog.showModal();field('name').focus();});
   field('kind').addEventListener('change',showLogin);
   dialog.querySelector('[data-fin-peer-register-cancel]').addEventListener('click',()=>dialog.close());
   dialog.addEventListener('close',empty);
   dialog.querySelector('[data-fin-peer-register-form]').addEventListener('submit',async submitted=>{
    submitted.preventDefault();if(save.disabled)return;
    const value=name=>field(name).value,kind=value('kind');
-   const body={name:value('name'),protocol:value('protocol'),address:value('address'),cashAccountId:value('cashAccountId'),
+   const body={name:value('name'),protocol:value('protocol'),bic:value('bic'),address:value('address'),
     login:kind==='password'?{kind,user:value('user'),password:value('password'),ca:value('ca')}:{kind,ca:value('ca'),cert:value('cert'),key:value('key'),secret:value('secret')}};
    save.disabled=true;save.setAttribute('aria-busy','true');tell('');
    try{

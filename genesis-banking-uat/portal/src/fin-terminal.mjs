@@ -537,29 +537,40 @@ export class FinTerminal{
   await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_INCOMING_HELD',row.draft_id]);
   return row;
  }
+ // Our NOSTRO a peer's transfer names as where it is settled - INGA, the account it is credited to at the sender's bank, in the
+ // transfer's currency (the bank owner: "attention could be received many other currencies") - as the NOSTRO register keeps it, at
+ // the bank that sent it (its BIC, checked with the message's header). One kept without its bank's BIC is the NOSTRO only of the
+ // peer registered with it before. None of ours named: the transfer waits for Register incoming, where the operator chooses it.
+ async #namedNostro(db,peer,form){
+  if(form.settlement!=='INGA'||!form.settlementAccount)return null;
+  const rows=(await db.query(NOSTRO+' WHERE currency_code=$1 AND is_active ORDER BY cash_account_id',[form.currency])).rows;
+  return rows.find(row=>fitsSettlement(row)&&settlementNumber(row.iban_or_account_no)===form.settlementAccount&&
+   (row.bic_code?row.bic_code.toUpperCase()===form.senderBic:row.cash_account_id===peer.cash_account_id))?.cash_account_id??null;
+ }
  // A transfer taken before is answered as it was - booked or converted, or held - when every field that makes the payment is the same, from the
- // same peer's NOSTRO; otherwise its UETR names another payment (review finding: not only the amount, currency and creditor).
- async #replay(client,peer,form){
+ // same NOSTRO; otherwise its UETR names another payment (review finding: not only the amount, currency and creditor).
+ async #replay(client,nostro,form){
   const before=(await client.query(`SELECT d.form,d.direction,d.nostro_cash_account_id,d.registered_journal_id,c.asset,c.quantity::text AS quantity,c.tx_hash AS hash
    FROM avis_core_v2.fin_terminal_drafts d LEFT JOIN avis_core_v2.fin_terminal_conversions c ON c.draft_id=d.draft_id WHERE d.uetr=$1`,[form.uetr])).rows[0];
   if(!before)return null;
-  if(before.direction!=='INCOMING'||before.nostro_cash_account_id!==peer.cash_account_id||PAYMENT_FIELDS.some(field=>(before.form[field]??'')!==form[field]))
+  if(before.direction!=='INCOMING'||before.nostro_cash_account_id!==nostro||PAYMENT_FIELDS.some(field=>(before.form[field]??'')!==form[field]))
    return {status:'RJCT',...REJECTED.FIN_UETR_DUPLICATE};
   return before.registered_journal_id?booked(form,before.asset?before:null):HELD;
  }
  // A peer bank's credit transfer taken on the listening port (src/fin-peer.mjs), the FinTerminal specification v3's
  // receive_ip2ip_pacs008 - "Auto-parses incoming credits, validates XSD, and returns pacs.002 (ACSC)" while ROBOTIC STP is active:
- // booked at once as one registered by hand, on the bank's NOSTRO at that peer (its connector's clearing account) and on AVISPay
- // PLC's account its creditor's IBAN names, in the transaction that keeps the message and the bank's answer - or, the account
- // routed into a wallet (quoteIncoming), converted into that wallet instead: "AUTO_CRYPTO". Under MANUAL INTERVENTION it is held
- // for the operator, ACTC (review finding: the switch decides). One the bank cannot book is answered RJCT with the reason, nothing
+ // booked at once as one registered by hand, on our NOSTRO the transfer names as its settlement account (#namedNostro) and on
+ // AVISPay PLC's account its creditor's IBAN names, in the transaction that keeps the message and the bank's answer - or, the
+ // account routed into a wallet (quoteIncoming), converted into that wallet instead: "AUTO_CRYPTO". Under MANUAL INTERVENTION, or
+ // naming no NOSTRO of ours, it is held for the operator, ACTC (review finding: the switch decides; the bank owner: "the nostro
+ // account is the job of the incoming transfer registration"). One the bank cannot book is answered RJCT with the reason, nothing
  // kept; the same transfer again is answered as before.
  async receiveIncoming(client,peer,input,quote=null){
   let form;try{form=this.#form(input);}catch{return {status:'RJCT',...REJECTED.FIN_INCOMING_INVALID};}
   // One delivery of a transfer at a time: the same transfer delivered twice at once is answered the second time as the first was
   // (review finding).
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended('avis_core_v2:fin-incoming:'||$1,0))",[form.uetr]);
-  const before=await this.#replay(client,peer,form);if(before)return before;
+  const nostro=await this.#namedNostro(client,peer,form),before=await this.#replay(client,nostro,form);if(before)return before;
   const xml=buildFinMessage(form);
   if(fieldProblems(form).length||!(await validateFinMessage(xml)).valid)return {status:'RJCT',...REJECTED.FIN_INCOMING_INVALID};
   const account=(await client.query(BOOKING+' AND b.abiq_iban=$2 AND a.currency_code=$3 ORDER BY a.account_id LIMIT 1',[RECEIVING_OWNERS,form.creditorIban,form.currency])).rows[0];
@@ -567,15 +578,16 @@ export class FinTerminal{
   // The mode and the account's route as they are now, held until the transfer is taken: a quote read before the transaction for
   // another route - or none - is read again (review finding).
   const robotic=(await client.query('SELECT robotic_stp FROM avis_core_v2.fin_terminal_mode WHERE mode_id=1 FOR SHARE')).rows[0]?.robotic_stp===true;
-  const route=robotic?(await client.query('SELECT token_wallet_account_id FROM avis_core_v2.fin_terminal_crypto_routes WHERE booking_account_id=$1 FOR SHARE',
+  const automatic=robotic&&nostro!==null;
+  const route=automatic?(await client.query('SELECT token_wallet_account_id FROM avis_core_v2.fin_terminal_crypto_routes WHERE booking_account_id=$1 FOR SHARE',
    [account.account_id])).rows[0]?.token_wallet_account_id??null:null;
-  if(robotic&&route!==(quote?.wallet?.account_id??quote?.walletId??null))return {stale:true,status:'RJCT',...REJECTED.FIN_CONVERT_ROUTE};
-  if(robotic&&quote?.failed)return {status:'RJCT',...REJECTED[quote.failed]};
+  if(automatic&&route!==(quote?.wallet?.account_id??quote?.walletId??null))return {stale:true,status:'RJCT',...REJECTED.FIN_CONVERT_ROUTE};
+  if(automatic&&quote?.failed)return {status:'RJCT',...REJECTED[quote.failed]};
   await client.query('SAVEPOINT fin_incoming');
   try{
-   const actor={id:'listener:'+peer.profile_id},wallet=robotic?quote?.wallet??null:null;
-   const selection={bookingAccountId:account.account_id,nostroAccountId:peer.cash_account_id,tokenWalletId:wallet?.account_id??null};
-   if(!robotic){await this.#hold(client,actor,{form,xml,selection});await client.query('RELEASE SAVEPOINT fin_incoming');return HELD;}
+   const actor={id:'listener:'+peer.profile_id},wallet=automatic?quote?.wallet??null:null;
+   const selection={bookingAccountId:account.account_id,nostroAccountId:nostro,tokenWalletId:wallet?.account_id??null};
+   if(!automatic){await this.#hold(client,actor,{form,xml,selection});await client.query('RELEASE SAVEPOINT fin_incoming');return HELD;}
    const converted=wallet?await this.#convert(client,actor,{form,xml,selection,wallet,quote,mode:'ROBOTIC'}):(await this.#book(client,actor,{form,xml,selection}),null);
    await client.query('RELEASE SAVEPOINT fin_incoming');
    return booked(form,converted);
