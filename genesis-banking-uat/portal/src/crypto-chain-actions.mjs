@@ -42,6 +42,8 @@ export class CryptoChainActions extends CryptoWorkspace {
  async submitCryptoAction(actor,input,key){admin(actor);
   const result=await this.operation(actor,'SIGN_CRYPTO_ACTION',input,key,async db=>{
    const action=(await db.query('SELECT * FROM avis_core_v2.crypto_chain_actions WHERE action_id=$1 FOR UPDATE',[input.actionId])).rows[0];if(!action)fault('CRYPTO_ACTION_REQUIRED','actionId');if(action.status!=='REVIEW'){if(['SIGNED','SUBMITTED','CONFIRMED'].includes(action.status)&&action.review_hash===input.reviewHash)return {id:action.action_id,txHash:action.tx_hash,status:action.status};fault('CRYPTO_REVIEW_CHANGED','actionId');}
+   // Existing signed/submitted operations retain their receipt and completion path.
+   if(actor.legacyConverterArchived&&['HUB','DEPLOY','CAP','MINT'].includes(action.action_type))fault('LEGACY_CONVERTER_ARCHIVED',null,403);
    if(action.review_hash!==input.reviewHash||new Date(action.expires_at)<=new Date())fault('CRYPTO_REVIEW_CHANGED','actionId');const card=(await db.query('SELECT * FROM avis_core_v2.crypto_security_cards WHERE card_id=$1 FOR UPDATE',[action.card_id])).rows[0];if(card.version!==action.instruction.cardVersion)fault('CRYPTO_DOSSIER_CHANGED','cardId');
    await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',['chain-signer:'+action.address_id]);
    if((await db.query("SELECT 1 FROM avis_core_v2.crypto_chain_actions WHERE address_id=$1 AND action_id<>$2 AND status IN ('SIGNED','SUBMITTED')",[action.address_id,action.action_id])).rows.length)fault('CRYPTO_ACTION_ACTIVE','addressId');

@@ -25,6 +25,7 @@ import {LiveMarketFeed} from './src/trading/live-market.mjs';
 import {CoinApiIndexResearch,readCoinApiIndexResearch} from './src/trading/coinapi-index-research.mjs';
 import {scanFinalizedEthereumDeposits} from './src/crypto-deposit-monitor.mjs';
 import {CRYPTO_MESSAGES} from './src/crypto-workspace.mjs';
+import {createRollingConverterAdminClient,BANK_CONVERTER_PREFIX,legacyConversionAction} from './src/rolling-converter-admin-client.mjs';
 import {CustomerAccess} from './src/customer-access.mjs';
 import {processAvis8583} from './src/pos-switch.mjs';
 import {StoreWallet} from './src/checkout-store-wallet.mjs';
@@ -189,6 +190,7 @@ FIN_DRAFT_REGISTERED:'This incoming transfer is registered and is not changed an
 // the owner gave them FinTerminal access; tests give their own.
 export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={},finTerminalAccess=(_req,admission)=>admission?.person??null}) {
  const core=new TradingRobotCore(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map(),indexService=new IndexServiceAuthenticator(pool,{env:core.secretEnv,fetcher:transferOptions.indexServiceFetcher||core.cryptoFetch});
+ const rollingConverter=createRollingConverterAdminClient({env:core.secretEnv,fetcher:transferOptions.rollingConverterFetcher||fetch});
  const stripePos=transferOptions.stripePos||new StripeWebPos(pool,{env:transferOptions.secretEnv||process.env,fetcher:transferOptions.stripeFetch||fetch});
  const basket=new CryptoBasket(core,stripePos),storeWallet=new StoreWallet(basket);
  const posControl=new CheckoutPosControl(pool),ipControl=new CheckoutIpControl(pool),posAuth=new CheckoutPosAuthenticator(pool,{fetcher:transferOptions.posServiceFetcher||fetch});
@@ -211,6 +213,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    const url=new URL(req.url,'http://localhost'),path=url.pathname;
    if(req.method==='GET'&&path==='/healthz')return send(res,200,{status:'ok',release});
    const privateDesk=isStaffHost(req);
+   if(privateDesk)res.setHeader('Content-Security-Policy',res.getHeader('Content-Security-Policy').replace("frame-src 'self' blob:","frame-src 'self' blob: https://avis.land/exchange/converter/admin-embed"));
    // Only this exact hostname owns the application-access bootstrap. These
    // routes never alter ingress or the authentication of another bank hostname.
    if(['/access/start','/access/complete','/api/services/workstations/handoff'].includes(path)){
@@ -377,7 +380,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     const script=await readFile(new URL('./node_modules/pdfjs-dist/build'+path,import.meta.url));
     res.writeHead(200,{'content-type':'text/javascript; charset=utf-8','cache-control':'private, max-age=3600'});return res.end(script);
    }
-   if(req.method==='GET'&&['/','/card-message','/fin-terminal','/fin-terminal.mjs','/fin-terminal.css','/fin-terminal-switch.mjs','/fin-message.mjs','/fin-composer.mjs','/fin-peer.mjs','/fin-settlement.mjs','/fin-converter.mjs','/fin-access.mjs','/fin-wire.mjs','/app.mjs','/open-account-register.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/nostro-clearing.mjs','/checkout-ip.mjs','/nostro-clearing.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
+   if(req.method==='GET'&&['/','/card-message','/fin-terminal','/fin-terminal.mjs','/fin-terminal.css','/fin-terminal-switch.mjs','/fin-message.mjs','/fin-composer.mjs','/fin-peer.mjs','/fin-settlement.mjs','/fin-converter.mjs','/fin-access.mjs','/fin-wire.mjs','/app.mjs','/open-account-register.mjs','/payment-wizard.mjs','/card-message.mjs','/cards.mjs','/accounts.mjs','/abiq-number.mjs','/abiq-generator.mjs','/account-cleanup.mjs','/portfolio.mjs','/nostro-clearing.mjs','/checkout-ip.mjs','/nostro-clearing.mjs','/exchange-intent.mjs','/crypto-workspace.mjs','/rolling-converter-admin.mjs','/crypto-basket.mjs','/treasury-source.mjs','/wallet-trading-scroller.mjs','/wallet-trading-scroller.css','/trading-panel.mjs','/approved-robot.mjs','/approved-robot.css','/trading-testing.mjs','/trading-live.mjs','/index-advice.mjs','/crypto.css','/styles.css','/crypto-icons/ag.png','/crypto-icons/agi.png','/crypto-icons/avispay.webp','/crypto-icons/robot-approved.jpg'].includes(path)){
     const page=['/','/card-message','/fin-terminal'].includes(path),file=path==='/'?'index.html':page?'public'+path+'.html':'public'+path;
     const body=await readFile(new URL(file,import.meta.url));
     // Always present the deployed UAT revision's current application source after an update.
@@ -475,6 +478,8 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    const finPerson=actor.admin?await finTerminalAccess(req,deviceAdmission):null;
    const sessionData=()=>({username:actor.username,csrf:sessionCsrf(token),admin:actor.admin,customerUserId:actor.identityUserId,canSwitchWorkspace:session.is_admin,finTerminal:finPerson?.finTerminal===true});
    const invoke=(method,input,key,...extra)=>actor.admin?core[method](actor,input,key,...extra):customerAccess.invoke(actor,method,input,key,...extra);
+   const converterRequest=()=>rollingConverter({method:req.method,path,actor,body,idempotencyKey:req.headers['idempotency-key'],privateDesk});
+   if(path.startsWith(BANK_CONVERTER_PREFIX+'/')&&req.method==='GET'){const result=await converterRequest();return send(res,result.status,result.data);}
    const nostroStatement=/^\/api\/nostro\/([^/]+)\/statements(?:\/([^/]+))?$/.exec(path);
    if(nostroStatement){
     if(req.method!=='GET')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
@@ -563,6 +568,9 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(req.method==='GET'&&path==='/api/fin-terminal/converter')return send(res,200,await finTerminal.converter(actor));
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
+   if(path.startsWith(BANK_CONVERTER_PREFIX+'/')){const result=await converterRequest();return send(res,result.status,result.data);}
+   if(privateDesk&&(['/api/crypto/securities/demo-convert','/api/crypto/securities/prepare','/api/crypto/securities/wallet'].includes(path)||path==='/api/crypto/actions/review'&&legacyConversionAction(body.action)))fault('LEGACY_CONVERTER_ARCHIVED',null,403);
+   if(privateDesk&&path==='/api/crypto/actions/submit')actor.legacyConverterArchived=true;
    if(path==='/api/fin-terminal/drafts')return send(res,200,{draft:await finTerminal.save(actor,body)});
    if(path==='/api/fin-terminal/validate')return send(res,200,await finTerminal.validate(actor,body));
    if(path==='/api/fin-terminal/incoming')return send(res,200,{draft:await finTerminal.register(actor,body)});

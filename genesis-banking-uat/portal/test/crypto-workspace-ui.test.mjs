@@ -6,8 +6,8 @@ import {createCryptoWorkspace} from '../public/crypto-workspace.mjs';
 let dom,workspace;
 const globals=new Map(['document','FormData','navigator'].map(name=>[name,Object.getOwnPropertyDescriptor(globalThis,name)]));
 afterEach(()=>{workspace?.close();dom?.window.close();for(const [name,descriptor] of globals)if(descriptor)Object.defineProperty(globalThis,name,descriptor);else delete globalThis[name];});
-async function mount(views={},send=()=>{},action=()=>{throw new Error('Unexpected action');},identity=()=>({admin:false,customerUserId:'1'})){
- dom=new JSDOM('<!doctype html><body><main id="main"><div id="view"></div></main></body>',{url:'https://bank.invalid'});
+async function mount(views={},send=()=>{},action=()=>{throw new Error('Unexpected action');},identity=()=>({admin:false,customerUserId:'1'}),origin='https://bank.invalid'){
+ dom=new JSDOM('<!doctype html><body><main id="main"><div id="view"></div></main></body>',{url:origin});
  globalThis.document=dom.window.document;
  globalThis.FormData=dom.window.FormData;
  Object.defineProperty(globalThis,'navigator',{value:dom.window.navigator,configurable:true});
@@ -364,4 +364,17 @@ test('a failed wallet read does not ask an existing customer to create a first c
  assert.equal(document.querySelector('[data-wallets] [data-add-asset]'),null);
  assert.equal(marketCards().length,1);
  assert.equal(document.querySelector('[data-market-read-error]').textContent,'');
+});
+
+test('Private bank administration mounts the original rolling converter and retains legacy stock cards in a closed spare section',async()=>{
+ const security={card_id:'legacy',name:'AVISPay PLC',symbol:'aAVISP',mode:'DEMO',state:'DRAFT',dossier:{assetType:'STOCK'},actions:[]};
+ await mount({cryptosecurities:[security]},()=>{},()=>{throw new Error('Unexpected action');},()=>({admin:true}), 'https://bank.avispay.online');
+ const archive=document.querySelector('#crypto-security-desk'),frame=document.querySelector('#crypto-rolling-desk iframe');
+ assert.equal(archive.tagName,'DETAILS');assert.equal(archive.open,false);
+ assert.ok(archive.querySelector('[data-security="legacy"]'));
+ assert.equal(archive.querySelector('[data-security-create]'),null);
+ assert.equal(archive.querySelector('[data-real-prepare]'),null);
+ assert.equal(frame.getAttribute('src'),'https://avis.land/exchange/converter/admin-embed');
+ assert.equal(frame.getAttribute('referrerpolicy'),'origin');
+ workspace.close();assert.equal(document.querySelector('#crypto-rolling-desk iframe'),null);
 });

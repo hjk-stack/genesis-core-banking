@@ -11,6 +11,7 @@ const access=(a,u)=>{if(!a?.admin||(a.customerUserId&&String(a.customerUserId)!=
 const uuid=v=>typeof v==='string'&&/^[0-9a-f-]{36}$/.test(v);
 const units=v=>/^0(?:\.0+)?$/.test(String(v))?0n:money(String(v));
 export const CRYPTO_MESSAGES={
+ LEGACY_CONVERTER_ARCHIVED:'Use the rolling-token converter in Administration.',
  ...WALLET_SELECTION_MESSAGES,
  CRYPTO_ACCOUNT_AMBIGUOUS:'Select the booked asset account in Portfolio Management.',
  CRYPTO_NETWORK:'Select a registered blockchain.',CRYPTO_CONNECTOR:'The blockchain request could not be completed. Retry this action.',
