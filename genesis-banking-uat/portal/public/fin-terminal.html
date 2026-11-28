@@ -25,7 +25,7 @@
 <label><span>Peer Server</span><span class="fin-with-button"><select data-fin-peer-server></select><button type="button" data-fin-peer-register-open aria-label="Register peer server" title="Register">+</button></span></label>
 <div class="fin-peer-whitelist"><span id="fin-peer-whitelist-title">Whitelisted IPs</span><ul class="fin-peer-addresses" aria-labelledby="fin-peer-whitelist-title" data-fin-peer-addresses></ul><span class="fin-with-button"><input class="fin-code" data-fin-peer-address maxlength="45" spellcheck="false" aria-label="Whitelisted IP address" placeholder="IP address" disabled><button type="button" data-fin-peer-address-add aria-label="Add IP address" title="Add" disabled>+</button></span></div>
 <label><span>Outgoing Welcome / Session Message (Transmitted to Peer Server)</span><textarea class="fin-code" data-fin-peer-text maxlength="1000" rows="3" spellcheck="false"></textarea></label>
-<div class="fin-peer-send"><select data-fin-peer-event aria-label="Session message"><option value="INIT">INIT_SESSION / READY</option><option value="HEARTBEAT">HEARTBEAT</option><option value="END">END_SESSION</option></select><button type="button" data-fin-peer-send disabled>Send to Peer Server</button></div>
+<div class="fin-peer-send"><select data-fin-peer-event aria-label="Session message"><option value="INIT">INIT_SESSION / READY</option><option value="HEARTBEAT">HEARTBEAT</option><option value="END">END_SESSION</option></select><span class="fin-peer-go"><button type="button" data-fin-peer-send disabled>Send to Peer Server</button><span class="fin-transact-pins" data-fin-transact-pins hidden><input class="fin-code" type="password" inputmode="numeric" maxlength="12" autocomplete="off" data-fin-transact-pin="1" aria-label="PIN 1" placeholder="PIN 1"><input class="fin-code" type="password" inputmode="numeric" maxlength="12" autocomplete="off" data-fin-transact-pin="2" aria-label="PIN 2" placeholder="PIN 2"></span><button type="button" class="fin-primary" data-fin-transact hidden disabled>Transact</button></span></div>
 <p class="fin-peer-problem" role="alert" data-fin-peer-problem hidden></p>
 </div>
 <div class="fin-peer-in"><h3 id="fin-peer-stream-title">Peer Server Response / ACK Stream</h3><ol class="fin-code fin-peer-stream" aria-labelledby="fin-peer-stream-title" data-fin-peer-stream></ol></div>
@@ -126,8 +126,6 @@
 <button type="button" data-fin-save>Save Draft</button>
 <button type="button" class="fin-primary" data-fin-validate>Validate XML</button>
 <button type="button" class="fin-primary" data-fin-register hidden>Register incoming</button>
-<span class="fin-transact-pins" data-fin-transact-pins hidden><input class="fin-code" type="password" inputmode="numeric" maxlength="12" autocomplete="off" data-fin-transact-pin="1" aria-label="PIN 1" placeholder="PIN 1"><input class="fin-code" type="password" inputmode="numeric" maxlength="12" autocomplete="off" data-fin-transact-pin="2" aria-label="PIN 2" placeholder="PIN 2"></span>
-<button type="button" class="fin-primary" data-fin-transact hidden disabled>Transact</button>
 </footer>
 </section>
 <section class="fin-terminal-screen fin-settle" role="tabpanel" id="fin-screen-ip" aria-labelledby="fin-tab-ip" data-fin-screen="ip" hidden>

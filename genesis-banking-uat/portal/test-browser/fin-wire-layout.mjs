@@ -152,7 +152,8 @@ test('the PIN menu on a phone, an iPad and a computer: closed when the terminal 
 
 // The bank owner: "When the transaction is filled, then add a button for press Transact for the transaction executed and all buttons
 // must be interactive, showing that they are pressed".
-test('Transact sits with the composer\'s buttons inside the window; every button shows it is pressed while held, and while what it started runs',async()=>{
+// The bank owner: "Move the transact button on the right side of the send to peer server".
+test('Transact sits right of Send to Peer Server inside the window, and the message state shows beside the XSD check; every button shows it is pressed while held, and while what it started runs',async()=>{
  const context=await signedContext({width:1440,height:900}),page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  const look=locator=>locator.evaluate(node=>{const style=getComputedStyle(node);return {transform:style.transform,shadow:style.boxShadow,filter:style.filter,opacity:style.opacity};});
@@ -161,10 +162,32 @@ test('Transact sits with the composer\'s buttons inside the window; every button
   for(const width of [260,390,820,1440]){
    await page.setViewportSize({width,height:900});await page.goto(base+'/fin-terminal');await transact.waitFor();
    assert.deepEqual([await transact.textContent(),await transact.isDisabled()],['Transact',true],'nothing to transact yet, '+width);
-   const boxes=await page.locator('.fin-actions button:visible').evaluateAll(nodes=>nodes.map(node=>{const box=node.getBoundingClientRect();return {name:node.textContent,left:box.left,right:box.right,height:box.height};}));
-   assert.ok(boxes.some(box=>box.name==='Transact'),'Transact shown, '+width);
+   const row=await page.locator('.fin-peer-send button:visible').evaluateAll(nodes=>nodes.map(node=>{const box=node.getBoundingClientRect();return {name:node.textContent,left:box.left,right:box.right,top:box.top};}));
+   assert.deepEqual(row.map(box=>box.name),['Send to Peer Server','Transact'],'after Send to Peer Server, '+width);
+   // Beside it on a phone, an iPad and a computer; under it only where the row is too narrow for both.
+   if(width>260)assert.ok(row[1].left>=row[0].right&&Math.abs(row[1].top-row[0].top)<1,'beside it, '+width+' '+JSON.stringify(row));
+   else assert.ok(row[1].left>=row[0].right||row[1].top>row[0].top,JSON.stringify(row));
+   // With four eyes, its two PINs come between them, in reading order, inside the window.
+   const pins=await page.evaluate(()=>{const box=document.querySelector('[data-fin-transact-pins]');box.hidden=false;
+    const seen=[...document.querySelectorAll('.fin-peer-send :is(button,input)')].map(node=>{const at=node.getBoundingClientRect();return {name:node.getAttribute('aria-label')||node.textContent,left:at.left,right:at.right,top:at.top};});
+    box.hidden=true;return seen;});
+   assert.deepEqual(pins.map(box=>box.name),['Send to Peer Server','PIN 1','PIN 2','Transact'],'PINs before Transact, '+width);
+   for(let at=1;at<pins.length;at++)assert.ok(pins[at].left>=pins[at-1].right&&Math.abs(pins[at].top-pins[at-1].top)<1||pins[at].top>pins[at-1].top,'in reading order, '+width+' '+JSON.stringify(pins));
+   for(const box of pins)assert.ok(box.left>=0&&box.right<=width+0.5,JSON.stringify(box)+' inside '+width);
+   await page.locator('.fin-peer-send').evaluate(node=>node.scrollIntoView({block:'center'}));await page.screenshot({path:'test-results/fin-transact-'+width+'.png'});
+   const boxes=await page.locator('.fin-actions button:visible,.fin-peer-send button:visible').evaluateAll(nodes=>nodes.map(node=>{const box=node.getBoundingClientRect();return {name:node.textContent,left:box.left,right:box.right,height:box.height};}));
+   assert.ok(boxes.some(box=>box.name==='Transact')&&!(await page.locator('.fin-actions [data-fin-transact]').count()),'Transact shown, not under the composer, '+width);
    for(const box of boxes)assert.ok(box.left>=0&&box.right<=width+0.5&&box.height>=32,JSON.stringify(box)+' inside '+width);
    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no sideways scrolling, '+width);
+  }
+  // The XSD check and the message state are never under the composer's buttons (the bank owner: "half into the background as the
+  // headers all are too small in height"): on a computer's screen all is seen at once, the buttons too; a short window scrolls to them.
+  for(const [width,height] of [[1440,900],[1440,640],[960,600]]){
+   await page.setViewportSize({width,height});await page.goto(base+'/fin-terminal');await page.locator('[data-fin-draft-state]').waitFor();
+   const seen=await page.evaluate(scroll=>[...document.querySelectorAll('[data-fin-xsd],[data-fin-draft-state],[data-fin-validate]')].map(node=>{
+    if(scroll)node.scrollIntoView({block:'nearest'});
+    const box=node.getBoundingClientRect(),hit=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2);return [node.textContent,node.contains(hit)];}),height<900);
+   assert.deepEqual(seen,[['XSD: not checked',true],['New message',true],['Validate XML',true]],'seen, '+width+'x'+height);
   }
   // Held: it sinks.
   await validate.waitFor();const rest=await look(validate),box=await validate.boundingBox();
@@ -196,9 +219,9 @@ test('Debit on a phone, an iPad and a computer: the direct debit\'s mandate insi
    assert.equal(await page.inputValue('[data-fin-field="messageType"]'),'pacs.003.001.08');
    await page.fill('[data-fin-field="mandateId"]','MANDATE-EXAMPLE-0001');await page.fill('[data-fin-field="mandateSignatureDate"]','2026-10-01');
    assert.match(await page.inputValue('[data-fin-xml]'),/<MndtId>MANDATE-EXAMPLE-0001<\/MndtId>\s*<DtOfSgntr>2026-10-01<\/DtOfSgntr>/);
-   const boxes=await page.locator('[data-fin-mandate] :is(legend,input),.fin-actions button:visible').evaluateAll(nodes=>nodes.map(node=>{const box=node.getBoundingClientRect();
+   const boxes=await page.locator('[data-fin-mandate] :is(legend,input),[data-fin-transact]:visible').evaluateAll(nodes=>nodes.map(node=>{const box=node.getBoundingClientRect();
     return {name:node.dataset.finField||node.textContent,left:box.left,right:box.right,width:box.width};}));
-   assert.deepEqual(boxes.filter(box=>['mandateId','mandateSignatureDate','Transact'].includes(box.name)).map(box=>box.name),['mandateId','mandateSignatureDate','Transact']);
+   assert.deepEqual(boxes.filter(box=>['mandateId','mandateSignatureDate','Transact'].includes(box.name)).map(box=>box.name),['Transact','mandateId','mandateSignatureDate']);
    for(const box of boxes)assert.ok(box.left>=0&&box.right<=width+0.5&&box.width>0,JSON.stringify(box)+' inside '+width);
    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no sideways scrolling, '+width);
    await mandate.evaluate(node=>node.scrollIntoView({block:'center'}));await page.screenshot({path:'test-results/fin-debit-'+width+'.png'});
