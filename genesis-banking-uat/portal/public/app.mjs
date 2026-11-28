@@ -4,7 +4,7 @@ import {readExchangeIntent} from './exchange-intent.mjs';
 import {createPortfolio,securitiesTable,stockRegisterTable,securityOrdersTable,securityBookTable} from './portfolio.mjs';
 import {nostroRegisterTable,nostroMovementsTable,intermediaryFields,bindIntermediaryFields,combinedNostroInput,createNostroStatements} from './nostro-clearing.mjs';
 import {checkoutIpRegister,checkoutIpAdminControls,createCheckoutIpAdminControls,bindCheckoutIp,checkoutIpHandlerUrl,checkoutIpFingerprint,replaceCheckoutIpRegister,createCheckoutIpProof,expireCheckoutIpControls} from './checkout-ip.mjs';
-import {finTerminalControls,createFinTerminalSwitch} from './fin-terminal-switch.mjs';
+import {finTerminalControls,createFinTerminalSwitch,FIN_TERMINAL_CHANNEL,FIN_TERMINAL_PATH,FIN_TERMINAL_RETURN} from './fin-terminal-switch.mjs';
 import {accountTypes,accountSummaryTable,backofficeAccountTable,createAccountStatements} from './accounts.mjs';
 import {holderRegisterField,connectAccountHolderRegister,buildAccountOpeningRequest} from './open-account-register.mjs';
 import {createCardManager,cardAccountTable,cardProducts} from './cards.mjs';
@@ -41,14 +41,36 @@ async function api(path,body,key){
    code:'INVALID_RESPONSE',status:response.status,requestId:response.headers.get('x-request-id')
   });
  }
+ if(response.status===403&&data?.code==='BANK_WORKSTATION_REQUIRED'&&toSignIn())return new Promise(()=>{});
  if(!response.ok)throw Object.assign(new Error(data.message||'Please try this action again.'),data);
  return data;
 }
+// Reported directly: "After I created the PIN the page took off and I could not restart". A desk whose sign-in has ended goes
+// to it - the bank's own gate sends this page there (server.mjs) - instead of standing on an error; at most once in half a
+// minute, so a desk without that gate never goes round in a circle.
+function toSignIn(){
+ try{if(Date.now()-(Number(sessionStorage.getItem('avisBankSignInAt'))||0)<30000)return false;sessionStorage.setItem('avisBankSignInAt',String(Date.now()));}
+ catch{return false;}
+ location.replace('/');return true;
+}
+// A FinTerminal whose sign-in had ended came here to sign in again (fin-terminal.mjs); signed in, it goes back there.
+function backToFinTerminal(session){
+ let back=null;try{back=sessionStorage.getItem(FIN_TERMINAL_RETURN);sessionStorage.removeItem(FIN_TERMINAL_RETURN);}catch{}
+ if(back!==FIN_TERMINAL_PATH||session?.admin!==true||session.finTerminal!==true)return false;
+ location.replace(FIN_TERMINAL_PATH);return true;
+}
+// Signed out, here or on another page of this bank in this browser (a FinTerminal, another desk): the sign-in shows, and where
+// the bank asks for its AVIS sign-in first (its private desk, server.mjs) the page goes straight on to it.
+function afterSignOut(){
+ signedOut();try{sessionStorage.removeItem('avisBankSignInAt');}catch{}
+ void api('session').catch(()=>{});
+}
+const sessionChannel=(()=>{try{const channel=new BroadcastChannel(FIN_TERMINAL_CHANNEL);channel.onmessage=({data})=>{if(data?.type==='signed-out')afterSignOut();};return channel;}catch{return null;}})();
 let formGeneration=0,noticeTimer;
 function clearNotice(){clearTimeout(noticeTimer);$('#notice').textContent='';$('#notice').hidden=true;}
 function clearForm(){abiqGenerator.close();formGeneration++;activeForm=null;if($('#form-dialog').open)$('#form-dialog').close();$('#action-form').reset();$('#form-fields').replaceChildren();}
 function signedOut(){ipProof.close();ipAdminControls.close();finTerminal.close();document.querySelector('[data-basket-authorize]')?.remove();document.querySelector('[data-checkout-management]')?.remove();sessionEpoch++;loading++;clearNotice();$('#workspace-selector').replaceChildren();$('#workspace-error').textContent='';clearForm();paymentWizard.close();cardManager.close();accountStatements.close();nostroStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';$('#workspace-selector').hidden=true;$('#workspace').hidden=true;$('#signin').hidden=false;$('#signout').hidden=true;$('#operator-name').textContent='';csrf='';for(const k of Object.keys(cache))delete cache[k];if($('#form-dialog').open)$('#form-dialog').close();}
-function signedIn(session){ipProof.close();ipAdminControls.close();finTerminal.close();document.querySelector('[data-basket-authorize]')?.remove();document.querySelector('[data-checkout-management]')?.remove();sessionEpoch++;clearNotice();$('#workspace-selector').replaceChildren();$('#workspace-error').textContent='';clearForm();paymentWizard.close();cardManager.close();accountStatements.close();nostroStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';for(const k of Object.keys(cache))delete cache[k];identity={...session,admin:session.admin!==false};csrf=session.csrf;document.querySelectorAll('nav a').forEach(a=>a.hidden=!identity.admin&&!['#accounts','#portfolio','#payments','#cards','#wallets'].includes(a.hash));void refreshWorkspaces();void refreshPickupAlerts();$('#workspace').hidden=false;$('#signin').hidden=true;$('#signout').hidden=false;$('#operator-name').textContent=session.username;void resumeExchange();void showStripeReturn();if(new URLSearchParams(location.search).get('crypto_basket')==='1'){const purpose=new URLSearchParams(location.search).get('purpose');history.replaceState(null,'','#wallets');void openCryptoBasket(api,null,null,purpose).catch(pageError);}else if(identity.admin&&new URLSearchParams(location.search).get('checkout_management')==='1'){history.replaceState(null,'','#pos');void openCheckoutManagement(api);}else void resumeBasketAuthorization(api,document.body);}
+function signedIn(session){if(backToFinTerminal(session))return;ipProof.close();ipAdminControls.close();finTerminal.close();document.querySelector('[data-basket-authorize]')?.remove();document.querySelector('[data-checkout-management]')?.remove();sessionEpoch++;clearNotice();$('#workspace-selector').replaceChildren();$('#workspace-error').textContent='';clearForm();paymentWizard.close();cardManager.close();accountStatements.close();nostroStatements.close();portfolioManager.close();cryptoManager.close();accountTypeFilter='';for(const k of Object.keys(cache))delete cache[k];identity={...session,admin:session.admin!==false};csrf=session.csrf;document.querySelectorAll('nav a').forEach(a=>a.hidden=!identity.admin&&!['#accounts','#portfolio','#payments','#cards','#wallets'].includes(a.hash));void refreshWorkspaces();void refreshPickupAlerts();$('#workspace').hidden=false;$('#signin').hidden=true;$('#signout').hidden=false;$('#operator-name').textContent=session.username;void resumeExchange();void showStripeReturn();if(new URLSearchParams(location.search).get('crypto_basket')==='1'){const purpose=new URLSearchParams(location.search).get('purpose');history.replaceState(null,'','#wallets');void openCryptoBasket(api,null,null,purpose).catch(pageError);}else if(identity.admin&&new URLSearchParams(location.search).get('checkout_management')==='1'){history.replaceState(null,'','#pos');void openCheckoutManagement(api);}else void resumeBasketAuthorization(api,document.body);}
 async function showStripeReturn(){
  const params=new URLSearchParams(location.search),kind=params.get('stripe_pos');if(!['return','cancel'].includes(kind))return;
  const sessionId=params.get('session_id');
@@ -88,10 +110,14 @@ $('#login-form').addEventListener('submit',async event=>{
  }catch(err){message.textContent=err.message;}
  finally{image?.remove();button.disabled=false;}
 });
+// The bank owner: "The bank must have login and log off operative". Sign out ends the bank session and its sign-in (server.mjs);
+// every other page of this bank in this browser follows.
 $('#signout').onclick=async()=>{
  const epoch=sessionEpoch;
- try{await api('logout',{});if(epoch===sessionEpoch)signedOut();}
- catch(e){if(epoch===sessionEpoch)$('#workspace-error').textContent=e.message;}
+ try{await api('logout',{});}
+ catch(e){if(epoch===sessionEpoch)$('#workspace-error').textContent=e.message;return;}
+ try{sessionChannel?.postMessage({type:'signed-out'});}catch{}
+ afterSignOut();
 };
 const number=s=>{const[a,b]=String(s).split('.');return a.replace(/\B(?=(\d{3})+(?!\d))/g,',')+(b?'.'+b.replace(/0+$/,'').padEnd(2,'0'):'');};
 const displayAbiq=s=>typeof s==='string'&&/^TN\d{2}AVIP000\d{15}$/.test(s)?s.slice(0,14)+' '+s.slice(14):s;

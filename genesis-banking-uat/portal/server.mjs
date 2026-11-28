@@ -223,6 +223,18 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     let input;try{input=JSON.parse(raw.toString('utf8'));}catch{fault('INVALID_FIELD',null,400);}
     return send(res,200,await workstationAdmission.handoff(service,input));
    }
+   // The bank owner: "The bank must have login and log off operative" and "The sign in and out must be manually". Sign out ends
+   // this browser's bank session and its sign-in, in whatever state they are - one that already ended included - so it never fails
+   // and never leaves one of them behind; the next visit starts at the sign-in.
+   if(path==='/api/logout'&&req.method==='POST'){
+    const origin=req.headers.origin;
+    if(!origin||new URL(origin).host!==req.headers.host||!['same-origin','none',undefined].includes(req.headers['sec-fetch-site']))fault('CSRF',null,403);
+    const session=/(?:^|;\s*)avis_session=([A-Za-z0-9_-]+)/.exec(req.headers.cookie||'')?.[1];
+    if(session)await pool.query('DELETE FROM avis_core_v2.operator_sessions WHERE token_hash=$1',[digest(session)]);
+    await workstationAdmission.end(req);
+    res.setHeader('Set-Cookie',[`avis_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secureCookies?'; Secure':''}`,clearWorkstationAdmissionCookie()]);
+    return send(res,200,{});
+   }
    const deskPolicy=privateDesk || process.env.BANK_DESK_ENFORCE==='1';
    // An unsigned browser landing on the private bank starts the existing, signed
    // AVIS email/Authenticator handoff. Do not require a physical workstation
@@ -403,9 +415,12 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
      // Frontend admission proves an approved device, not a bank identity. Only
      // the existing Fineract password/permission check above supplies this actor.
      const token=randomBytes(32).toString('base64url'),csrf=sessionCsrf(token);
+     // No timer of its own ("The sign in and out must be manually"): it lasts as long as the sign-in it was opened under.
+     const ends=new Date(deviceAdmission.grant.expiresAt),life=Math.floor((ends.getTime()-Date.now())/1000);
+     if(!(life>0))fault('BANK_WORKSTATION_REQUIRED',null,403);
      await pool.query('DELETE FROM avis_core_v2.operator_sessions WHERE expires_at<now()');
-     await pool.query("INSERT INTO avis_core_v2.operator_sessions(token_hash,csrf_hash,actor_id,username,is_admin,expires_at,workstation_admission_id) VALUES($1,$2,$3,$4,true,now()+interval '1 hour',$5)",[digest(token),digest(csrf),actor.id,actor.username,deviceAdmission.id]);
-     res.setHeader('Set-Cookie',`avis_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=3600`);
+     await pool.query("INSERT INTO avis_core_v2.operator_sessions(token_hash,csrf_hash,actor_id,username,is_admin,expires_at,workstation_admission_id) VALUES($1,$2,$3,$4,true,$6,$5)",[digest(token),digest(csrf),actor.id,actor.username,deviceAdmission.id,ends.toISOString()]);
+     res.setHeader('Set-Cookie',`avis_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${life}`);
      return send(res,200,{username:actor.username,csrf,admin:true,customerUserId:null,canSwitchWorkspace:true,finTerminal:await finTerminalOf(true)});
     }
     if(actor.admin&&deskPolicy){
@@ -431,7 +446,13 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(!session)fault('UNAUTHORIZED',null,401);
    if(privateDesk&&!session.is_admin)fault('FORBIDDEN',null,403);
    if(session.workstation_admission_id){
-    if(!privateDesk||!session.is_admin||!await workstationAdmission.matchesSession(session.workstation_admission_id,deviceAdmission))fault('BANK_WORKSTATION_REQUIRED',null,403);
+    if(!privateDesk||!session.is_admin||!deviceAdmission)fault('BANK_WORKSTATION_REQUIRED',null,403);
+    // A bank session of an earlier sign-in on this browser, signed in again since: the bank's own sign-in is asked again
+    // (401) - never the AVIS sign-in once more in a circle.
+    if(!await workstationAdmission.matchesSession(session.workstation_admission_id,deviceAdmission)){
+     await pool.query('DELETE FROM avis_core_v2.operator_sessions WHERE token_hash=$1',[digest(token)]);
+     fault('UNAUTHORIZED',null,401);
+    }
    }else if(session.is_admin&&(deskPolicy||session.workstation_sha256)){
     if(!privateDesk||!session.workstation_approval||session.workstation_sha256!==fingerprint)fault('BANK_WORKSTATION_REQUIRED',null,403);
     const admission=await contactIncubator('admit',{fp:fingerprint,actor:session.actor_id,generation:session.workstation_approval});
@@ -580,10 +601,6 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(path==='/api/crypto/basket/policy')return send(res,200,await basket.setPolicy(actor,body,req.headers['idempotency-key']));
    if(path==='/api/crypto/basket/lot')return send(res,200,await basket.registerLot(actor,body,req.headers['idempotency-key']));
    if(path==='/api/crypto/basket/card-terms')return send(res,200,await basket.setCard(actor,body,req.headers['idempotency-key']));
-   if(path==='/api/logout'){
-    await pool.query('DELETE FROM avis_core_v2.operator_sessions WHERE token_hash=$1',[digest(token)]);
-    res.setHeader('Set-Cookie',`avis_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secureCookies?'; Secure':''}`);return send(res,200,{});
-   }
    if(path==='/api/workspace'){
     if(!session.is_admin)fault('FORBIDDEN',null,403);
     const id=body.userId||null;

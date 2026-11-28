@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {JSDOM} from 'jsdom';
 import {checkoutIpAdminControls} from '../public/checkout-ip.mjs';
-import {finTerminalControls,createFinTerminalSwitch,finTerminalWindowFeatures,FIN_TERMINAL_PATH,FIN_TERMINAL_WINDOW} from '../public/fin-terminal-switch.mjs';
+import {finTerminalControls,createFinTerminalSwitch,finTerminalWindowFeatures,FIN_TERMINAL_PATH,FIN_TERMINAL_WINDOW,FIN_TERMINAL_CHANNEL,FIN_TERMINAL_RETURN} from '../public/fin-terminal-switch.mjs';
 import {startFinTerminal} from '../public/fin-terminal.mjs';
 import {createBankServer} from '../server.mjs';
 
@@ -84,13 +84,24 @@ const channels=new Set();
 class Channel extends BroadcastChannel{constructor(name){super(name);channels.add(this);}close(){channels.delete(this);super.close();}}
 const letChannelsGo=()=>{for(const channel of [...channels])channel.close();};
 const settle=()=>new Promise(resolve=>setTimeout(resolve,50));
-async function terminalPage(session){
+// The terminal's window: opened by the bank's page (opener) or a tab of its own. The bank's answer to /api/session is
+// state.session - null for none (state.status), undefined when the bank is not reached.
+async function terminalPage(session,{opener=null}={}){
  const html=await readFile(new URL('../public/fin-terminal.html',import.meta.url),'utf8');
- const dom=new JSDOM(html,{url:'https://bank.example/fin-terminal'}),asked=[],state={session,closed:0};
- const fetcher=async(...args)=>{asked.push(args);return state.session===null?{ok:false,status:401,json:async()=>({})}:{ok:true,json:async()=>state.session};};
- const windowApi={BroadcastChannel:Channel,addEventListener:(...args)=>dom.window.addEventListener(...args),close(){state.closed++;}};
+ const dom=new JSDOM(html,{url:'https://bank.example/fin-terminal'}),asked=[],state={session,status:401,closed:0,went:[],logout:{ok:true,status:200}};
+ const fetcher=async(...args)=>{
+  asked.push(args);
+  if(args[0]==='/api/logout')return {...state.logout,json:async()=>({})};
+  if(args[0]==='/api/session'&&state.session===undefined)throw new TypeError('fetch failed');
+  return state.session===null?{ok:false,status:state.status,json:async()=>({})}:{ok:true,json:async()=>state.session};
+ };
+ // A window the bank's page opened closes; the browser leaves a tab of its own open.
+ const windowApi={BroadcastChannel:Channel,addEventListener:(...args)=>dom.window.addEventListener(...args),opener,closed:false,
+  close(){state.closed++;if(opener)windowApi.closed=true;},setTimeout:fn=>setTimeout(fn,0),sessionStorage:dom.window.sessionStorage,
+  location:{replace(url){state.went.push(url);}}};
  const terminal=await startFinTerminal({root:dom.window.document,fetcher,windowApi});
- return {dom,doc:dom.window.document,asked,terminal,state,hidden:()=>dom.window.document.querySelector('[data-fin-terminal]').hidden,close(){letChannelsGo();dom.window.close();}};
+ return {dom,doc:dom.window.document,asked,terminal,state,hidden:()=>dom.window.document.querySelector('[data-fin-terminal]').hidden,
+  back:()=>dom.window.sessionStorage.getItem(FIN_TERMINAL_RETURN),close(){letChannelsGo();dom.window.close();}};
 }
 
 // The bank owner: "Only authorised user gets access and these must be named" - an administrator without FinTerminal access sees nothing.
@@ -98,16 +109,63 @@ test('the terminal shows itself to a signed-in bank administrator with FinTermin
  for(const [session,shown] of [[{admin:true,finTerminal:true,username:'operator'},true],[{admin:true,finTerminal:false,username:'operator without access'},false],[{admin:true,username:'operator'},false],
   [{admin:false,finTerminal:true,username:'customer'},false],[null,false]]){
   const t=await terminalPage(session);try{
+   await settle();
    assert.equal(t.asked[0][0],'/api/session');assert.equal(t.asked[0][1].credentials,'same-origin');
    assert.equal(t.hidden(),!shown);
-   // Never shown: nothing to close.
-   assert.equal(t.state.closed,0);
+   // Never shown: it goes to the bank's sign-in rather than stay an empty page, and comes back once signed in (app.mjs).
+   assert.deepEqual(t.state.went,shown?[]:['/']);assert.equal(t.back(),shown?null:FIN_TERMINAL_PATH);assert.equal(t.state.closed,0);
+  }finally{t.close();}
+ }
+});
+
+// Reported directly, with a picture of the dark terminal: "After I created the PIN the page took off and I could not restart".
+test('a terminal in a tab of its own whose sign-in ended goes to the sign-in at once, never staying dark',async()=>{
+ for(const status of [401,403]){
+  const t=await terminalPage({admin:true,finTerminal:true,csrf:'fixture-csrf'});try{
+   await settle();assert.equal(t.hidden(),false);assert.deepEqual(t.state.went,[]);
+   t.state.session=null;t.state.status=status;
+   // Found out by its own next request as well as when it comes forward.
+   await assert.rejects(t.terminal.request('GET','/api/fin-terminal/telemetry'));await settle();
+   assert.equal(t.hidden(),true);assert.deepEqual(t.state.went,['/']);assert.equal(t.back(),FIN_TERMINAL_PATH);
+   t.dom.window.dispatchEvent(new t.dom.window.Event('focus'));await settle();assert.deepEqual(t.state.went,['/'],'it leaves once');
+  }finally{t.close();}
+ }
+});
+
+test('a terminal that cannot reach the bank stays as it is, its work kept',async()=>{
+ const t=await terminalPage({admin:true,finTerminal:true},{opener:{}});try{
+  await settle();
+  for(const [session,status] of [[undefined,401],[null,502]]){
+   Object.assign(t.state,{session,status});
+   t.dom.window.dispatchEvent(new t.dom.window.Event('focus'));await settle();
+   assert.equal(t.hidden(),false);assert.equal(t.state.closed,0);assert.deepEqual(t.state.went,[]);
+  }
+ }finally{t.close();}
+});
+
+// The bank owner: "The bank must have login and log off operative" and "The sign in and out must be manually".
+test('Sign out at the foot of the terminal ends the bank sign-in, tells every bank page, and leaves for good',async()=>{
+ const html=await readFile(new URL('../public/fin-terminal.html',import.meta.url),'utf8'),foot=new JSDOM(html).window.document;
+ assert.equal(foot.querySelector('[data-fin-terminal] > footer.fin-terminal-foot:last-child [data-fin-sign-out]').textContent,'Sign out');
+ for(const opener of [null,{}]){
+  const heard=[],listener=new Channel(FIN_TERMINAL_CHANNEL);listener.onmessage=({data})=>heard.push(data);
+  const t=await terminalPage({admin:true,finTerminal:true,csrf:'fixture-csrf'},{opener});try{
+   await settle();const out=t.doc.querySelector('[data-fin-sign-out]');
+   // Refused, it says so and stays.
+   t.state.logout={ok:false,status:500};out.click();await settle();
+   assert.equal(t.hidden(),false);assert.equal(out.disabled,false);assert.equal(out.textContent,'Not signed out - try again');assert.deepEqual(heard,[]);
+   t.state.logout={ok:true,status:200};out.click();await settle();
+   const [path,init]=t.asked.filter(([path])=>path==='/api/logout').at(-1);
+   assert.equal(path,'/api/logout');assert.equal(init.method,'POST');assert.equal(init.credentials,'same-origin');assert.equal(init.headers['x-csrf-token'],'fixture-csrf');
+   assert.deepEqual(heard,[{type:'signed-out'}]);assert.equal(t.hidden(),true);
+   // Signed out by hand, nothing brings it back: the window the bank's page opened closes, a tab of its own goes to the sign-in.
+   assert.equal(t.back(),null);assert.equal(t.state.closed,opener?1:0);assert.deepEqual(t.state.went,opener?[]:['/']);
   }finally{t.close();}
  }
 });
 
 test('a terminal the bank page lost its handle on with a reload closes when the bank signs out (Codex review finding, P2)',async()=>{
- const t=await terminalPage({admin:true,finTerminal:true});try{
+ const t=await terminalPage({admin:true,finTerminal:true},{opener:{}});try{
   // The bank page reloaded: a new switch with no handle on the open terminal.
   const page=new JSDOM('<!doctype html><body><div id="view">'+finTerminalControls()+'</div></body>',{url:'https://bank.example/#payments'});
   const controller=createFinTerminalSwitch({root:page.window.document,windowApi:{BroadcastChannel:Channel,screen,open:assert.fail,setInterval:assert.fail,clearInterval(){}}});
@@ -117,16 +175,16 @@ test('a terminal the bank page lost its handle on with a reload closes when the 
   assert.equal(t.hidden(),false);assert.equal(t.state.closed,0);
   // Signed out (the session ended first): the terminal closes.
   t.state.session=null;controller.close();await settle();
-  assert.equal(t.hidden(),true);assert.equal(t.state.closed,1);
+  assert.equal(t.hidden(),true);assert.equal(t.state.closed,1);assert.deepEqual(t.state.went,[]);
   page.window.close();
  }finally{t.close();}
 });
 
 test('a workspace changed to a customer, or a sign-in ended while the terminal was in the background, closes the terminal when it comes forward',async()=>{
  for(const session of [{admin:false,username:'customer workspace'},{admin:true,finTerminal:false,username:'FinTerminal access taken away'},null]){
-  const t=await terminalPage({admin:true,finTerminal:true});try{
+  const t=await terminalPage({admin:true,finTerminal:true},{opener:{}});try{
    t.state.session=session;t.dom.window.dispatchEvent(new t.dom.window.Event('focus'));await settle();
-   assert.equal(t.hidden(),true);assert.equal(t.state.closed,1);
+   assert.equal(t.hidden(),true);assert.equal(t.state.closed,1);assert.deepEqual(t.state.went,[]);
   }finally{t.close();}
  }
 });

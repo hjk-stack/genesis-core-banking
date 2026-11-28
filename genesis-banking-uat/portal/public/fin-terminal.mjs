@@ -1,4 +1,4 @@
-import {FIN_TERMINAL_CHANNEL} from './fin-terminal-switch.mjs';
+import {FIN_TERMINAL_CHANNEL,FIN_TERMINAL_PATH,FIN_TERMINAL_RETURN} from './fin-terminal-switch.mjs';
 import {createFinComposer} from './fin-composer.mjs';
 import {createFinPeer} from './fin-peer.mjs';
 import {createFinSettlement} from './fin-settlement.mjs';
@@ -14,6 +14,14 @@ export async function administratorSession(fetcher=fetch){
  catch{return null;}
 }
 export const administrator=async(fetcher=fetch)=>(await administratorSession(fetcher))!==null;
+// The sign-in as the bank answers it: the session; null once the bank says there is none for the terminal (401, 403, or no
+// FinTerminal access); undefined when the bank was not reached - the terminal then stays as it is.
+export async function signInOf(fetcher=fetch){
+ let response;
+ try{response=await fetcher('/api/session',{credentials:'same-origin',cache:'no-store'});}catch{return undefined;}
+ if(!response.ok)return [401,403].includes(response.status)?null:undefined;
+ try{const session=await response.json();return session?.admin===true&&session.finTerminal===true?session:null;}catch{return undefined;}
+}
 
 export async function startFinTerminal({root=document,fetcher=fetch,windowApi=root.defaultView}={}){
  const terminal=root.querySelector('[data-fin-terminal]'),tabs=[...root.querySelectorAll('[data-fin-screen-tab]')];
@@ -30,22 +38,38 @@ export async function startFinTerminal({root=document,fetcher=fetch,windowApi=ro
   };
  }
  // Its sign-in is checked again whenever the bank signs in, out or changes workspace (fin-terminal-switch.mjs announces it,
- // from any of its pages) and whenever the terminal comes forward; a terminal whose administrator sign-in has ended closes.
- let checks=0,shown=false,csrf='',composer=null,peer=null,settlement=null,wire=null,access=null;
- async function check(){
-  const serial=++checks,session=await administratorSession(fetcher);if(serial!==checks)return;
-  terminal.hidden=!session;csrf=session?.csrf||'';
-  if(session){
-   shown=true;
-   if(!composer){composer=createFinComposer({root,request});composer?.start();peer=createFinPeer({root,request});void peer?.start();settlement=createFinSettlement({root,request});settlement?.start();createFinConverter({root,request})?.start();
-    // A wire dispatched shows at once in the ledgers and in Screen A's stream; its PINs follow the 4-Eyes switch.
-    wire=createFinWire({root,request,onDispatched:()=>{void settlement?.refresh();void peer?.look();},onRefused:()=>void access?.refresh()});
-    access=createFinAccess({root,request,onState:state=>wire?.access(state)});access?.start();void wire?.start();}
-   return;
-  }
-  // Closed once: the terminal's other requests that find the sign-in ended do not close it again.
-  if(shown){shown=false;try{windowApi.close();}catch{}}
+ // from any of its pages) and whenever the terminal comes forward.
+ let checks=0,csrf='',composer=null,peer=null,settlement=null,wire=null,access=null,leaving=false;
+ // Reported directly, with a picture of the dark terminal: "After I created the PIN the page took off and I could not restart".
+ // A terminal without its sign-in never stays dark: the one the desk opened closes (the desk goes to the sign-in itself); any
+ // other goes to the sign-in, the desk's page, and - unless it was signed out here - comes back once signed in again (app.mjs).
+ function leave(back){
+  leaving=true;terminal.hidden=true;
+  if(back)try{windowApi.sessionStorage.setItem(FIN_TERMINAL_RETURN,FIN_TERMINAL_PATH);}catch{}
+  try{if(windowApi.opener)windowApi.close();}catch{}
+  windowApi.setTimeout(()=>{if(!windowApi.closed)windowApi.location.replace('/');},300);
  }
+ async function check(){
+  const serial=++checks,session=await signInOf(fetcher);if(serial!==checks||session===undefined||leaving)return;
+  if(!session)return leave(true);
+  terminal.hidden=false;csrf=session.csrf||'';
+  if(!composer){composer=createFinComposer({root,request});composer?.start();peer=createFinPeer({root,request});void peer?.start();settlement=createFinSettlement({root,request});settlement?.start();createFinConverter({root,request})?.start();
+   // A wire dispatched shows at once in the ledgers and in Screen A's stream; its PINs follow the 4-Eyes switch.
+   wire=createFinWire({root,request,onDispatched:()=>{void settlement?.refresh();void peer?.look();},onRefused:()=>void access?.refresh()});
+   access=createFinAccess({root,request,onState:state=>wire?.access(state)});access?.start();void wire?.start();}
+ }
+ // Sign out by hand ("The bank must have login and log off operative"): the bank session and its sign-in end (server.mjs
+ // /api/logout), every bank page of this browser is told, and this one leaves. Refused, it says so and stays.
+ const out=root.querySelector('[data-fin-sign-out]');
+ if(out)out.onclick=async()=>{
+  if(out.disabled)return;out.disabled=true;
+  try{
+   const response=await fetcher('/api/logout',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'content-type':'application/json','x-csrf-token':csrf},body:'{}'});
+   if(!response.ok)throw new Error();
+  }catch{out.disabled=false;out.textContent='Not signed out - try again';return;}
+  try{const channel=new windowApi.BroadcastChannel(FIN_TERMINAL_CHANNEL);channel.postMessage({type:'signed-out'});channel.close();}catch{}
+  leave(false);
+ };
  // The terminal's own requests go with the bank's sign-in and, to change anything, its CSRF token; a sign-in that ended
  // is found out at once.
  async function request(method,path,body){
@@ -55,7 +79,7 @@ export async function startFinTerminal({root=document,fetcher=fetch,windowApi=ro
   if([401,403].includes(response.status))void check();
   throw Object.assign(new Error(data?.message||'This action could not be completed.'),{code:data?.code,field:data?.field,status:response.status});
  }
- try{const channel=new windowApi.BroadcastChannel(FIN_TERMINAL_CHANNEL);channel.onmessage=({data})=>{if(data?.type==='session-changed')void check();};}catch{}
+ try{const channel=new windowApi.BroadcastChannel(FIN_TERMINAL_CHANNEL);channel.onmessage=({data})=>{if(['session-changed','signed-out'].includes(data?.type))void check();};}catch{}
  windowApi.addEventListener('focus',()=>void check());
  await check();
  return {show,check,request};

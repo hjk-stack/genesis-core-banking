@@ -4,6 +4,8 @@
 export const FIN_TERMINAL_PATH='/fin-terminal';
 export const FIN_TERMINAL_WINDOW='avis-fin-terminal';
 export const FIN_TERMINAL_CHANNEL='avis-fin-terminal-session';
+// A FinTerminal whose sign-in had ended went to the sign-in from here; signed in again, the desk brings it back (app.mjs).
+export const FIN_TERMINAL_RETURN='avisFinTerminalAfterSignIn';
 
 export function finTerminalControls(){
  return '<section class="panel ip-admin-controls fin-terminal-controls" data-fin-terminal-controls aria-label="FinTerminal administrator controls">'+

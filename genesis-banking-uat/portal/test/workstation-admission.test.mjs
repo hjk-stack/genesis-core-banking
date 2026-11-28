@@ -1,7 +1,7 @@
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
-import {WorkstationAdmission,WORKSTATION_BANK_ORIGIN} from '../src/workstation-admission.mjs';
+import {WorkstationAdmission,WORKSTATION_BANK_ORIGIN,WORKSTATION_ADMISSION_SECONDS} from '../src/workstation-admission.mjs';
 import {startWorkstationAdmissionFixture,handoffPath,cookiePair,navigationHeaders,loginRequest} from './helpers/workstation-admission-fixture.mjs';
 
 let fixture;
@@ -67,7 +67,7 @@ test('signed handoff binds an existing bank state and a bounded non-operator gra
   {state:randomBytes(32).toString('base64url')},
   {codeChallenge:randomBytes(32).toString('base64url')},
   {expiresAt:new Date(Date.now()-1).toISOString()},
-  {expiresAt:new Date(Date.now()+3700000).toISOString()},
+  {expiresAt:new Date(Date.now()+(WORKSTATION_ADMISSION_SECONDS+3600)*1000).toISOString()},
   {actor:'fineract:1'}, {admin:true}, {statusUrl:'https://other.invalid/'},
   {approvalId:'not-a-real-approval-id'}
  ])denied((await fixture.issue(pending,patch)).response);
@@ -147,11 +147,53 @@ test('bank login origin/CSRF rules remain independent from the signed service ex
  assert.equal(cross.status,403);assert.equal(json(cross).code,'CSRF');
  const login=await fixture.request('/api/login',loginRequest(admission.cookie));assert.equal(login.status,200);
  const cookie=admission.cookie+'; '+cookiePair(login.headers['set-cookie'][0]);
- const logout=await fixture.request('/api/logout',{method:'POST',headers:{cookie,origin:WORKSTATION_BANK_ORIGIN,'content-type':'application/json'},body:'{}'});
- assert.equal(logout.status,403);assert.equal(json(logout).code,'CSRF');
- const allowed=await fixture.request('/api/logout',{method:'POST',headers:{cookie,origin:WORKSTATION_BANK_ORIGIN,'content-type':'application/json','x-csrf-token':json(login).csrf},body:'{}'});
+ // Sign out is this bank's own same-origin request only: another site can never sign it out.
+ for(const headers of [{origin:'https://avis.land','sec-fetch-site':'cross-site'},{'sec-fetch-site':'same-origin'},{origin:WORKSTATION_BANK_ORIGIN,'sec-fetch-site':'same-site'}]){
+  const refused=await fixture.request('/api/logout',{method:'POST',headers:{cookie,'content-type':'application/json',...headers},body:'{}'});
+  assert.equal(refused.status,403);assert.equal(json(refused).code,'CSRF');
+ }
+ assert.equal((await fixture.request('/api/session',{headers:{cookie}})).status,200);
+ const allowed=await fixture.request('/api/logout',{method:'POST',headers:{cookie,origin:WORKSTATION_BANK_ORIGIN,'content-type':'application/json','sec-fetch-site':'same-origin','x-csrf-token':json(login).csrf},body:'{}'});
  assert.equal(allowed.status,200);
- assert.equal((await fixture.request('/api/session',{headers:{cookie}})).status,401);
+ denied(await fixture.request('/api/session',{headers:{cookie}}));
+});
+
+// The bank owner: "The bank must have login and log off operative" and "The sign in and out must be manually".
+test('sign out ends the bank session and its sign-in at once, in whatever state they are',async()=>{
+ const admission=await fixture.admit(),login=await fixture.request('/api/login',loginRequest(admission.cookie));
+ const bankCookie=cookiePair(login.headers['set-cookie'][0]),cookie=admission.cookie+'; '+bankCookie;
+ const signOut=headers=>fixture.request('/api/logout',{method:'POST',headers:{origin:WORKSTATION_BANK_ORIGIN,'content-type':'application/json','sec-fetch-site':'same-origin',...headers},body:'{}'});
+ const out=await signOut({cookie});assert.equal(out.status,200);
+ assert.ok(out.headers['set-cookie'].some(value=>/^avis_session=;.*Max-Age=0/.test(value)));
+ assert.ok(out.headers['set-cookie'].some(value=>/^__Host-avis_bank_admission=;.*Max-Age=0/.test(value)));
+ const count=async(table,value)=>(await fixture.pool.query(`SELECT count(*)::int AS n FROM avis_core_v2.${table} WHERE token_hash=$1`,[hash(value.split('=')[1])])).rows[0].n;
+ assert.equal(await count('workstation_device_admissions',admission.cookie),0);assert.equal(await count('operator_sessions',bankCookie),0);
+ // Its next visit starts at the sign-in, never on a dark page.
+ const next=await fixture.request('/',{headers:{cookie,...navigationHeaders}});
+ assert.equal(next.status,303);assert.equal(next.headers.location,'/access/start');
+ const terminal=await fixture.request('/fin-terminal',{headers:{cookie,...navigationHeaders}});
+ assert.equal(terminal.status,303);assert.equal(terminal.headers.location,'/access/start');
+ denied(await fixture.request('/api/session',{headers:{cookie}}));
+ // A sign-in without its bank session, one already ended, and a browser with nothing left sign out all the same.
+ const alone=await fixture.admit();assert.equal((await signOut({cookie:alone.cookie})).status,200);
+ assert.equal(await count('workstation_device_admissions',alone.cookie),0);
+ const ended=await fixture.admit();
+ await fixture.pool.query("UPDATE avis_core_v2.workstation_device_admissions SET expires_at=now()-interval '1 second' WHERE token_hash=$1",[hash(ended.cookie.split('=')[1])]);
+ assert.equal((await signOut({cookie:ended.cookie})).status,200);assert.equal(await count('workstation_device_admissions',ended.cookie),0);
+ assert.equal((await signOut({})).status,200);
+});
+
+test('a sign-in has no timer of its own: AVIS bounds it, and its bank session lasts exactly as long',async()=>{
+ const days=30,ends=new Date(Date.now()+days*86400000).toISOString(),admission=await fixture.admit({expiresAt:ends});
+ const ages=values=>values.map(value=>Number(/Max-Age=(\d+)/.exec(value)?.[1]));
+ const [kept]=ages(admission.complete.headers['set-cookie'].filter(value=>value.startsWith('__Host-avis_bank_admission=')));
+ assert.ok(kept>days*86400-60&&kept<=days*86400,'the sign-in is kept for the time AVIS gave it');
+ const login=await fixture.request('/api/login',loginRequest(admission.cookie));assert.equal(login.status,200);
+ const [lasts]=ages(login.headers['set-cookie']),bankCookie=cookiePair(login.headers['set-cookie'][0]);
+ assert.ok(lasts>days*86400-60&&lasts<=days*86400,'no hour of its own on the bank session');
+ const stored=(await fixture.pool.query('SELECT expires_at FROM avis_core_v2.operator_sessions WHERE token_hash=$1',[hash(bankCookie.split('=')[1])])).rows[0];
+ assert.equal(new Date(stored.expires_at).toISOString(),ends);
+ assert.equal((await fixture.request('/api/session',{headers:{cookie:admission.cookie+'; '+bankCookie}})).status,200);
 });
 
 test('current approval, generation, expiry, and reachable authority are checked on every request',async()=>{
@@ -173,7 +215,10 @@ test('a new tab on the same approved device preserves its password session, anot
  const same=await fixture.admit(Object.fromEntries(['principal','deviceId','approvalId','generation'].map(key=>[key,first.issued.value[key]])));
  assert.equal((await fixture.request('/api/session',{headers:{cookie:same.cookie+'; '+bankCookie}})).status,200);
  const other=await fixture.admit({principal:first.issued.value.principal});
- denied(await fixture.request('/api/session',{headers:{cookie:other.cookie+'; '+bankCookie}}));
+ // Asked for the bank's own sign-in again (401) - never the AVIS sign-in once more in a circle - and the session it brought ends.
+ const reused=await fixture.request('/api/session',{headers:{cookie:other.cookie+'; '+bankCookie}});
+ assert.equal(reused.status,401);assert.equal(json(reused).code,'UNAUTHORIZED');
+ assert.equal((await fixture.request('/api/session',{headers:{cookie:first.cookie+'; '+bankCookie}})).status,401);
 });
 
 test('anonymous bootstrap rate limiting stops writes and expires its bounded memory buckets',async()=>{

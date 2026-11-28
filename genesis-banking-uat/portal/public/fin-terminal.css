@@ -6,6 +6,11 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
 .fin-terminal{display:flex;flex-direction:column;height:100vh}
 .fin-terminal-bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px 24px;padding:12px 18px;background:var(--fin-panel);border-bottom:1px solid var(--fin-line)}
 .fin-terminal-bar h1{margin:0;font-size:16px;font-weight:650;letter-spacing:.01em;white-space:nowrap}
+/* The bank owner: "The bank must have login and log off operative" - Sign out at the foot of the terminal, on every screen (never in
+   an upper corner, which stays free for the device). */
+.fin-terminal-foot{display:flex;justify-content:flex-end;padding:4px 18px 8px;margin-top:auto}
+.fin-terminal-foot button{padding:5px 12px;border:1px solid var(--fin-line);border-radius:7px;background:var(--fin-panel);color:var(--fin-text);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.fin-terminal-foot button:hover{border-color:var(--fin-orange)}
 .fin-terminal-screens{display:flex;gap:6px;min-width:0;overflow-x:auto;scrollbar-width:none}
 /* The specification v3's top bar: the ROBOTIC STP / MANUAL INTERVENTION switch and the listening port's running time. */
 .fin-stp{flex:0 0 auto;padding:6px 12px;border:1px solid var(--fin-orange);border-radius:7px;background:rgba(245,159,11,.12);color:var(--fin-orange);font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;cursor:pointer;white-space:nowrap}
