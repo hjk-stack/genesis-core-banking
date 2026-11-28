@@ -1,0 +1,102 @@
+name: Repair AVISPay bank login (image-only)
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/deploy-bank-login-repair.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  verify-login:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+          cache-dependency-path: genesis-banking-uat/portal/package-lock.json
+      - name: Install bank dependencies
+        working-directory: genesis-banking-uat/portal
+        run: npm ci --no-audit --no-fund
+      - name: Verify unchanged private banking APIs and signed login entry
+        working-directory: genesis-banking-uat/portal
+        run: |
+          node --check server.mjs
+          node --check src/workstation-admission.mjs
+          node --test --test-concurrency=1 test/staff-access-page.test.mjs test/workstation-admission.test.mjs
+      - name: Verify login in Chromium on phone, tablet, desktop
+        working-directory: genesis-banking-uat/portal
+        run: |
+          npx playwright install --with-deps chromium
+          node --test test-browser/staff-access-page.mjs
+
+  activate-login:
+    needs: verify-login
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    concurrency:
+      group: avispay-existing-uat-application
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: aab5c083-8b0a-408b-aef7-89611822d66c
+          tenant-id: 12f3ab80-cea3-41dd-bdee-47c009cbc960
+          subscription-id: 24a900e4-ee6b-42c0-87c7-e3425bd74cf8
+      - name: Publish image for the existing bank application
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp show -g genesis-banking-rg -n genesis-banking-uat -o none
+          SERVER="$(az acr show -g genesis-banking-rg -n genesisbankingacr --query loginServer -o tsv)"
+          az acr login -n genesisbankingacr
+          IMAGE="$SERVER/avispay-sovereign:$GITHUB_SHA"
+          docker build -t "$IMAGE" genesis-banking-uat/portal
+          docker push "$IMAGE"
+          echo "AVISPAY_LOGIN_IMAGE=$IMAGE" >> "$GITHUB_ENV"
+      - name: Update image only and verify bank sign-in is live
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="genesis-banking-rg"
+          APP="genesis-banking-uat"
+          PREVIOUS="$(az containerapp show -g "$RG" -n "$APP" --query 'properties.template.containers[0].image' -o tsv)"
+          test -n "$PREVIOUS"
+          test -n "$AVISPAY_LOGIN_IMAGE"
+          az containerapp update -g "$RG" -n "$APP" --image "$AVISPAY_LOGIN_IMAGE" -o none
+          matched=0
+          for i in {1..24}; do
+            current="$(az containerapp show -g "$RG" -n "$APP" --query 'properties.template.containers[0].image' -o tsv)"
+            if [ "$current" = "$AVISPAY_LOGIN_IMAGE" ]; then
+              headers="$(mktemp)"
+              if curl --silent --show-error --max-time 10 --dump-header "$headers" --output /dev/null \
+                  -H 'Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.8' \
+                  -H 'Sec-Fetch-Mode: navigate' -H 'Sec-Fetch-Dest: document' \
+                  https://bank.avispay.online/; then
+                status="$(awk 'toupper($1) ~ /^HTTP/ {print $2}' "$headers" | tail -n 1)"
+                location="$(awk 'tolower($1) == "location:" {gsub("\r",""); print $2}' "$headers" | tail -n 1)"
+                if [ "$status" = "303" ] && [ "$location" = "/access/start" ]; then
+                  matched=1
+                  echo "Bank login restored: bank.avispay.online/ -> /access/start (303)."
+                  rm -f "$headers"
+                  break
+                fi
+                echo "Bank login HTTP $status; login destination verified: $([ "$location" = "/access/start" ] && echo yes || echo no)."
+              fi
+              rm -f "$headers"
+            fi
+            sleep 10
+          done
+          if [ "$matched" -ne 1 ]; then
+            echo "::error::Bank login smoke verification failed. Restoring previous image."
+            az containerapp update -g "$RG" -n "$APP" --image "$PREVIOUS" -o none
+            exit 1
+          fi
+          echo "Bank application container updated with no change to registry, settings, accounts, or ingress."
