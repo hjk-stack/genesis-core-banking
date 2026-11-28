@@ -36,7 +36,7 @@ export async function openTreasurySource({api,modal,bookingId,isCurrent=()=>true
  const receiptKey=()=>{let prior='',key='';return value=>{const next=JSON.stringify(value);if(next!==prior){prior=next;key=crypto.randomUUID();}return key;};};
 
  function registration(selectedId=source.security_id||'',saved={}){
-  const {el,serial,form}=show(existing(selectedId)?'Edit Treasury portfolio holding':'Register Treasury source in Portfolio',
+  const {el,serial,form}=show(existing(selectedId)?'Edit Treasury portfolio holding':'Complete Treasury holding details',
    `<form><fieldset class="crypto-source-fields">${sourceSummary()}<div class="crypto-form-grid">`+
    select('securityId','Registered security',candidates().map(row=>[row.security_id,row.short_name+' · '+row.isin+' · '+row.currency_code]),'required')+
    '<button type="button" data-source-add-security>＋ Add security details</button><div data-source-metadata></div>'+
@@ -68,7 +68,7 @@ export async function openTreasurySource({api,modal,bookingId,isCurrent=()=>true
    }
    if(position){for(const [name,value]of Object.entries({name:security.name,shortName:security.short_name,isin:security.isin||'',cusip:security.cusip||''}))form.elements[name].value=value;}
    form.querySelector('[data-source-submit]').textContent=position?'Save holding changes':'Register source holding';
-   form.querySelector('[data-source-position]').textContent=position?'Original Treasury source is retained. Edits are recorded against the linked Portfolio holding.':'The original Treasury units will be linked without altering the source booking.';
+   form.querySelector('[data-source-position]').textContent=position?'Edits update the current holding; its original booking reference is retained.':'Complete the existing holding details without recording its units again.';
    calculate();
   };
   sync();if(!existing(selectedId))for(const name of ['issuingPrice','marketPrice'])if(saved[name]!==undefined)form.elements[name].value=saved[name];

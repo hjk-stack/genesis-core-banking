@@ -235,3 +235,29 @@ test('PostgreSQL concurrent source requests create one linked holding and one so
  assert.equal(rows.length,1);assert.equal(rows[0].quantity,'100.000000000000000000');
  assert.equal((await pool.query('SELECT * FROM avis_core_v2.portfolio_movements WHERE position_id=$1',[rows[0].position_id])).rows.length,1);
 });
+
+test('Treasury booking registers a documented manual holding once, atomically, without cash or chain postings',async()=>{
+ const registered=await security(),before=await financialState(),reference='Manual-custody-'+key();
+ const input={sourceMode:'MANUAL',securityId:registered.id,userId:'1',quantity:'80',issuingPrice:'1.5',marketPrice:'2.5',reference};
+ const requestKey=key(),result=await core.bookTreasurySecurity(admin,input,requestKey);
+ const row=await position(result.positionId);
+ assert.equal(row.treasury_booking_id,result.bookingId);assert.equal(row.quantity,'80.000000000000000000');
+ assert.equal((await core.list(admin,'treasurypositions')).find(t=>t.booking_id===result.bookingId).source_system,'MANUAL_TREASURY');
+ assert.deepEqual(await core.bookTreasurySecurity(admin,input,requestKey),result);
+ await assert.rejects(core.bookTreasurySecurity(admin,input,key()),/TREASURY_SOURCE_ALREADY_BOOKED/);
+ await assert.rejects(core.bookTreasurySecurity(admin,{...input,reference:'another-'+key()},key()),/TREASURY_SOURCE_ALREADY_BOOKED/);
+ assert.deepEqual(await financialState(),before);
+});
+test('catalogue booking selects the registered instrument, not its issue volume, and existing source links remain immutable',async()=>{
+ // A checksum-valid synthetic ISIN unique to this isolated catalogue test.
+ const registered=await security({kind:'bond',isin:'ZZAVISTEST03',quoteBasis:'PERCENT',denomination:'1000'});
+ await pool.query("UPDATE avis_core_v2.portfolio_securities SET source='GREEN_BOND' WHERE security_id=$1",[registered.id]);
+ const before=await financialState(),input={sourceMode:'CATALOGUE',securityId:registered.id,userId:'1',quantity:'3',issuingPrice:'100',marketPrice:'99',reference:'Databank custody '+key()};
+ const result=await core.bookTreasurySecurity(admin,input,key());
+ assert.equal((await position(result.positionId)).quantity,'3.000000000000000000');
+ assert.equal((await core.list(admin,'treasurypositions')).find(t=>t.booking_id===result.bookingId).source_system,'GREEN_BOND_CATALOGUE');
+ const manual=await security();
+ await assert.rejects(core.bookTreasurySecurity(admin,{...input,securityId:manual.id,reference:key()},key()),/TREASURY_SECURITY_IDENTITY/);
+ await assert.rejects(core.bookTreasurySecurity({...admin,customerUserId:'1'},input,key()),/FORBIDDEN/);
+ assert.deepEqual(await financialState(),before);
+});

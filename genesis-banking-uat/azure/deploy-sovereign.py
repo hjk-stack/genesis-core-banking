@@ -129,6 +129,7 @@ def verify_deployed_frontend(opener, base, sha):
         '/checkout-ip.mjs': 'public/checkout-ip.mjs',
         '/nostro-clearing.mjs': 'public/nostro-clearing.mjs',
         '/crypto-workspace.mjs': 'public/crypto-workspace.mjs',
+        '/rolling-converter-admin.mjs': 'public/rolling-converter-admin.mjs',
         '/treasury-source.mjs': 'public/treasury-source.mjs',
         '/wallet-trading-scroller.mjs': 'public/wallet-trading-scroller.mjs',
         '/wallet-trading-scroller.css': 'public/wallet-trading-scroller.css',

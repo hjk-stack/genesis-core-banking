@@ -10,6 +10,9 @@ const columns=[['name','Name of security'],['portfolio_abiq_iban','Portfolio ABI
 export function securitiesTable(rows,admin){
  return `<section class="panel"><div class="panel-header"><h2>Securities portfolio</h2><span>${rows.length} holdings</span></div><div class="table-wrap"><table><thead><tr>${admin?'<th>Portfolio holder</th>':''}${columns.map(([,t])=>`<th>${t}</th>`).join('')}<th>Actions</th></tr></thead><tbody>${rows.map(r=>`<tr>${admin?`<td>${esc(r.full_name)}</td>`:''}${columns.map(([k])=>`<td>${esc(['denomination','quantity','issuing_price','market_price','portfolio_value'].includes(k)?fmt(r[k]):r[k]||'—')}${['issuing_price','market_price'].includes(k)&&r.quote_basis==='PERCENT'?'%':''}${k==='quantity'&&Number(r.reserved_quantity)>0?`<small class="portfolio-reserved">${esc(fmt(r.reserved_quantity))} reserved</small>`:''}</td>`).join('')}<td class="securities-actions-cell"><div class="actions securities-row-actions" role="group" aria-label="Portfolio trading actions"><button data-security-buy="${esc(r.security_id)}">Buy</button><button data-security-sell="${esc(r.security_id)}" data-holder="${esc(r.user_id)}">Sell</button>${admin?`<button data-position="${esc(r.position_id)}">Edit</button>`:''}</div></td></tr>`).join('')}</tbody></table></div>${!rows.length?'<p class="panel-empty">No securities recorded yet.</p>':''}</section>`;
 }
+export function treasuryRegisterTable(rows){
+ return '<details class="panel" data-treasury-register><summary class="panel-header">Treasury booking references · '+rows.length+' records</summary><div class="table-wrap"><table><thead><tr>'+['Registered asset','Portfolio ABIQ IBAN','Asset identifier','ISIN','Asset class','Units','Treasury account','Source reference','Booked at','Details'].map(h=>'<th>'+esc(h)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+[r.asset_name,r.portfolio_abiq_iban,r.asset_code,r.isin,r.asset_class,fmt(r.quantity),r.destination,r.source_reference,r.booked_at?new Date(r.booked_at).toLocaleString():''].map(v=>'<td>'+esc(v||'—')+'</td>').join('')+'<td>'+(r.asset_class==='SECURITY'&&r.destination==='TREASURY_PORTFOLIO'?'<button type="button" data-register-treasury="'+esc(r.booking_id)+'">'+(r.position_id?'Open holding':'Register source holding')+'</button>':'—')+'</td></tr>').join('')+'</tbody></table></div><p class="form-error" role="alert" data-stock-register-error></p></details>';
+}
 export function stockRegisterTable(sources,positions){
  const stocks=(sources||[]).filter(source=>source.asset_class==='SECURITY'&&source.asset_code==='AVISPAY-PLC-SHARES');
  if(!stocks.length)return '';
@@ -92,15 +95,54 @@ export function createPortfolio({api,getRows,data,refresh,notice,actionError=err
   q('[data-add-security]')?.addEventListener('click',()=>{draft=values();void addSecurity('RECORD');});
   form().onsubmit=async e=>{e.preventDefault();if(busy)return;setBusy(true);const serial=epoch;try{await api('portfolio/positions',{...values(),userId:p?.user_id||els().userId.value,securityId:p?.security_id||els().securityId.value,version:p?.version},requestKey);if(serial!==epoch)return;close();notice('Portfolio holding saved.');await refresh();}catch(e){if(serial===epoch)error(e);}finally{if(serial===epoch)setBusy(false);}};
  }
+ async function openTreasuryBooking(selected='',restored=null){
+  if(!isAdmin())return;
+  const catalogueError=await ensureBookingCatalogue();
+  if(!await dependencies())return;
+  mode='TREASURY';busy=false;requestKey=crypto.randomUUID();
+  const institutions=data('customers').filter(c=>c.account_role==='INSTITUTION');
+  shell('Book security holding','<form><div class="portfolio-fields">'+
+   select('sourceMode','Source',[['CATALOGUE','Green Bond Databank / registered catalogue'],['MANUAL','Manual Treasury booking']],'required')+
+   select('userId','Treasury holder',institutions.map(c=>[c.user_id,c.full_name]),'required')+
+   select('securityId','Registered security',[],'required')+
+   '<button type="button" data-add-security>＋ Add security details</button><div data-metadata></div><div class="payment-grid">'+
+   input('quantity','Held quantity','required inputmode="decimal"')+
+   input('issuingPrice','Issuing price','required inputmode="decimal"')+
+   input('marketPrice','Market price','required inputmode="decimal"')+
+   input('portfolioValue','Portfolio value','readonly')+'</div><p data-price-basis></p>'+
+   input('reference','Custody / source booking reference','required maxlength="128"')+
+   '</div><p class="payment-error" role="alert"></p><div class="payment-footer"><button type="submit" class="primary">Book holding</button></div></form>');
+  els().sourceMode.value=restored?.sourceMode||'CATALOGUE';
+  if(institutions.length===1)els().userId.value=institutions[0].user_id;
+  if(restored)for(const[n,v]of Object.entries(restored))if(n!=='securityId'&&els().namedItem(n))els()[n].value=v;
+  const sync=()=>{const s=security();q('[data-metadata]').innerHTML=metadata(s);q('[data-price-basis]').textContent=s?.quote_basis==='PERCENT'?'Prices are % of denomination.':'Prices are per unit.';try{els().portfolioValue.value=portfolioValue(els().quantity.value,s.denomination,els().marketPrice.value,s.quote_basis,s.currency_code);}catch{els().portfolioValue.value='';}};
+  function sourceOptions(chosen=''){
+   const manual=els().sourceMode.value==='MANUAL';
+   els().securityId.innerHTML=option('','Select…')+securities().filter(s=>!['token','crypto'].includes(s.kind)&&(manual||s.source==='GREEN_BOND')).map(s=>option(s.security_id,s.short_name+' · '+(s.isin||s.currency_code))).join('');
+   els().securityId.value=chosen;
+   q('[data-add-security]').hidden=!manual;sync();
+  }
+  sourceOptions(selected||restored?.securityId||'');
+  if(catalogueError&&els().sourceMode.value==='CATALOGUE')q('.payment-error').textContent='Green Bond catalogue refresh: '+catalogueError;
+  els().sourceMode.onchange=()=>{q('.payment-error').textContent='';sourceOptions();};
+  els().securityId.onchange=sync;els().quantity.oninput=sync;els().marketPrice.oninput=sync;
+  q('[data-add-security]').onclick=()=>{draft=values();void addSecurity('TREASURY');};
+  form().onsubmit=async e=>{e.preventDefault();if(busy||!isAdmin()||!form().reportValidity())return;
+   const {portfolioValue:ignored,...input}=values(),serial=epoch;
+   setBusy(true);try{const result=await api('portfolio/treasury-book',input,requestKey);if(serial!==epoch)return;
+    if(!result.bookingId||!result.positionId)throw Error('Treasury booking receipt missing.');
+    close();notice('Treasury security registered.');await refresh();
+   }catch(e){if(serial===epoch)error(e);}finally{if(serial===epoch)setBusy(false);}};
+ }
  async function addSecurity(returnTo='RECORD'){
   mode='ADD';busy=false;requestKey=crypto.randomUUID();shell('Add security',`<form><div class="portfolio-fields">${input('name','Name of security','required maxlength="200"')}${input('shortName','Short name','required maxlength="80"')}<div class="payment-grid">${select('currency','Currency',['EUR','USD','GBP','CHF','SEK','NOK','DKK','PLN','CZK','HUF','RON','AED','SGD','JPY'].map(c=>[c,c]),'required')}${select('kind','Security type',[['bond','Bond'],['note','Note'],['cd','Certificate of deposit'],['share','Share'],['fund','Fund'],['token','Crypto / security token'],['other','Other']],'required')}${input('isin','ISIN','maxlength="12"')}${input('cusip','CUSIP','maxlength="9"')}${input('denomination','Denomination','required inputmode="decimal"')}${select('quoteBasis','Price basis',[['PERCENT','% of denomination'],['UNIT','Price per unit']],'required')}</div></div><p class="payment-error" role="alert"></p><div class="payment-footer"><button type="button" data-return>Back</button><button type="submit" class="primary">Add security</button></div></form>`);
-  const back=async id=>returnTo==='TRADE'?openTrade(draft.direction,id||draft.securityId,draft.holder,{...draft,...(id?{securityId:id}:{} )}):openRecord('',id||draft.securityId,{...draft,...(id?{securityId:id}:{} )});q('[data-return]').onclick=()=>void back();
+  const back=async id=>returnTo==='TRADE'?openTrade(draft.direction,id||draft.securityId,draft.holder,{...draft,...(id?{securityId:id}:{} )}):returnTo==='TREASURY'?openTreasuryBooking(id||draft.securityId,{...draft,sourceMode:'MANUAL',...(id?{securityId:id}:{})}):openRecord('',id||draft.securityId,{...draft,...(id?{securityId:id}:{} )});q('[data-return]').onclick=()=>void back();
   form().onsubmit=async e=>{e.preventDefault();if(busy)return;setBusy(true);const serial=epoch;try{const r=await api('portfolio/securities',values(),requestKey);if(serial!==epoch)return;await back(r.id);}catch(e){if(serial===epoch)error(e);}finally{if(serial===epoch)setBusy(false);}};
  }
  async function viewOrder(id){const serial=++epoch,r=await api('portfolio/orders/'+id);if(serial!==epoch)return;mode='ORDER';busy=false;shell('Exchange order',`<form><div class="portfolio-fields"><div data-review></div><p>${esc(r.status==='FILLED'?'Executed':r.status==='OPEN'?'Open':'Cancelled')}${r.execution_reference?' · '+esc(r.execution_reference):''}</p></div><p class="payment-error" role="alert"></p><div class="payment-footer">${r.status==='OPEN'?'<button type="submit">Cancel order</button>':''}</div></form>`);showReview(r.instruction);const cancelKey=crypto.randomUUID();form().onsubmit=async e=>{e.preventDefault();if(busy||r.status!=='OPEN')return;setBusy(true);try{await api('portfolio/orders/cancel',{orderId:id},cancelKey);if(serial!==epoch)return;close();notice('Order cancelled; reservation released.');await refresh();}catch(e){if(serial===epoch)error(e);}finally{if(serial===epoch)setBusy(false);}};}
  function bind(root){
   root.querySelectorAll('[data-register-treasury]').forEach(button=>button.onclick=()=>fromTreasury(button.dataset.registerTreasury).catch(err=>{
-   const issue=button.closest('[data-stock-register]')?.querySelector('[data-stock-register-error]');
+   const issue=button.closest('[data-stock-register],[data-treasury-register]')?.querySelector('[data-stock-register-error]');
    if(button.isConnected&&issue)issue.textContent=err.message;
   }));
   function bindAction(selector,open){
@@ -114,7 +156,7 @@ export function createPortfolio({api,getRows,data,refresh,notice,actionError=err
   bindAction('[data-security-order]',d=>viewOrder(d.securityOrder));
   bindAction('[data-book-security]',d=>openTrade(d.side,d.bookSecurity,null,{quantity:d.quantity,price:d.price}));
  }
- async function open(action){if(action==='syncsecurities'){const serial=epoch;await api('portfolio/catalogue/sync',{});if(serial!==epoch)return;notice('Green Bond catalogue refreshed.');await refresh();return;}if(action==='recordsecurity')return openRecord();return openTrade(action==='sellsecurity'?'SELL':'BUY');}
+ async function open(action){if(action==='treasurybook')return openTreasuryBooking();if(action==='syncsecurities'){const serial=epoch;await api('portfolio/catalogue/sync',{});if(serial!==epoch)return;notice('Green Bond catalogue refreshed.');await refresh();return;}if(action==='recordsecurity')return openRecord();return openTrade(action==='sellsecurity'?'SELL':'BUY');}
  async function fromExchange(intent){
   const serial=++epoch,r=await api('portfolio/exchange-security',{symbol:intent.symbol});if(serial!==epoch)return;
   await openTrade(intent.side,r.id,null,{...(intent.quantity?{quantity:intent.quantity}:{}),...(intent.price?{price:intent.price}:{}),reference:(intent.side==='BUY'?'Buy ':'Sell ')+intent.symbol});
@@ -126,7 +168,7 @@ export function createPortfolio({api,getRows,data,refresh,notice,actionError=err
   if(serial!==epoch||!isAdmin())return;
   return openTreasurySource({api,bookingId,isCurrent:()=>serial===epoch&&isAdmin(),
    modal:(title,body)=>{shell(title,body);return dialog;},
-   onRegistered:async()=>{if(serial===epoch){close();notice('Treasury source registered in Portfolio.');await refresh();}}
+   onRegistered:async()=>{if(serial===epoch){close();notice('Holding details saved.');await refresh();}}
   });
  }
  function pendingIntent(){
