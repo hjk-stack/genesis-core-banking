@@ -70,6 +70,13 @@ for(const width of [260,390,820,1440])test('the composer on '+(width<500?'a phon
   // A computer shows the XML beside the form, as in the specification; a phone and an iPad one under the other.
   if(width>=1000)assert.ok(look.xml.left>=look.form.right-1,'XML beside the form');else assert.ok(look.xml.top>=look.form.bottom-1,'XML under the form');
   assert.ok(look.actions.right<=width+1&&look.actions.left>=0,'actions inside the window');
+  // Each section's header in its own row inside its box, never on its border (the bank owner: "The Headers ... are all half into the
+  // background as the headers all are too small in height").
+  const headers=await page.locator('.fin-panel:visible').evaluateAll(sets=>sets.map(set=>{const box=set.getBoundingClientRect(),legend=set.querySelector(':scope>legend').getBoundingClientRect(),
+   first=[...set.children].find(child=>child.tagName!=='LEGEND').getBoundingClientRect();
+   return {name:set.querySelector(':scope>legend').textContent,inside:legend.top>=box.top+1&&legend.left>=box.left&&legend.right<=box.right,above:legend.bottom<=first.top+0.5,height:legend.height};}));
+  assert.equal(headers.length,8,'every section of a credit transfer');
+  for(const header of headers)assert.deepEqual({inside:header.inside,above:header.above,tall:header.height>=17},{inside:true,above:true,tall:true},header.name+', '+width);
   await page.screenshot({path:'test-results/fin-composer-'+width+'.png'});
   // Saved, and opened again after the window was reloaded.
   await page.getByRole('button',{name:'Save Draft'}).click();await page.waitForFunction(()=>document.querySelector('[data-fin-draft-state]').textContent==='Draft saved · revision 1');

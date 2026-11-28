@@ -16,7 +16,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  const screen=root.querySelector('[data-fin-composer]');if(!screen)return null;
  const $=selector=>screen.querySelector(selector),inputs=[...screen.querySelectorAll('[data-fin-field]')];
  const xml=$('[data-fin-xml]'),verdict=$('[data-fin-xsd]'),problems=$('[data-fin-errors]'),state=$('[data-fin-draft-state]'),list=$('[data-fin-drafts]');
- const controls=[...screen.querySelectorAll('.fin-actions button,.fin-actions select,[data-fin-new-uetr]')],choices=[...screen.querySelectorAll('[data-fin-choice]')];
+ const controls=[...screen.querySelectorAll('.fin-actions button,.fin-actions select,[data-fin-new-uetr],[data-fin-transact]')],choices=[...screen.querySelectorAll('[data-fin-choice]')];
  const turn=$('[data-fin-direction]'),type=$('[data-fin-field="messageType"]'),mandate=$('[data-fin-mandate]'),register=$('[data-fin-register]'),keep=$('[data-fin-save]');
  const transact=$('[data-fin-transact]'),pinBox=$('[data-fin-transact-pins]'),pins=[...screen.querySelectorAll('[data-fin-transact-pin]')];
  let form=blankForm(),draft=null,dirty=false,edits=0,broken=null,pause=null,busy=false,refused=null,selection=noChoice();
