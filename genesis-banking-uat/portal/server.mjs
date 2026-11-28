@@ -39,7 +39,7 @@ import {FinListener} from './src/fin-listener.mjs';
 
 import {isStaffHost, workstationFingerprint, contactIncubator} from './src/staff-workstation.mjs';
 import {isStaffAccessDocument,sendStaffAccessPage} from './src/staff-access-page.mjs';
-import {WorkstationAdmission,sendWorkstationCompletion} from './src/workstation-admission.mjs';
+import {WorkstationAdmission,sendWorkstationCompletion,clearWorkstationAdmissionCookie} from './src/workstation-admission.mjs';
 const digest=v=>createHash('sha256').update(v).digest('hex');
 // A session-bound token stays valid across tabs and is renewed at every login.
 // The random HttpOnly session secret cannot be recovered from this digest.
@@ -224,7 +224,27 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     return send(res,200,await workstationAdmission.handoff(service,input));
    }
    const deskPolicy=privateDesk || process.env.BANK_DESK_ENFORCE==='1';
-   const deviceAdmission=privateDesk ? await workstationAdmission.fromRequest(req) : null;
+   // An unsigned browser landing on the private bank starts the existing, signed
+   // AVIS email/Authenticator handoff. Do not require a physical workstation
+   // certificate merely to reach the login screen. JSON/API routes retain their
+   // separate admission rules and never redirect to browser authentication.
+   const bankLanding=privateDesk&&req.method==='GET'&&['/','/fin-terminal'].includes(path)&&isStaffAccessDocument(req);
+   const beginBankLogin=({clearOldAdmission=false}={})=>{
+    if(clearOldAdmission)res.setHeader('Set-Cookie',clearWorkstationAdmissionCookie());
+    res.writeHead(303,{'location':'/access/start','cache-control':'private, no-store','referrer-policy':'no-referrer'});
+    return res.end();
+   };
+   let deviceAdmission=null;
+   if(privateDesk){
+    try{deviceAdmission=await workstationAdmission.fromRequest(req);}
+    catch(error){
+     // An expired or revoked login token must restart sign-in, not strand a
+     // signed-in administrator behind the obsolete 403 workstation page.
+     if(bankLanding&&error?.code==='BANK_WORKSTATION_REQUIRED')return beginBankLogin({clearOldAdmission:true});
+     throw error;
+    }
+   }
+   if(bankLanding&&!deviceAdmission)return beginBankLogin();
    // A sign-in's answer says at once whether its administrator has FinTerminal access, as /api/session does (src/fin-access.mjs).
    const finTerminalOf=async admin=>admin===true&&(await finTerminalAccess(req,deviceAdmission))?.finTerminal===true;
    // Read inside the try below, so a missing certificate still reaches the FinTerminal handoff; the mobile
@@ -241,10 +261,6 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
      const admission=await contactIncubator('admit',{fp:fingerprint});
      if(admission.approved!==true)fault('BANK_WORKSTATION_REQUIRED',null,403);
     } catch(error) {
-     if(req.method==='GET'&&path==='/fin-terminal'&&isStaffAccessDocument(req)&&error?.code==='BANK_WORKSTATION_REQUIRED') {
-      res.writeHead(303,{'location':'/access/start','cache-control':'private, no-store','referrer-policy':'no-referrer'});
-      return res.end();
-     }
      throw error;
     }
    }

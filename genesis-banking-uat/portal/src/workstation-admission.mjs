@@ -38,6 +38,7 @@ function cookie(req,name){
 }
 const attributes='; HttpOnly; Secure; Path=/';
 export const clearWorkstationPendingCookie=()=>WORKSTATION_PENDING_COOKIE+'='+attributes+'; SameSite=Lax; Max-Age=0';
+export const clearWorkstationAdmissionCookie=()=>WORKSTATION_ADMISSION_COOKIE+'='+attributes+'; SameSite=Strict; Max-Age=0';
 
 export class WorkstationAdmission {
  constructor(pool,{fetcher=fetch,now=()=>Date.now()}={}){this.pool=pool;this.fetcher=fetcher;this.now=now;this.starts=new Map();}
