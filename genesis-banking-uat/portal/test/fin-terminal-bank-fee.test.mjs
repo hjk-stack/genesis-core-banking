@@ -79,7 +79,9 @@ test('the live rate of the wallet chosen and, with the amount, the tokens it con
   [{tokenWalletId:unaddressed,currency:'EUR'},'FIN_WALLET_ADDRESS','tokenWalletId'],[{tokenWalletId:'wallet',currency:'EUR'},'INVALID_FIELD','tokenWalletId'],
   [{tokenWalletId:eurc,currency:'eur'},'INVALID_FIELD','currency'],[{tokenWalletId:eurc},'INVALID_FIELD','currency'],
   [{tokenWalletId:eurc,currency:'EUR',amount:'0'},'INVALID_FIELD','amount'],[{tokenWalletId:eurc,currency:'EUR',amount:'1.123456'},'INVALID_FIELD','amount'],
-  [{tokenWalletId:btc,currency:'USD'},'FIN_CONVERT_RATE','tokenWalletId']])
+  [{tokenWalletId:btc,currency:'USD'},'FIN_CONVERT_RATE','tokenWalletId'],
+  // An amount that converts to no token at four decimals cannot be registered or sent: no quote for it either (review finding).
+  [{tokenWalletId:btc,currency:'EUR',amount:'0.01'},'FIN_CONVERT_QUANTITY','amount']])
   await assert.rejects(fin.quote(admin,input),refused(code,field),JSON.stringify(input));
  priced=false;try{await assert.rejects(fin.quote(admin,{tokenWalletId:btc,currency:'EUR'}),error=>refused('FIN_CONVERT_RATE')(error)&&error.status===503);}finally{priced=true;}
  await assert.rejects(fin.quote(guest,{tokenWalletId:eurc,currency:'EUR'}),refused('FORBIDDEN'));

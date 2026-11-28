@@ -52,10 +52,10 @@ async function composer(){
  const html=await readFile(new URL('../public/fin-terminal.html',import.meta.url),'utf8');
  const dom=new JSDOM(html,{url:base+'/fin-terminal'}),doc=dom.window.document;
  // The window's own requests, as the browser sends them: the bank's sign-in cookie, from its own address.
- let held=null;
+ let held=null,holding='/api/fin-terminal/validate';
  const fetcher=async(path,init={})=>{
   sent.push({path,method:init.method||'GET',headers:init.headers||{}});
-  if(held&&path==='/api/fin-terminal/validate')await held;
+  if(held&&path===holding)await held;
   return fetch(base+path,{...init,headers:{...init.headers,cookie,origin:base}});
  };
  const terminal=await startFinTerminal({root:doc,fetcher,windowApi:{BroadcastChannel:class{close(){}},addEventListener(){},close(){}}});
@@ -68,8 +68,8 @@ async function composer(){
   fill(form){for(const [name,value] of Object.entries(form))if(name!=='uetr'&&field(name).value!==value)page.type(name,value);},
   async writeXml(text){page.xml.value=text;page.xml.dispatchEvent(new dom.window.Event('input',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,360));},
   async press(selector){await until(idle);$(selector).click();await new Promise(resolve=>setTimeout(resolve,0));await until(idle,selector);},
-  // The schema check waits until released: what happens while a check is under way.
-  holdChecks(){let release;held=new Promise(resolve=>{release=resolve});return ()=>{held=null;release();};},
+  // The schema check - or another request named - waits until released: what happens while it is under way.
+  holdChecks(path='/api/fin-terminal/validate'){let release;holding=path;held=new Promise(resolve=>{release=resolve});return ()=>{held=null;release();};},
   idle:()=>until(idle),
   pick(name,value){const select=$('[data-fin-choice="'+name+'"]');select.value=value;select.dispatchEvent(new dom.window.Event('change',{bubbles:true}));},
   async choose(draftId){await until(idle);const list=$('[data-fin-drafts]');list.value=draftId;list.dispatchEvent(new dom.window.Event('change',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,0));await until(idle,'the draft');},
@@ -454,5 +454,23 @@ test('converted: an incoming transfer registered with the FIAT Converter on is l
   assert.equal(page.state(),'Incoming converted · ACSC · 1249375.0000 EURC');
   assert.deepEqual([rate.hidden,button.getAttribute('aria-pressed'),button.disabled,select('tokenWalletId').value],[true,'true',true,walletEurc]);
   assert.equal((await pool.query('SELECT available_balance::numeric(38,4)::text AS b FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[walletEurc])).rows[0].b,'1249375.0000');
+ }finally{page.close();}
+});
+
+// A bank fee typed while the draft saves is not saved yet (review finding): the draft says so, and the fee typed stays.
+test('Bank fee typed while the draft saves: the draft shows its changes are not saved, and saved again it keeps the fee typed',async()=>{
+ const page=await composer();try{
+  const turn=page.$('[data-fin-direction]'),fee=page.$('[data-fin-fee]');
+  const typeFee=value=>{fee.value=value;fee.dispatchEvent(new page.dom.window.Event('input',{bubbles:true}));};
+  turn.value='INCOMING';turn.dispatchEvent(new page.dom.window.Event('change',{bubbles:true}));
+  page.type('amount','100.00');typeFee('1.00');
+  const release=page.holdChecks('/api/fin-terminal/drafts');
+  page.$('[data-fin-save]').click();await new Promise(resolve=>setTimeout(resolve,20));
+  typeFee('2.00');release();await page.idle();
+  assert.deepEqual([page.state(),fee.value],['Draft · changes not saved','2.00']);
+  const draftId=page.$('[data-fin-drafts]').value;
+  assert.equal((await new FinTerminal(pool).draft(admin,draftId)).bankFee,'1.00');
+  await page.press('[data-fin-save]');
+  assert.deepEqual([page.state(),(await new FinTerminal(pool).draft(admin,draftId)).bankFee],['Draft saved · revision 2','2.00']);
  }finally{page.close();}
 });

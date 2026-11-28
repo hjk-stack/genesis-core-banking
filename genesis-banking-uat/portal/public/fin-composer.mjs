@@ -28,7 +28,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  const converterRow=$('[data-fin-converter-row]'),converterSwitch=$('[data-fin-convert-switch]'),walletChoice=$('[data-fin-choice="tokenWalletId"]');
  const rateRow=$('[data-fin-rate]'),feeRow=$('[data-fin-fee-row]'),feeInput=$('[data-fin-fee]'),feeCurrency=$('[data-fin-fee-currency]');
  let form=blankForm(),draft=null,dirty=false,edits=0,broken=null,pause=null,busy=false,refused=null,selection=noChoice();
- let converter=false,fee='',quoted=null,quoting=null,asked=0;
+ let converter=false,fee='',feeEdits=0,quoted=null,quoting=null,asked=0;
  // The bank owner: "We now register an incoming transfer so AVISPay PLC is the receiver", and "There is missing a function: Debit.
  // This is when we have authorisation for debiting an external connected account".
  let direction='OUTGOING',registered=false,converted=null;
@@ -120,7 +120,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   paintChoices();changed();
  });
  // The bank fee is kept with the draft; the message stays as it is written.
- feeInput.addEventListener('input',()=>{fee=feeInput.value;dirty=true;refused=null;feeInput.removeAttribute('aria-invalid');paintState();});
+ feeInput.addEventListener('input',()=>{fee=feeInput.value;feeEdits++;dirty=true;refused=null;feeInput.removeAttribute('aria-invalid');paintState();});
  const charged=()=>direction!=='OUTGOING'&&!converter&&fee.trim()?{bankFee:fee.trim()}:{};
  // Switched on, the FIAT Converter needs its "+" wallet: the money is not booked as cash instead.
  function walletChosen(){
@@ -295,9 +295,10 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  async function save(){
   flush();
   if(broken)throw Object.assign(new Error('XML: '+broken),{code:'FIN_MESSAGE_INVALID'});
-  const at=edits,{draft:saved}=await request('POST','/api/fin-terminal/drafts',{form,selection,direction,...charged(),...(draft?{draftId:draft.draftId,revision:draft.revision}:{})});
+  const at=edits,typed=feeEdits,{draft:saved}=await request('POST','/api/fin-terminal/drafts',{form,selection,direction,...charged(),...(draft?{draftId:draft.draftId,revision:draft.revision}:{})});
   draft={draftId:saved.draftId,revision:saved.revision};
-  if(edits===at){form=whole(saved.form);selection=chosen(saved.selection);dirty=false;paint();paintChoices();xml.value=saved.xml;}
+  // A bank fee typed while it saved is not saved yet (review finding).
+  if(edits===at){form=whole(saved.form);selection=chosen(saved.selection);dirty=feeEdits!==typed;paint();paintChoices();xml.value=saved.xml;}
   await listDrafts();paintState();
   return saved;
  }
@@ -306,9 +307,9 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   flush();
   if(broken)throw Object.assign(new Error('XML: '+broken),{code:'FIN_MESSAGE_INVALID'});
   walletChosen();
-  const at=edits,{draft:kept}=await request('POST','/api/fin-terminal/incoming',{form,selection,...charged(),...(draft?{draftId:draft.draftId,revision:draft.revision}:{})});
+  const at=edits,typed=feeEdits,{draft:kept}=await request('POST','/api/fin-terminal/incoming',{form,selection,...charged(),...(draft?{draftId:draft.draftId,revision:draft.revision}:{})});
   draft={draftId:kept.draftId,revision:kept.revision};registered=kept.registered===true;converted=kept.conversion||null;
-  if(edits===at){form=whole(kept.form);selection=chosen(kept.selection);converter=!!selection.tokenWalletId;fee=kept.bankFee||'';dirty=false;paint();paintChoices();xml.value=kept.xml;show('passed','XSD: PASSED');}
+  if(edits===at){form=whole(kept.form);selection=chosen(kept.selection);converter=!!selection.tokenWalletId;if(feeEdits===typed)fee=kept.bankFee||'';dirty=false;paint();paintChoices();xml.value=kept.xml;show('passed','XSD: PASSED');}
   await listDrafts();paintState();paintDirection();
  }
  // Transacted, the message is kept as the bank has it and closed: what was written meanwhile is shown, not kept. Pressed again, it
@@ -319,12 +320,12 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   walletChosen();
   const body={form,selection,direction,...charged(),...(draft?{draftId:draft.draftId,revision:draft.revision}:{}),...(fourEyes?{pin1:pins[0].value,pin2:pins[1].value}:{})};
   for(const input of pins)input.value='';
-  const at=edits,to=peer;let result;
+  const at=edits,typed=feeEdits,to=peer;let result;
   try{result=await request('POST','/api/fin-terminal/peers/'+encodeURIComponent(to)+'/transact',body);}
   catch(error){if(['FIN_PIN','FIN_PIN_MISSING'].includes(error?.code))onRefused();throw error;}
   const kept=result.draft;draft={draftId:kept.draftId,revision:kept.revision};registered=kept.registered===true;converted=kept.conversion||null;
   transacted=kept.transacted||result.wire?.status||result.debit?.status||null;
-  if(edits===at){form=whole(kept.form);selection=chosen(kept.selection);converter=!!selection.tokenWalletId;fee=kept.bankFee||'';dirty=false;paint();paintChoices();xml.value=kept.xml;show('passed','XSD: PASSED');}
+  if(edits===at){form=whole(kept.form);selection=chosen(kept.selection);converter=!!selection.tokenWalletId;if(feeEdits===typed)fee=kept.bankFee||'';dirty=false;paint();paintChoices();xml.value=kept.xml;show('passed','XSD: PASSED');}
   await listDrafts();paintState();paintDirection();onTransacted(to,result);
  }
  const chosen=kept=>Object.fromEntries(CHOICES.map(name=>[name,typeof kept?.[name]==='string'?kept[name]:'']));

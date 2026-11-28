@@ -431,8 +431,10 @@ export class FinTerminal{
   if(typeof input?.currency!=='string'||!/^[A-Z]{3}$/.test(input.currency))fault('INVALID_FIELD','currency');
   const amount=input?.amount===undefined||input?.amount===null||input?.amount===''?null:amountOf(input.amount)?input.amount:fault('INVALID_FIELD','amount');
   const wallet=await this.#wallet(this.pool,tokenWalletId),quote=await this.#rate(input.currency,wallet);
-  return {asset:wallet.currency_code,network:wallet.network,rate:quote.rate,source:quote.source,observedAt:quote.observedAt.toISOString(),
-   quantity:amount===null?null:convertedQuantity(amount,quote.rate)};
+  // An amount that converts to no token is refused here as it would be when registered or sent (review finding).
+  const quantity=amount===null?null:convertedQuantity(amount,quote.rate);
+  if(quantity!==null&&!/[1-9]/.test(quantity))fault('FIN_CONVERT_QUANTITY','amount',409);
+  return {asset:wallet.currency_code,network:wallet.network,rate:quote.rate,source:quote.source,observedAt:quote.observedAt.toISOString(),quantity};
  }
  // Sent, a Debit's message is kept for good as the draft it was written in, closed by its debit (src/fin-peer.mjs, transact): never
  // changed or sent again. Nothing is booked before the debtor's bank answered (bookDebit); the NOSTRO's ledger account is kept with it.
