@@ -82,17 +82,18 @@ const accountId=number=>node('Id',[ibanValid(number)?node('IBAN',number):node('O
 const agent=(name,bic,place='',isOptional=false)=>isOptional&&!bic&&!place?null:node(name,[node('FinInstnId',[isOptional?optional('BICFI',bic):node('BICFI',bic),address(place)])]);
 const party=(name,partyName,place)=>optional(name,[optional('Nm',partyName),address(place)]);
 // The details in pieces of at most 35 characters (Inf is Max35Text) - an address in lines of 70 - broken between words where it can.
+// Counted in characters as the schema counts them, so that a character beyond the basic plane is never cut in two (review finding).
 export function detailPieces(text,size=35){
- const pieces=[];let current='';
+ const pieces=[];let current=[];
  for(const word of String(text||'').split(' ').filter(Boolean)){
-  for(let rest=word;rest;){
-   const room=current?size-1-current.length:size;
-   if(rest.length<=room){current=current?current+' '+rest:rest;rest='';}
-   else if(current){pieces.push(current);current='';}
-   else{pieces.push(rest.slice(0,size));rest=rest.slice(size);}
+  for(let rest=[...word];rest.length;){
+   const room=current.length?size-1-current.length:size;
+   if(rest.length<=room){current=current.length?[...current,' ',...rest]:rest;rest=[];}
+   else if(current.length){pieces.push(current.join(''));current=[];}
+   else{pieces.push(rest.slice(0,size).join(''));rest=rest.slice(size);}
   }
  }
- if(current)pieces.push(current);
+ if(current.length)pieces.push(current.join(''));
  return pieces;
 }
 export function buildFinMessage(input){

@@ -117,6 +117,9 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   let clear={};const now=normalizeForm(form),was=JSON.stringify(selection),moved=now.currency!==normalizeForm(before).currency;
   if(moved)for(const name of ['bookingAccountId','nostroAccountId']){clear={...clear,...unwritten(name,now)};selection={...selection,[name]:''};}
   for(const name of Object.keys(binds[direction]))if(bound(name,now)===false)selection={...selection,[name]:''};
+  // The settlement account is the chosen NOSTRO account's only (the bank owner: "must select via the listed NOSTROS"): one the XML
+  // writes without it goes (review finding).
+  if(!selection.nostroAccountId&&now.settlementAccount)clear={...clear,settlementAccount:''};
   if(Object.keys(clear).length){form={...form,...clear};paint();write();}
   if(moved||JSON.stringify(selection)!==was)paintChoices();
  }

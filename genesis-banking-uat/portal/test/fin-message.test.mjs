@@ -50,6 +50,15 @@ test('text with XML\'s own characters stays text, there and back',async()=>{
  assert.deepEqual(readFinMessage(xml,DOMParser).form,normalizeForm(form));
 });
 
+test('a character beyond the basic plane is never cut in two between lines: lines count characters as the schema does (review finding)',async()=>{
+ const word='a'.repeat(69)+'\u{1F600}'+'b',lines=detailPieces(word,70);
+ assert.deepEqual(lines,['a'.repeat(69)+'\u{1F600}','b']);
+ assert.ok(lines.every(line=>!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(line)));
+ assert.deepEqual(detailPieces('\u{20000}'.repeat(36)),['\u{20000}'.repeat(35),'\u{20000}']);
+ const xml=buildFinMessage({...exampleForm(),ultimateDebtorAddress:word});
+ assert.deepEqual(await validateFinMessage(xml),{valid:true,errors:[]});
+});
+
 test('regulatory details longer than 35 characters go in several Inf elements, as the schema allows, and come back whole',()=>{
  const details='Goods payment for industrial equipment, non-military use, licence EX-2201';
  const pieces=detailPieces(details);
