@@ -184,6 +184,13 @@ test('the settlement account is the chosen NOSTRO\'s only: read-only, written by
   page.pick('nostroAccountId','');
   assert.deepEqual(values(),['','INDA','']);assert.doesNotMatch(page.xml.value,/NOSTRO-EXAMPLE-1|<SttlmAcct>/);
   assert.equal(page.state(),'New message · not saved');
+  // Written in the XML instead, another settlement account lets the NOSTRO go and goes with it (review finding).
+  page.pick('nostroAccountId',nostroEur.id);
+  await page.writeXml(page.xml.value.replace('<Id>NOSTRO-EXAMPLE-1</Id>','<Id>NOSTRO-OTHER-9</Id>'));
+  assert.deepEqual([nostro.value,page.field('settlementAccount').value],['','']);assert.doesNotMatch(page.xml.value,/NOSTRO-OTHER-9|<SttlmAcct>/);
+  // Written without any NOSTRO chosen, it does not stay either.
+  await page.writeXml(page.xml.value.replace('<SttlmMtd>INDA</SttlmMtd>','<SttlmMtd>INDA</SttlmMtd><SttlmAcct><Id><Othr><Id>NOSTRO-OTHER-9</Id></Othr></Id></SttlmAcct>'));
+  assert.equal(page.field('settlementAccount').value,'');assert.doesNotMatch(page.xml.value,/NOSTRO-OTHER-9/);
  }finally{page.close();}
 });
 
