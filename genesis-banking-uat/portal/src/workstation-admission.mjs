@@ -7,7 +7,9 @@ export const WORKSTATION_FRONT_STATUS='https://avis.land/bank/workstations/admis
 export const WORKSTATION_PENDING_COOKIE='__Host-avis_bank_pending';
 export const WORKSTATION_ADMISSION_COOKIE='__Host-avis_bank_admission';
 export const WORKSTATION_HANDOFF_SECONDS=120;
-export const WORKSTATION_ADMISSION_SECONDS=3600;
+// The bank owner: "Remove a timer from sing in" and "The sign in and out must be manually as an operation be taking hours timing".
+// A bank sign-in lasts until it is signed out; only AVIS's own rule of asking the password again every 90 days bounds it.
+export const WORKSTATION_ADMISSION_SECONDS=90*24*3600;
 const opaque=/^[A-Za-z0-9_-]{43}$/;
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const digest=value=>createHash('sha256').update(value).digest('hex');
@@ -129,6 +131,15 @@ export class WorkstationAdmission {
   const life=Math.min(WORKSTATION_ADMISSION_SECONDS,Math.floor((Date.parse(result.rows[0].expires_at)-this.now())/1000));
   if(life<=0)deny();
   return {cookies:[WORKSTATION_ADMISSION_COOKIE+'='+token+attributes+'; SameSite=Strict; Max-Age='+life,clearWorkstationPendingCookie()]};
+ }
+
+ // Sign out: this browser's sign-in ends here at once, with the bank sessions opened under it.
+ async end(req){
+  const token=cookie(req,WORKSTATION_ADMISSION_COOKIE);if(!token)return;
+  const hash=digest(token);
+  await this.pool.query(`DELETE FROM avis_core_v2.operator_sessions WHERE workstation_admission_id IN
+   (SELECT admission_id FROM avis_core_v2.workstation_device_admissions WHERE token_hash=$1)`,[hash]);
+  await this.pool.query('DELETE FROM avis_core_v2.workstation_device_admissions WHERE token_hash=$1',[hash]);
  }
 
  async fromRequest(req){
