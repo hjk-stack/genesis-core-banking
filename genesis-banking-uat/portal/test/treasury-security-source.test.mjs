@@ -249,7 +249,8 @@ test('Treasury booking registers a documented manual holding once, atomically, w
  assert.deepEqual(await financialState(),before);
 });
 test('catalogue booking selects the registered instrument, not its issue volume, and existing source links remain immutable',async()=>{
- const registered=await security({kind:'bond',isin:'US5949181045',quoteBasis:'PERCENT',denomination:'1000'});
+ // A checksum-valid synthetic ISIN unique to this isolated catalogue test.
+ const registered=await security({kind:'bond',isin:'ZZAVISTEST03',quoteBasis:'PERCENT',denomination:'1000'});
  await pool.query("UPDATE avis_core_v2.portfolio_securities SET source='GREEN_BOND' WHERE security_id=$1",[registered.id]);
  const before=await financialState(),input={sourceMode:'CATALOGUE',securityId:registered.id,userId:'1',quantity:'3',issuingPrice:'100',marketPrice:'99',reference:'Databank custody '+key()};
  const result=await core.bookTreasurySecurity(admin,input,key());
