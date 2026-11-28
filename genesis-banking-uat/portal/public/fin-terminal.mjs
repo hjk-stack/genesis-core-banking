@@ -23,8 +23,11 @@ export async function signInOf(fetcher=fetch){
  try{const session=await response.json();return session?.admin===true&&session.finTerminal===true?session:null;}catch{return undefined;}
 }
 
-export async function startFinTerminal({root=document,fetcher=fetch,windowApi=root.defaultView}={}){
+// inFront: whether the person is on this page - only that page starts the sign-in (check below).
+export async function startFinTerminal({root=document,fetcher=fetch,windowApi=root.defaultView,inFront}={}){
  const terminal=root.querySelector('[data-fin-terminal]'),tabs=[...root.querySelectorAll('[data-fin-screen-tab]')];
+ // Shown, and focused or touched a moment ago: an app's web view that never reports the focus still counts at a touch.
+ let touched=0;const front=inFront||(()=>root.visibilityState!=='hidden'&&(root.hasFocus()||Date.now()-touched<10000));
  const show=name=>{
   for(const tab of tabs){const on=tab.dataset.finScreenTab===name;tab.setAttribute('aria-selected',String(on));tab.tabIndex=on?0:-1;}
   for(const screen of root.querySelectorAll('[data-fin-screen]'))screen.hidden=screen.dataset.finScreen!==name;
@@ -39,7 +42,7 @@ export async function startFinTerminal({root=document,fetcher=fetch,windowApi=ro
  }
  // Its sign-in is checked again whenever the bank signs in, out or changes workspace (fin-terminal-switch.mjs announces it,
  // from any of its pages) and whenever the terminal comes forward.
- let checks=0,csrf='',composer=null,peer=null,settlement=null,wire=null,access=null,leaving=false;
+ let checks=0,csrf='',composer=null,peer=null,settlement=null,wire=null,access=null,leaving=false,waiting=false;
  // Reported directly, with a picture of the dark terminal: "After I created the PIN the page took off and I could not restart".
  // A terminal without its sign-in never stays dark: the one the desk opened closes (the desk goes to the sign-in itself); any
  // other goes to the sign-in, the desk's page, and - unless it was signed out here - comes back once signed in again (app.mjs).
@@ -51,6 +54,9 @@ export async function startFinTerminal({root=document,fetcher=fetch,windowApi=ro
  }
  async function check(){
   const serial=++checks,session=await signInOf(fetcher);if(serial!==checks||session===undefined||leaving)return;
+  // A browser holds one sign-in under way at a time (its pending cookie, Codex review finding, P2): a terminal of its own
+  // that is not in front stays as it is and goes when it comes forward; the one the desk opened just closes.
+  waiting=!session&&!windowApi.opener&&!front();if(waiting)return;
   if(!session)return leave(true);
   terminal.hidden=false;csrf=session.csrf||'';
   if(!composer){composer=createFinComposer({root,request});composer?.start();peer=createFinPeer({root,request});void peer?.start();settlement=createFinSettlement({root,request});settlement?.start();createFinConverter({root,request})?.start();
@@ -80,7 +86,8 @@ export async function startFinTerminal({root=document,fetcher=fetch,windowApi=ro
   throw Object.assign(new Error(data?.message||'This action could not be completed.'),{code:data?.code,field:data?.field,status:response.status});
  }
  try{const channel=new windowApi.BroadcastChannel(FIN_TERMINAL_CHANNEL);channel.onmessage=({data})=>{if(['session-changed','signed-out'].includes(data?.type))void check();};}catch{}
- windowApi.addEventListener('focus',()=>void check());
+ windowApi.addEventListener('focus',()=>void check());root.addEventListener('visibilitychange',()=>void check());
+ for(const type of ['pointerdown','keydown'])root.addEventListener(type,()=>{touched=Date.now();if(waiting)void check();},true);
  await check();
  return {show,check,request};
 }

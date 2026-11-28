@@ -86,9 +86,9 @@ const letChannelsGo=()=>{for(const channel of [...channels])channel.close();};
 const settle=()=>new Promise(resolve=>setTimeout(resolve,50));
 // The terminal's window: opened by the bank's page (opener) or a tab of its own. The bank's answer to /api/session is
 // state.session - null for none (state.status), undefined when the bank is not reached.
-async function terminalPage(session,{opener=null}={}){
+async function terminalPage(session,{opener=null,browserFront=false}={}){
  const html=await readFile(new URL('../public/fin-terminal.html',import.meta.url),'utf8');
- const dom=new JSDOM(html,{url:'https://bank.example/fin-terminal'}),asked=[],state={session,status:401,closed:0,went:[],logout:{ok:true,status:200}};
+ const dom=new JSDOM(html,{url:'https://bank.example/fin-terminal'}),asked=[],state={session,status:401,closed:0,went:[],logout:{ok:true,status:200},front:true};
  const fetcher=async(...args)=>{
   asked.push(args);
   if(args[0]==='/api/logout')return {...state.logout,json:async()=>({})};
@@ -99,7 +99,8 @@ async function terminalPage(session,{opener=null}={}){
  const windowApi={BroadcastChannel:Channel,addEventListener:(...args)=>dom.window.addEventListener(...args),opener,closed:false,
   close(){state.closed++;if(opener)windowApi.closed=true;},setTimeout:fn=>setTimeout(fn,0),sessionStorage:dom.window.sessionStorage,
   location:{replace(url){state.went.push(url);}}};
- const terminal=await startFinTerminal({root:dom.window.document,fetcher,windowApi});
+ // state.front: whether the person is on this page (in front); browserFront: the page's own answer instead (jsdom: never focused).
+ const terminal=await startFinTerminal({root:dom.window.document,fetcher,windowApi,...(browserFront?{}:{inFront:()=>state.front})});
  return {dom,doc:dom.window.document,asked,terminal,state,hidden:()=>dom.window.document.querySelector('[data-fin-terminal]').hidden,
   back:()=>dom.window.sessionStorage.getItem(FIN_TERMINAL_RETURN),close(){letChannelsGo();dom.window.close();}};
 }
@@ -130,6 +131,30 @@ test('a terminal in a tab of its own whose sign-in ended goes to the sign-in at 
    t.dom.window.dispatchEvent(new t.dom.window.Event('focus'));await settle();assert.deepEqual(t.state.went,['/'],'it leaves once');
   }finally{t.close();}
  }
+});
+
+// Codex review finding (P2): a browser holds one sign-in under way at a time, so only the page in front may start it.
+test('a terminal of its own behind another page waits as it is when its sign-in ends, and goes when it comes forward',async()=>{
+ const t=await terminalPage({admin:true,finTerminal:true});try{
+  await settle();t.state.front=false;t.state.session=null;
+  const signedOut=new Channel(FIN_TERMINAL_CHANNEL);signedOut.postMessage({type:'signed-out'});await settle();
+  assert.equal(t.hidden(),false);assert.deepEqual(t.state.went,[]);assert.equal(t.back(),null);
+  t.state.front=true;t.doc.dispatchEvent(new t.dom.window.Event('visibilitychange'));await settle();
+  assert.equal(t.hidden(),true);assert.deepEqual(t.state.went,['/']);assert.equal(t.back(),FIN_TERMINAL_PATH);
+ }finally{t.close();}
+ // An app's web view that never reports the focus: the terminal goes at its first touch.
+ const view=await terminalPage({admin:true,finTerminal:true},{browserFront:true});try{
+  await settle();view.state.session=null;view.dom.window.dispatchEvent(new view.dom.window.Event('focus'));await settle();
+  assert.equal(view.hidden(),false);assert.deepEqual(view.state.went,[]);
+  view.doc.querySelector('[data-fin-terminal]').dispatchEvent(new view.dom.window.KeyboardEvent('keydown',{key:'Tab',bubbles:true}));await settle();
+  assert.deepEqual(view.state.went,['/']);
+ }finally{view.close();}
+ // The one the desk opened closes even behind: closing starts no sign-in.
+ const opened=await terminalPage({admin:true,finTerminal:true},{opener:{}});try{
+  await settle();opened.state.front=false;opened.state.session=null;
+  opened.dom.window.dispatchEvent(new opened.dom.window.Event('focus'));await settle();
+  assert.equal(opened.state.closed,1);assert.deepEqual(opened.state.went,[]);
+ }finally{opened.close();}
 });
 
 test('a terminal that cannot reach the bank stays as it is, its work kept',async()=>{

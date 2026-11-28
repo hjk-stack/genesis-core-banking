@@ -6,8 +6,9 @@ import {chromium} from 'playwright';
 
 // Requested by the bank owner: "That must be a further SWITCH to be opened in the payments in sovereign admin", the
 // FinTerminal ISO 20022 in its own window, "Dark blue and orange is OK".
-// signedIn: the bank's own sign-in; required: its AVIS sign-in is missing, which the bank's gate sends to /access/start (gate).
-let server,browser,base,signedIn=true,required=false,gate=true;
+// signedIn: the bank's own sign-in; required: its AVIS sign-in is missing, which the bank's gate sends to /access/start (gate);
+// endsSignIn: signing out ends the AVIS sign-in too, as the bank does (server.mjs /api/logout).
+let server,browser,base,signedIn=true,required=false,gate=true,endsSignIn=false;
 const session={admin:true,finTerminal:true,canSwitchWorkspace:false,username:'Fixture operator',csrf:'fixture-csrf'};
 before(async()=>{
  const appHtml=await readFile(new URL('../index.html',import.meta.url),'utf8');
@@ -19,7 +20,7 @@ before(async()=>{
   if(path==='/admin'||path==='/'){res.setHeader('content-type','text/html');return res.end(appHtml);}
   if(path==='/fin-terminal'){res.setHeader('content-type','text/html');return res.end(await readFile(new URL('../public/fin-terminal.html',import.meta.url)));}
   res.setHeader('content-type','application/json');
-  if(path==='/api/logout'){signedIn=false;return res.end('{}');}
+  if(path==='/api/logout'){signedIn=false;if(endsSignIn)required=true;return res.end('{}');}
   if(required&&path.startsWith('/api/')){res.statusCode=403;return res.end(JSON.stringify({code:'BANK_WORKSTATION_REQUIRED',message:'Use the bank desk on an approved workstation.'}));}
   if(path==='/api/session'){if(!signedIn){res.statusCode=401;return res.end(JSON.stringify({code:'UNAUTHORIZED'}));}return res.end(JSON.stringify(session));}
   if(path==='/api/login'){signedIn=true;return res.end(JSON.stringify(session));}
@@ -113,6 +114,27 @@ test('a terminal in a tab of its own whose sign-in ended goes to the sign-in, an
   await Promise.all([tab.waitForURL(base+'/fin-terminal'),tab.locator('#login-form button[type=submit]').click()]);
   await tab.locator('[data-fin-terminal]').waitFor();assert.equal(await tab.evaluate(()=>sessionStorage.length),0);assert.deepEqual(errors,[]);
  }finally{await context.close();}
+});
+
+// Codex review finding (P2): a browser holds one sign-in under way at a time (its pending cookie), so only the page in front
+// may start it. Which page is in front is the browser's document.hasFocus(), set here by the test.
+test('after a sign-out only the bank page in front goes to the sign-in; one behind goes when it comes forward',async()=>{
+ signedIn=true;required=false;gate=true;endsSignIn=true;const context=await browser.newContext({viewport:{width:1440,height:1000}}),errors=[];
+ await context.addInitScript(()=>{Document.prototype.hasFocus=function(){return window.avisFront!==false;};});
+ // behind: a tab behind, which comes forward; view: an app's web view that never reports the focus, touched instead.
+ const front=await context.newPage(),behind=await context.newPage(),view=await context.newPage();
+ for(const page of [front,behind,view])page.on('pageerror',error=>errors.push(error.message));
+ try{
+  for(const page of [behind,view,front]){await page.goto(base+'/admin#accounts');await page.locator('#signout').waitFor({state:'visible'});}
+  const went=[];
+  for(const page of [behind,view]){await page.evaluate(()=>{window.avisFront=false;});page.on('framenavigated',frame=>{if(frame===page.mainFrame())went.push(frame.url());});}
+  await Promise.all([front.waitForURL(base+'/access/start'),front.locator('#signout').click()]);
+  for(const page of [behind,view])await page.locator('#signin').waitFor({state:'visible'});
+  await behind.waitForTimeout(500);assert.deepEqual(went,[],'no page behind starts a second sign-in');
+  await Promise.all([behind.waitForURL(base+'/access/start'),behind.evaluate(()=>{window.avisFront=true;window.dispatchEvent(new Event('focus'));})]);
+  await Promise.all([view.waitForURL(base+'/access/start'),view.mouse.click(40,300)]);
+  assert.deepEqual(errors,[]);
+ }finally{endsSignIn=false;required=false;await context.close();}
 });
 
 test('a bank page whose AVIS sign-in ended goes straight to it instead of standing on an error, and never in a circle',async()=>{

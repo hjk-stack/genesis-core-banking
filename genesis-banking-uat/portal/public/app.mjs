@@ -47,12 +47,21 @@ async function api(path,body,key){
 }
 // Reported directly: "After I created the PIN the page took off and I could not restart". A desk whose sign-in has ended goes
 // to it - the bank's own gate sends this page there (server.mjs) - instead of standing on an error; at most once in half a
-// minute, so a desk without that gate never goes round in a circle.
+// minute, so a desk without that gate never goes round in a circle. Only the page in front goes: a browser holds one sign-in
+// under way at a time (its pending cookie, Codex review finding, P2), so a page behind goes when it comes forward. In front:
+// shown, and focused or touched a moment ago - an app's web view that never reports the focus still goes at the first touch.
+let signInWaiting=false,touchedAt=0;
+const inFront=()=>document.visibilityState!=='hidden'&&(document.hasFocus()||Date.now()-touchedAt<10000);
 function toSignIn(){
+ if(!inFront()){signInWaiting=true;return false;}
+ signInWaiting=false;
  try{if(Date.now()-(Number(sessionStorage.getItem('avisBankSignInAt'))||0)<30000)return false;sessionStorage.setItem('avisBankSignInAt',String(Date.now()));}
  catch{return false;}
  location.replace('/');return true;
 }
+function cameForward(){if(signInWaiting&&inFront()){signInWaiting=false;void api('session').catch(()=>{});}}
+window.addEventListener('focus',cameForward);document.addEventListener('visibilitychange',cameForward);
+for(const type of ['pointerdown','keydown'])window.addEventListener(type,()=>{touchedAt=Date.now();cameForward();},true);
 // A FinTerminal whose sign-in had ended came here to sign in again (fin-terminal.mjs); signed in, it goes back there.
 function backToFinTerminal(session){
  let back=null;try{back=sessionStorage.getItem(FIN_TERMINAL_RETURN);sessionStorage.removeItem(FIN_TERMINAL_RETURN);}catch{}
