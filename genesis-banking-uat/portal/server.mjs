@@ -569,6 +569,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(req.method==='GET'&&path==='/api/fin-terminal/converter')return send(res,200,await finTerminal.converter(actor));
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
+   if(path==='/api/portfolio/treasury-book'&&!privateDesk)fault('FORBIDDEN',null,403);
    if(path.startsWith(BANK_CONVERTER_PREFIX+'/')){const result=await converterRequest();return send(res,result.status,result.data);}
    if(privateDesk&&(['/api/crypto/securities/demo-convert','/api/crypto/securities/prepare','/api/crypto/securities/wallet'].includes(path)||path==='/api/crypto/actions/review'&&legacyConversionAction(body.action)))fault('LEGACY_CONVERTER_ARCHIVED',null,403);
    if(privateDesk&&path==='/api/crypto/actions/submit')actor.legacyConverterArchived=true;

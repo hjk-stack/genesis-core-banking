@@ -38,7 +38,7 @@ export function createRollingConverterAdminClient({env=process.env,fetcher=fetch
     if(!writing)return {status:200,data:{assets}};
     const asset=assets.find(a=>a.key===body.asset);
     if(!asset)return invalid(404,'Select a registered Treasury security.');
-    if(!asset.linked)return invalid(422,'Register the selected Treasury source in Portfolio Management.');
+    if(!asset.linked)return invalid(422,'Complete the selected Treasury holding details.');
     if(asset.revision!==body.revision)return invalid(409,'The Treasury portfolio holding changed. Refresh the asset selection.');
     return upstreamRequest({method,upstream,actor,body:{portfolio:portfolioSnapshot(asset)},idempotencyKey});
    }catch{return invalid(502,'The Treasury securities register could not be read.');}

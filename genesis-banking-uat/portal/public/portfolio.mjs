@@ -11,7 +11,7 @@ export function securitiesTable(rows,admin){
  return `<section class="panel"><div class="panel-header"><h2>Securities portfolio</h2><span>${rows.length} holdings</span></div><div class="table-wrap"><table><thead><tr>${admin?'<th>Portfolio holder</th>':''}${columns.map(([,t])=>`<th>${t}</th>`).join('')}<th>Actions</th></tr></thead><tbody>${rows.map(r=>`<tr>${admin?`<td>${esc(r.full_name)}</td>`:''}${columns.map(([k])=>`<td>${esc(['denomination','quantity','issuing_price','market_price','portfolio_value'].includes(k)?fmt(r[k]):r[k]||'—')}${['issuing_price','market_price'].includes(k)&&r.quote_basis==='PERCENT'?'%':''}${k==='quantity'&&Number(r.reserved_quantity)>0?`<small class="portfolio-reserved">${esc(fmt(r.reserved_quantity))} reserved</small>`:''}</td>`).join('')}<td class="securities-actions-cell"><div class="actions securities-row-actions" role="group" aria-label="Portfolio trading actions"><button data-security-buy="${esc(r.security_id)}">Buy</button><button data-security-sell="${esc(r.security_id)}" data-holder="${esc(r.user_id)}">Sell</button>${admin?`<button data-position="${esc(r.position_id)}">Edit</button>`:''}</div></td></tr>`).join('')}</tbody></table></div>${!rows.length?'<p class="panel-empty">No securities recorded yet.</p>':''}</section>`;
 }
 export function treasuryRegisterTable(rows){
- return '<section class="panel" data-treasury-register><div class="panel-header"><h2>AVISPay PLC Treasury register</h2><span>'+rows.length+' records</span></div><div class="table-wrap"><table><thead><tr>'+['Registered asset','Portfolio ABIQ IBAN','Asset identifier','ISIN','Asset class','Units','Treasury account','Source reference','Booked at','Details'].map(h=>'<th>'+esc(h)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+[r.asset_name,r.portfolio_abiq_iban,r.asset_code,r.isin,r.asset_class,fmt(r.quantity),r.destination,r.source_reference,r.booked_at?new Date(r.booked_at).toLocaleString():''].map(v=>'<td>'+esc(v||'—')+'</td>').join('')+'<td>'+(r.asset_class==='SECURITY'&&r.destination==='TREASURY_PORTFOLIO'?'<button type="button" data-register-treasury="'+esc(r.booking_id)+'">'+(r.position_id?'Open holding':'Register source holding')+'</button>':'—')+'</td></tr>').join('')+'</tbody></table></div><p class="form-error" role="alert" data-stock-register-error></p></section>';
+ return '<details class="panel" data-treasury-register><summary class="panel-header">Treasury booking references · '+rows.length+' records</summary><div class="table-wrap"><table><thead><tr>'+['Registered asset','Portfolio ABIQ IBAN','Asset identifier','ISIN','Asset class','Units','Treasury account','Source reference','Booked at','Details'].map(h=>'<th>'+esc(h)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+[r.asset_name,r.portfolio_abiq_iban,r.asset_code,r.isin,r.asset_class,fmt(r.quantity),r.destination,r.source_reference,r.booked_at?new Date(r.booked_at).toLocaleString():''].map(v=>'<td>'+esc(v||'—')+'</td>').join('')+'<td>'+(r.asset_class==='SECURITY'&&r.destination==='TREASURY_PORTFOLIO'?'<button type="button" data-register-treasury="'+esc(r.booking_id)+'">'+(r.position_id?'Open holding':'Register source holding')+'</button>':'—')+'</td></tr>').join('')+'</tbody></table></div><p class="form-error" role="alert" data-stock-register-error></p></details>';
 }
 export function stockRegisterTable(sources,positions){
  const stocks=(sources||[]).filter(source=>source.asset_class==='SECURITY'&&source.asset_code==='AVISPAY-PLC-SHARES');
@@ -101,7 +101,7 @@ export function createPortfolio({api,getRows,data,refresh,notice,actionError=err
   if(!await dependencies())return;
   mode='TREASURY';busy=false;requestKey=crypto.randomUUID();
   const institutions=data('customers').filter(c=>c.account_role==='INSTITUTION');
-  shell('Book security into Treasury','<form><div class="portfolio-fields">'+
+  shell('Book security holding','<form><div class="portfolio-fields">'+
    select('sourceMode','Source',[['CATALOGUE','Green Bond Databank / registered catalogue'],['MANUAL','Manual Treasury booking']],'required')+
    select('userId','Treasury holder',institutions.map(c=>[c.user_id,c.full_name]),'required')+
    select('securityId','Registered security',[],'required')+
@@ -111,7 +111,7 @@ export function createPortfolio({api,getRows,data,refresh,notice,actionError=err
    input('marketPrice','Market price','required inputmode="decimal"')+
    input('portfolioValue','Portfolio value','readonly')+'</div><p data-price-basis></p>'+
    input('reference','Custody / source booking reference','required maxlength="128"')+
-   '</div><p class="payment-error" role="alert"></p><div class="payment-footer"><button type="submit" class="primary">Book into Treasury</button></div></form>');
+   '</div><p class="payment-error" role="alert"></p><div class="payment-footer"><button type="submit" class="primary">Book holding</button></div></form>');
   els().sourceMode.value=restored?.sourceMode||'CATALOGUE';
   if(institutions.length===1)els().userId.value=institutions[0].user_id;
   if(restored)for(const[n,v]of Object.entries(restored))if(n!=='securityId'&&els().namedItem(n))els()[n].value=v;
@@ -168,7 +168,7 @@ export function createPortfolio({api,getRows,data,refresh,notice,actionError=err
   if(serial!==epoch||!isAdmin())return;
   return openTreasurySource({api,bookingId,isCurrent:()=>serial===epoch&&isAdmin(),
    modal:(title,body)=>{shell(title,body);return dialog;},
-   onRegistered:async()=>{if(serial===epoch){close();notice('Treasury source registered in Portfolio.');await refresh();}}
+   onRegistered:async()=>{if(serial===epoch){close();notice('Holding details saved.');await refresh();}}
   });
  }
  function pendingIntent(){

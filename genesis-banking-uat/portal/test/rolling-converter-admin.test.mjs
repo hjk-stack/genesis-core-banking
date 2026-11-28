@@ -1,6 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {readFileSync} from 'node:fs';
+import {treasuryRegisterTable} from '../public/portfolio.mjs';
 import {createRollingConverterAdminClient,legacyConversionAction,BANK_CONVERTER_PREFIX} from '../src/rolling-converter-admin-client.mjs';
 import {verifyConverterRequest,CONVERTER_ADMIN_PREFIX} from '../src/rolling-converter-service-auth.mjs';
 import {portfolioConverterAssets,portfolioKey} from '../src/rolling-converter-portfolio-source.mjs';
@@ -68,4 +70,19 @@ test('unlinked Treasury holdings remain selectable but carry no fabricated avail
  assert.equal(assets[0].amount,'');assert.equal(assets[0].availableQuantity,'');
  assert.equal(assets[0].quantity,'500000');assert.equal(assets[0].key,portfolioKey(bookingId));
  assert.deepEqual(portfolioConverterAssets([position],metadata,[]),[]);
+});
+
+test('Treasury and Portfolio Management are one private banking workspace; source receipts are collapsed and old workspace actions retained',()=>{
+ const app=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8');
+ const server=readFileSync(new URL('../server.mjs',import.meta.url),'utf8');
+ assert.ok(app.includes("identity.admin&&location.origin==='https://bank.avispay.online'"));
+ assert.ok(app.includes("title:'Portfolio Management / Treasury'"));
+ assert.ok(app.includes("actions:[['treasurybook','Book holding'],...page.actions.filter(([id])=>id!=='recordsecurity')]"));
+ assert.ok(app.includes("actions:[['recordsecurity','Record holding'],['buysecurity'"));
+ assert.ok(server.includes("path==='/api/portfolio/treasury-book'&&!privateDesk"));
+ const receipt=treasuryRegisterTable(treasury);
+ assert.ok(receipt.startsWith('<details class="panel" data-treasury-register>'));
+ assert.ok(receipt.includes('Treasury booking references'));
+ assert.ok(receipt.includes(bookingId));
+ assert.ok(receipt.endsWith('</details>'));
 });

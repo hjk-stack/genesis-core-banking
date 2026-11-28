@@ -281,7 +281,7 @@ clearing:[['provider_reference','Statement'],['currency_code','Currency'],['open
 const pages={
 fx:{title:'Fiat converter',subtitle:'AVISPay treasury quotes, commission and settlement between your currency accounts.',actions:[['fxquote','Get quote'],['fxexecute','Execute conversion'],['fxcancel','Cancel quote'],['fxrefresh','Refresh reference rates']],views:[['fxquotes','Conversion quotes & settlements'],['fxrates','Published reference rates']]},
 accounts:{title:'Accounts & ABIQ',subtitle:'Account summaries, currency accounts and backoffice account management.',actions:[['customer','Open account'],['currency','Add currencies'],['abiqgenerator','Generate ABIQ number'],['accountcleanup','Review legacy accounts'],['customerprofile','Account holder details'],['suspense','Move to suspense'],['cashaccount','Register NOSTRO']],views:[['accountsummaries','Account summary'],['backofficeaccounts','Backoffice accounts'],['nostroclearing','NOSTRO Clearing'],['nostromovements','Internal clearing ledger']]},
-portfolio:{title:'Portfolio management',subtitle:'Securities, investment values and exchange orders.',actions:[['treasurybook','Book into Treasury'],['recordsecurity','Record holding'],['buysecurity','Buy'],['sellsecurity','Sell'],['syncsecurities','Refresh Green Bond catalogue']],views:[['treasurypositions','AVISPay PLC Treasury register'],['securitypositions','Securities portfolio'],['securityorders','Exchange orders'],['exchangebook','AVISPay Exchange'],['portfolio','Portfolio holdings']]},
+portfolio:{title:'Portfolio management',subtitle:'Securities, investment values and exchange orders.',actions:[['recordsecurity','Record holding'],['buysecurity','Buy'],['sellsecurity','Sell'],['syncsecurities','Refresh Green Bond catalogue']],views:[['treasurypositions','AVISPay PLC Treasury opening positions'],['securitypositions','Securities portfolio'],['securityorders','Exchange orders'],['exchangebook','AVISPay Exchange'],['portfolio','Portfolio holdings']]},
 payments:{title:'Payments',subtitle:'Register, review and transfer payments from your accounts.',actions:[['newpayment','New payment']],views:[['checkoutip','IP-to-IP checkout activations'],['checkoutipaccounts','IP-to-IP receiving accounts'],['nostroclearing','Registered correspondent banks'],['paymentregister','Payment register'],['bankpayments','Bank payments & settlement'],['bankroutes','IBAN to ABIQ routing'],['transactions','Account activity']]},
 marketplace:{title:'Marketplace City',subtitle:'Business shops, multi-shop checkout and escrow settlement.',actions:[['shop','Register shop'],['checkout','Create checkout'],['release','Release escrow'],['refund','Refund checkout']],views:[['shops','Merchant shops'],['checkouts','Checkout & settlement']]},
 cards:{title:'Cards',subtitle:'Card accounts, balances and payment activity.',actions:[['issuecard','Activate card account'],['loadcard','Load card'],['externalcard','Register external card'],['loadexternal','Load external card'],['card','Register existing card'],['redeemcode','Redeem card code'],['cancelcode','Release coded debit'],['opencardmessage','Open encrypted card'],['offlinekeys','Offline keys'],['allowance','Offline allowance'],['offlineclose','Release allowance']],views:[['cardaccounts','Card accounts'],['codedcards','Code-secured card debits'],['offlinegrants','Offline allowances']]},
@@ -313,8 +313,17 @@ $('#workspace-selector').onchange=async e=>{
   if(epoch===sessionEpoch){field.value=identity.customerUserId||'';$('#workspace-error').textContent=err.message;}
  }finally{field.disabled=false;}
 };
+function unifiedTreasuryPage(){return identity.admin&&location.origin==='https://bank.avispay.online';}
 function visiblePage(key){
- if(identity.admin)return pages[key]||pages.accounts;
+ if(identity.admin){
+  if(key==='portfolio'&&unifiedTreasuryPage()){
+   const page=pages.portfolio;
+   return {...page,title:'Portfolio Management / Treasury',subtitle:'Registered securities, holdings and valuations in one Treasury register.',
+    actions:[['treasurybook','Book holding'],...page.actions.filter(([id])=>id!=='recordsecurity')],
+    views:[...page.views.filter(([id])=>id!=='treasurypositions'),['treasurypositions','Treasury booking references']]};
+  }
+  return pages[key]||pages.accounts;
+ }
  const allowed={accounts:{...pages.accounts,subtitle:'Your accounts and available balances.',actions:[['currency','Add currencies'],...(identity.canSwitchWorkspace?[['abiqgenerator','Generate ABIQ number']]:[]),['customerprofile','My details']],views:[['accountsummaries','My accounts']]},portfolio:{...pages.portfolio,subtitle:'Your securities, investment values and exchange orders.',actions:[['buysecurity','Buy'],['sellsecurity','Sell'],['buycrypto','Purchase assets'],['sellcrypto','Convert to FIAT']]},payments:{...pages.payments,views:[['paymentregister','My payments'],['transactions','Account activity']]},cards:{...pages.cards,actions:pages.cards.actions.filter(([id])=>!['card','offlinekeys','allowance','offlineclose'].includes(id)),views:[['cardaccounts','My card accounts'],['codedcards','Code-secured card debits']]},wallets:{...pages.wallets,actions:pages.wallets.actions.filter(([id])=>id!=='cryptooffer')}};
  return allowed[key]||allowed.accounts;
 }
@@ -340,7 +349,7 @@ html+=results.map((r,i)=>{
   if(view==='nostromovements')return nostroMovementsTable(rows);
  if(view==='terminals')return posTerminalsTable(rows);
  if(view==='cardaccounts')return cardAccountTable(rows);
- if(view==='treasurypositions'&&identity.admin)return treasuryRegisterTable(rows);
+ if(view==='treasurypositions'&&unifiedTreasuryPage())return treasuryRegisterTable(rows);
  if(view==='securitypositions')return (identity.admin?stockRegisterTable(cache.treasurypositions,rows):'')+securitiesTable(rows,identity.admin);
  if(view==='securityorders')return securityOrdersTable(rows);
  if(view==='exchangebook')return securityBookTable(rows);
@@ -448,6 +457,7 @@ reverse:{title:'Reverse AVIS card authorization',path:'cards/reverse',button:'Re
 };
 function addSplit(){$('#split-fields').insertAdjacentHTML('beforeend',`<fieldset><legend>Shop allocation</legend><div class="split">${select('merchantId','Shop',shopOptions())}${input('splitAmount','Amount (EUR)','text','inputmode="decimal"')}</div></fieldset>`);}
 async function openForm(id){
+ if(id==='treasurybook'&&!unifiedTreasuryPage())return;
  if(id==='accountcleanup'){try{const {openAccountCleanup}=await import('./account-cleanup.mjs');await openAccountCleanup(api,render);}catch(e){pageError(e);}return;}
  if(id==='abiqgenerator'){abiqGenerator.open();return;}
  if(id==='checkoutmanagement'){if(identity.admin)await openCheckoutManagement(api);return;}
