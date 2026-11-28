@@ -12,41 +12,44 @@ before(async()=>{
 });
 after(async()=>{await browser?.close();await fixture?.close();});
 
-for(const viewport of [{width:320,height:640},{width:390,height:844},{width:1440,height:900}])test(`private bank access denial fills the viewport at ${viewport.width}px`,async()=>{
+for(const viewport of [{width:320,height:640},{width:390,height:844},{width:1440,height:900}])
+test(`private bank homepage starts secure sign-in at ${viewport.width}px`,async()=>{
  const page=await browser.newPage({viewport});
  const requests=[],policyErrors=[];
- try {
+ try{
   page.on('console',event=>{if(/Content Security Policy|Refused to/i.test(event.text()))policyErrors.push(event.text());});
   page.on('pageerror',error=>policyErrors.push(error.message));
-  // Keep the actual staff origin and browser navigation headers, then forward
-  // locally to the real server. Fulfil its unmodified status, body and CSP.
+  // Browser navigations go through the real bank application. The AVIS-facing
+  // bootstrap is represented here by a static page, avoiding real credentials
+  // and external requests during this browser routing regression.
   await page.route('**/*',async route=>{
-   const request=route.request(),url=new URL(request.url());requests.push(url.href);
-   assert.equal(url.origin,'https://bank.avispay.online','the denied page must not request external assets');
-   const response=await fixture.request(url.pathname+url.search,{method:request.method(),headers:{...await request.allHeaders(),host:'bank.avispay.online'},body:request.postData()||undefined});
-   const headers=Object.fromEntries(Object.entries(response.headers).filter(([name])=>!['connection','keep-alive','transfer-encoding','content-length'].includes(name)));
+   const request=route.request(),url=new URL(request.url());
+   requests.push(url.href);
+   assert.equal(url.origin,'https://bank.avispay.online');
+   if(url.pathname==='/access/start'){
+    await route.fulfill({status:200,contentType:'text/html; charset=utf-8',
+     body:'<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AVIS sign-in</title><body><main><h1>AVIS identity sign-in</h1></main></body></html>'});
+    return;
+   }
+   const response=await fixture.request(url.pathname+url.search,{method:request.method(),
+    headers:{...await request.allHeaders(),host:'bank.avispay.online'},body:request.postData()||undefined});
+   if(url.pathname==='/'){
+    assert.equal(response.status,303);
+    assert.equal(response.headers.location,'/access/start');
+    assert.equal(response.body,'');
+   }
+   const headers=Object.fromEntries(Object.entries(response.headers)
+    .filter(([name])=>!['connection','keep-alive','transfer-encoding','content-length'].includes(name)));
    await route.fulfill({status:response.status,headers,body:response.body});
   });
-  const response=await page.goto('https://bank.avispay.online/');
-  assert.equal(response.status(),403);assert.match(response.headers()['content-type'],/^text\/html/);
-  const title=page.getByRole('heading',{level:1,name:'You are not authorized to access this platform.',exact:true});
-  await title.waitFor({state:'visible'});
-  const layout=await page.evaluate(()=>{
-   const main=document.querySelector('main'),link=document.querySelector('.public-link');
-   const bounds=main.getBoundingClientRect(),target=link.getBoundingClientRect();
-   return {width:bounds.width,height:bounds.height,scrollWidth:document.documentElement.scrollWidth,
-    background:getComputedStyle(document.documentElement).backgroundColor,linkHeight:target.height,
-    embeddedAssets:document.querySelectorAll('script,img,iframe,link[rel="stylesheet"]').length};
-  });
-  assert.equal(layout.width,viewport.width);assert.ok(layout.height>=viewport.height);
-  assert.ok(layout.scrollWidth<=viewport.width,'the full-screen message must not overflow horizontally');
-  assert.equal(layout.background,'rgb(7, 22, 43)','the response CSP must allow the page stylesheet');
-  assert.ok(layout.linkHeight>=44);assert.equal(layout.embeddedAssets,0);
-  const link=page.getByRole('link',{name:'Go to AVIS.LAND',exact:true});
-  assert.equal(await link.getAttribute('href'),'https://avis.land');
-  assert.equal(await page.locator('input,form,dialog').count(),0);
-  await page.keyboard.press('Tab');assert.equal(await link.evaluate(element=>element===document.activeElement),true);
-  assert.deepEqual(policyErrors,[]);assert.ok(requests.length>=1);
+  const result=await page.goto('https://bank.avispay.online/');
+  assert.equal(result.status(),200);
+  assert.equal(new URL(page.url()).pathname,'/access/start');
+  assert.equal(await page.getByRole('heading',{name:'AVIS identity sign-in'}).isVisible(),true);
+  assert.equal(requests.filter(url=>new URL(url).pathname==='/').length,1);
+  assert.ok(requests.some(url=>new URL(url).pathname==='/access/start'));
+  assert.equal(await page.getByText('You are not authorized to access this platform.').count(),0);
+  assert.deepEqual(policyErrors,[]);
   await page.screenshot({path:`test-results/bank-access-${viewport.width}.png`,fullPage:true});
- } finally {await page.close();}
+ }finally{await page.close();}
 });
