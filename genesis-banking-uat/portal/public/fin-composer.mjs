@@ -1,9 +1,12 @@
 import {FIELDS,PACS008,PACS003,COUNTRIES,REPORTING_CODES,blankForm,buildFinMessage,readFinMessage,normalizeForm,newUetr,defaultNostro} from './fin-message.mjs';
+import {balance} from './fin-settlement.mjs';
 
 // Screen 1 of the FinTerminal (fin-terminal.mjs), the "FIN - ISO 20022 Composer" of the bank owner's specification: the form
 // and its XML kept in step both ways (fin-message.mjs), the XML checked against the official schemas on the server
 // (src/fin-terminal.mjs), the UETR made here and refused there when another payment or draft has it, and drafts.
-const PAUSE=300;
+const PAUSE=300,LOOK=15000;
+// An amount as the message writes one: above zero, at most five decimals.
+const amountOf=value=>/^[0-9]{1,13}(\.[0-9]{1,5})?$/.test(value)&&/[1-9]/.test(value);
 const whole=form=>Object.fromEntries(FIELDS.map(field=>[field,typeof form?.[field]==='string'?form[field]:'']));
 // The accounts a message is booked against (step 3 of the specification's job): the Common or Suspense account, the NOSTRO
 // account and the "+" wallet for the converted tokens. Chosen, an account writes what the message says of it; nothing is booked.
@@ -19,7 +22,13 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  const controls=[...screen.querySelectorAll('.fin-actions button,.fin-actions select,[data-fin-new-uetr],[data-fin-transact]')],choices=[...screen.querySelectorAll('[data-fin-choice]')];
  const turn=$('[data-fin-direction]'),type=$('[data-fin-field="messageType"]'),mandate=$('[data-fin-mandate]'),register=$('[data-fin-register]'),keep=$('[data-fin-save]');
  const transact=$('[data-fin-transact]'),pinBox=$('[data-fin-transact-pins]'),pins=[...screen.querySelectorAll('[data-fin-transact-pin]')];
+ // The FIAT Converter and the Bank fee (the bank owner: "missing the button with clear statement for "FIAT Converter" activation and
+ // then the wallet selector is active", "install a second row below the selected accounts the live change rate", and "bank fees is
+ // taken from the amount ... If the conversion is pressed then we will take the fees in the Crypto section").
+ const converterRow=$('[data-fin-converter-row]'),converterSwitch=$('[data-fin-convert-switch]'),walletChoice=$('[data-fin-choice="tokenWalletId"]');
+ const rateRow=$('[data-fin-rate]'),feeRow=$('[data-fin-fee-row]'),feeInput=$('[data-fin-fee]'),feeCurrency=$('[data-fin-fee-currency]');
  let form=blankForm(),draft=null,dirty=false,edits=0,broken=null,pause=null,busy=false,refused=null,selection=noChoice();
+ let converter=false,fee='',feeEdits=0,quoted=null,quoting=null,asked=0;
  // The bank owner: "We now register an incoming transfer so AVISPay PLC is the receiver", and "There is missing a function: Debit.
  // This is when we have authorisation for debiting an external connected account".
  let direction='OUTGOING',registered=false,converted=null;
@@ -47,6 +56,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   }));
   problems.hidden=!errors.length;
   for(const input of inputs)if(named.has(input.dataset.finField))input.setAttribute('aria-invalid','true');else input.removeAttribute('aria-invalid');
+  if(named.has('bankFee'))feeInput.setAttribute('aria-invalid','true');else feeInput.removeAttribute('aria-invalid');
  }
  const coins=()=>converted?[converted.quantity+' '+converted.asset]:[];
  const closed=()=>direction==='OUTGOING'?'Transacted · '+(transacted||'SENDING'):direction==='DEBIT'?['Debit',transacted||'SENDING',...coins()].join(' · ')
@@ -65,9 +75,57 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  // again. The mandate is a Debit's.
  function paintDirection(){
   turn.value=direction;turn.disabled=type.disabled=registered;register.hidden=direction!=='INCOMING'||registered;keep.hidden=registered;mandate.hidden=direction!=='DEBIT';
-  paintTransact();
+  paintTransact();paintConverter();
  }
- function changed(){edits++;dirty=true;refused=null;show('unchecked','XSD: not checked');paintState();paintTransact();}
+ // For an incoming transfer and a Debit, where money comes in: the FIAT Converter, off at first. Off, the transfer is booked less the
+ // bank fee typed; on, it is converted into the "+" wallet chosen at the live rate shown under the accounts, and no fee is taken here.
+ function paintConverter(){
+  const inflow=direction!=='OUTGOING';
+  converterRow.hidden=!inflow;converterSwitch.setAttribute('aria-pressed',String(converter));converterSwitch.disabled=registered;walletChoice.hidden=!converter;
+  feeRow.hidden=!inflow||converter;feeInput.disabled=registered;if(feeInput.value!==fee)feeInput.value=fee;feeCurrency.textContent=normalizeForm(form).currency;
+  paintRate();
+ }
+ // The live rate, as Tab 2's converter writes it (fin-converter.mjs): one unit of the message's currency in the wallet's asset and,
+ // with the amount written, what the transfer converts to - as it would be converted now; a transfer converted already shows its
+ // tokens in its state.
+ const liveRate=()=>converter&&direction!=='OUTGOING'&&!registered&&!!selection.tokenWalletId;
+ const quoteKey=()=>{const now=normalizeForm(form);return [selection.tokenWalletId,now.currency,amountOf(now.amount)?now.amount:''].join('|');};
+ function paintRate(){
+  const shown=liveRate()&&quoted?.key===quoteKey();
+  rateRow.hidden=!shown;if(!shown)return;
+  rateRow.dataset.state=quoted.error?'error':'live';
+  rateRow.textContent=quoted.error||'1 '+quoted.currency+' = '+balance(quoted.rate,8)+' '+quoted.asset+' · '+quoted.source
+   +(quoted.quantity?' · '+balance(quoted.amount)+' '+quoted.currency+' → '+quoted.quantity+' '+quoted.asset:'');
+ }
+ async function requote(){
+  view.clearTimeout(quoting);quoting=null;
+  if(!liveRate()){quoted=null;paintRate();return;}
+  const now=normalizeForm(form),key=quoteKey(),ask=++asked,amount=amountOf(now.amount)?now.amount:'';
+  let result;
+  try{result=await request('GET','/api/fin-terminal/quote?'+new URLSearchParams({tokenWalletId:selection.tokenWalletId,currency:now.currency,...(amount?{amount}:{})}));}
+  catch(error){result={error:error?.message||'No live rate now.'};}
+  if(ask!==asked)return;
+  quoted={...result,key,currency:now.currency,amount};paintRate();
+ }
+ // Quoted again a moment after the wallet, the currency or the amount changed.
+ function track(){
+  if(liveRate()&&quoted?.key!==quoteKey()){view.clearTimeout(quoting);quoting=view.setTimeout(()=>void requote(),PAUSE);}
+  paintRate();
+ }
+ function changed(){edits++;dirty=true;refused=null;show('unchecked','XSD: not checked');paintState();paintTransact();paintConverter();track();}
+ converterSwitch.addEventListener('click',()=>{
+  if(busy||registered)return;
+  converter=!converter;
+  if(converter)fee='';else selection={...selection,tokenWalletId:''};
+  paintChoices();changed();
+ });
+ // The bank fee is kept with the draft; the message stays as it is written.
+ feeInput.addEventListener('input',()=>{fee=feeInput.value;feeEdits++;dirty=true;refused=null;feeInput.removeAttribute('aria-invalid');paintState();});
+ const charged=()=>direction!=='OUTGOING'&&!converter&&fee.trim()?{bankFee:fee.trim()}:{};
+ // Switched on, the FIAT Converter needs its "+" wallet: the money is not booked as cash instead.
+ function walletChosen(){
+  if(converter&&direction!=='OUTGOING'&&!selection.tokenWalletId)throw Object.assign(new Error('Select a "+" wallet, or switch the FIAT Converter off.'),{code:'FIN_TOKEN_WALLET',field:'tokenWalletId'});
+ }
 
  // The Common and Suspense accounts and the NOSTRO accounts in the message's currency; the "+" wallets, never AG or AGi
  // (the server lists them so). A choice a draft keeps that the lists no longer hold is shown as not available.
@@ -88,7 +146,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
    tokenWalletId:accounts.tokenWallets.map(wallet=>[wallet.accountId,[wallet.holder,wallet.currency,wallet.network].join(' · ')])};
   for(const select of choices){
    const name=select.dataset.finChoice,items=lists[name];
-   select.replaceChildren(option('','—'),...items.map(([value,text,enabled])=>option(value,text,enabled!==false)));
+   select.replaceChildren(option('',name==='tokenWalletId'?'+ Wallet':'—'),...items.map(([value,text,enabled])=>option(value,text,enabled!==false)));
    if(selection[name]&&!items.some(([value])=>value===selection[name]))select.append(option(selection[name],'Not available'));
    select.value=selection[name];
   }
@@ -166,6 +224,8 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   const now=normalizeForm(form);let clear={messageType:next==='DEBIT'?PACS003:PACS008,...(direction==='DEBIT'?{mandateId:'',mandateSignatureDate:''}:{})};
   for(const name of ['bookingAccountId','nostroAccountId']){if(bound(name,now)===false)selection={...selection,[name]:''};else clear={...clear,...unwritten(name,now)};}
   direction=next;
+  // Outgoing, the money leaves: no conversion and no bank fee.
+  if(next==='OUTGOING'){converter=false;fee='';selection={...selection,tokenWalletId:''};}
   // A NOSTRO the message cannot name goes when it is no longer incoming (review finding).
   if(selection.nostroAccountId&&accounts.nostroAccounts.some(account=>account.accountId===selection.nostroAccountId)&&
    !usable().some(account=>account.accountId===selection.nostroAccountId))selection={...selection,nostroAccountId:''};
@@ -235,9 +295,10 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  async function save(){
   flush();
   if(broken)throw Object.assign(new Error('XML: '+broken),{code:'FIN_MESSAGE_INVALID'});
-  const at=edits,{draft:saved}=await request('POST','/api/fin-terminal/drafts',{form,selection,direction,...(draft?{draftId:draft.draftId,revision:draft.revision}:{})});
+  const at=edits,typed=feeEdits,{draft:saved}=await request('POST','/api/fin-terminal/drafts',{form,selection,direction,...charged(),...(draft?{draftId:draft.draftId,revision:draft.revision}:{})});
   draft={draftId:saved.draftId,revision:saved.revision};
-  if(edits===at){form=whole(saved.form);selection=chosen(saved.selection);dirty=false;paint();paintChoices();xml.value=saved.xml;}
+  // A bank fee typed while it saved is not saved yet (review finding).
+  if(edits===at){form=whole(saved.form);selection=chosen(saved.selection);dirty=feeEdits!==typed;paint();paintChoices();xml.value=saved.xml;}
   await listDrafts();paintState();
   return saved;
  }
@@ -245,9 +306,10 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  async function registerIncoming(){
   flush();
   if(broken)throw Object.assign(new Error('XML: '+broken),{code:'FIN_MESSAGE_INVALID'});
-  const at=edits,{draft:kept}=await request('POST','/api/fin-terminal/incoming',{form,selection,...(draft?{draftId:draft.draftId,revision:draft.revision}:{})});
+  walletChosen();
+  const at=edits,typed=feeEdits,{draft:kept}=await request('POST','/api/fin-terminal/incoming',{form,selection,...charged(),...(draft?{draftId:draft.draftId,revision:draft.revision}:{})});
   draft={draftId:kept.draftId,revision:kept.revision};registered=kept.registered===true;converted=kept.conversion||null;
-  if(edits===at){form=whole(kept.form);selection=chosen(kept.selection);dirty=false;paint();paintChoices();xml.value=kept.xml;show('passed','XSD: PASSED');}
+  if(edits===at){form=whole(kept.form);selection=chosen(kept.selection);converter=!!selection.tokenWalletId;if(feeEdits===typed)fee=kept.bankFee||'';dirty=false;paint();paintChoices();xml.value=kept.xml;show('passed','XSD: PASSED');}
   await listDrafts();paintState();paintDirection();
  }
  // Transacted, the message is kept as the bank has it and closed: what was written meanwhile is shown, not kept. Pressed again, it
@@ -255,26 +317,29 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  async function transactMessage(){
   flush();
   if(broken)throw Object.assign(new Error('XML: '+broken),{code:'FIN_MESSAGE_INVALID'});
-  const body={form,selection,direction,...(draft?{draftId:draft.draftId,revision:draft.revision}:{}),...(fourEyes?{pin1:pins[0].value,pin2:pins[1].value}:{})};
+  walletChosen();
+  const body={form,selection,direction,...charged(),...(draft?{draftId:draft.draftId,revision:draft.revision}:{}),...(fourEyes?{pin1:pins[0].value,pin2:pins[1].value}:{})};
   for(const input of pins)input.value='';
-  const at=edits,to=peer;let result;
+  const at=edits,typed=feeEdits,to=peer;let result;
   try{result=await request('POST','/api/fin-terminal/peers/'+encodeURIComponent(to)+'/transact',body);}
   catch(error){if(['FIN_PIN','FIN_PIN_MISSING'].includes(error?.code))onRefused();throw error;}
   const kept=result.draft;draft={draftId:kept.draftId,revision:kept.revision};registered=kept.registered===true;converted=kept.conversion||null;
   transacted=kept.transacted||result.wire?.status||result.debit?.status||null;
-  if(edits===at){form=whole(kept.form);selection=chosen(kept.selection);dirty=false;paint();paintChoices();xml.value=kept.xml;show('passed','XSD: PASSED');}
+  if(edits===at){form=whole(kept.form);selection=chosen(kept.selection);converter=!!selection.tokenWalletId;if(feeEdits===typed)fee=kept.bankFee||'';dirty=false;paint();paintChoices();xml.value=kept.xml;show('passed','XSD: PASSED');}
   await listDrafts();paintState();paintDirection();onTransacted(to,result);
  }
  const chosen=kept=>Object.fromEntries(CHOICES.map(name=>[name,typeof kept?.[name]==='string'?kept[name]:'']));
  function start(){
   form=blankForm(new Date());selection=noChoice();draft=null;dirty=false;broken=null;refused=null;direction='OUTGOING';registered=false;converted=null;
+  converter=false;fee='';quoted=null;
   passed=-1;transacted=null;preselect();paint();paintChoices();write();show('unchecked','XSD: not checked');paintState();paintDirection();
  }
  async function open(draftId){
   const {draft:loaded}=await request('GET','/api/fin-terminal/drafts/'+encodeURIComponent(draftId));
   form=whole(loaded.form);selection=chosen(loaded.selection);draft={draftId:loaded.draftId,revision:loaded.revision};dirty=false;broken=null;refused=null;
   direction=['INCOMING','DEBIT'].includes(loaded.direction)?loaded.direction:'OUTGOING';registered=loaded.registered===true;converted=loaded.conversion||null;
-  passed=-1;transacted=loaded.transacted||null;paint();paintChoices();xml.value=loaded.xml;paintState();paintDirection();await check();
+  converter=!!selection.tokenWalletId;fee=typeof loaded.bankFee==='string'?loaded.bankFee:'';quoted=null;
+  passed=-1;transacted=loaded.transacted||null;paint();paintChoices();xml.value=loaded.xml;paintState();paintDirection();track();await check();
  }
  async function listAccounts(){
   let listed;try{listed=(await request('GET','/api/fin-terminal/accounts'))?.accounts;}catch{return;}
@@ -299,7 +364,8 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  register.addEventListener('click',()=>void act(registerIncoming,register));
  transact.addEventListener('click',()=>{if(!transact.disabled)void act(transactMessage,transact);});
 
- return {start(){start();void listDrafts();void listAccounts();},listDrafts,
+ // The live rate is read again every 15 seconds while it is shown, as Tab 2's converter reads its rates.
+ return {start(){start();void listDrafts();void listAccounts();view.setInterval(()=>{if(!busy&&!rateRow.hidden)void requote();},LOOK);},listDrafts,
   // The Peer Server chosen above the composer (fin-peer.mjs), and the 4-Eyes switch with the PINs' holders (fin-access.mjs).
   peer(chosen){peer=chosen?.profileId||null;paintTransact();},
   access(state){

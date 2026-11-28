@@ -604,6 +604,26 @@ test('Debit into a "+" wallet: settled, its money is converted at the rate quote
  assert.equal(result.messages[0].text,'DEBIT 300.00 EUR <- '+DEBTOR+' · converted into the wallet');
 });
 
+// The bank owner: "bank fees is taken from the amount ... and booked into the treasury wallets or account ... If the conversion is
+// pressed then we will take the fees in the Crypto section".
+test('Debit with a bank fee: settled, the Common or Suspense account is booked the amount less the fee and the Treasury account the fee; into a wallet it takes none',async()=>{
+ received.length=0;reply=xml=>debitStatus(xml,'ACSC');
+ const treasury=async()=>(await pool.query("SELECT available_balance::numeric(20,2)::text AS b FROM avis_core_v2.ledger_accounts WHERE owner_type='TREASURY' AND sub_account_code='BANK_FEES' AND currency_code='EUR'")).rows[0]?.b||'0.00';
+ const order={...debited(),bankFee:'7.25'},start=await money(),fees=await treasury();
+ const result=await peers.transact(admin,owner,'EXAMPLE_TLS_PEER',order);
+ assert.equal(result.debit.status,'SETTLED');
+ assert.deepEqual(moved(start,await money()),{account:'292.75',nostro:'300.00',held:'0.00',suspense:'0.00'});
+ assert.equal((Number(await treasury())-Number(fees)).toFixed(2),'7.25');
+ assert.deepEqual([String((await debit(order.form.uetr)).bank_fee),result.draft.bankFee],['7.250000000000000000','7.25']);
+ // The debtor's bank is asked for the whole amount: the fee is the bank's own booking.
+ assert.match(received[0].xml,/<IntrBkSttlmAmt Ccy="EUR">300\.00<\/IntrBkSttlmAmt>/);
+ // Into a wallet, or at the amount or above it, nothing is sent.
+ const wallet=await eurcWallet();
+ for(const refusedOrder of [{...debited({},{tokenWalletId:wallet}),bankFee:'1.00'},{...debited(),bankFee:'300.00'}])
+  await assert.rejects(peers.transact(admin,owner,'EXAMPLE_TLS_PEER',refusedOrder),refused('FIN_BANK_FEE',409));
+ assert.equal(received.length,1);
+});
+
 test('a Debit refused by the debtor\'s bank, not taken or not answered books nothing; one whose finishing never completed is finished at the next Transact',async()=>{
  const start=await money();
  // Refused (RJCT with its reason).

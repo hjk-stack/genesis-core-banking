@@ -77,7 +77,9 @@
 <fieldset class="fin-panel fin-panel-wide"><legend>Accounts</legend>
 <label><span>Common / Suspense Account</span><select data-fin-choice="bookingAccountId"><option value="">—</option></select></label>
 <label><span>NOSTRO Account</span><select data-fin-choice="nostroAccountId"><option value="">—</option></select></label>
-<label><span>+ Wallet</span><select data-fin-choice="tokenWalletId"><option value="">—</option></select></label>
+<div class="fin-converter-choice" data-fin-converter-row hidden><button type="button" class="fin-switch" aria-pressed="false" data-fin-convert-switch>FIAT Converter</button><select data-fin-choice="tokenWalletId" aria-label="+ Wallet" hidden><option value="">+ Wallet</option></select></div>
+<p class="fin-rate fin-code" role="status" data-fin-rate hidden></p>
+<label data-fin-fee-row hidden><span>Bank Fee</span><span class="fin-with-unit"><input class="fin-code" data-fin-fee maxlength="19" inputmode="decimal" spellcheck="false"><span data-fin-fee-currency></span></span></label>
 </fieldset>
 <div class="fin-row">
 <fieldset class="fin-panel"><legend>Debtor Side</legend>

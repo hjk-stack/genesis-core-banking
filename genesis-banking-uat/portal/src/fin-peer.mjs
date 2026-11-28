@@ -492,11 +492,11 @@ export class FinPeers{
     VALUES($1,$2,'OUT',$3,$4,$5,$6,'SENDING',$7,$8)`,[messageId,peer.profile_id,PACS003,form.businessMessageId,[form.uetr],text,xml,String(actor.id)]);
    await db.query(`INSERT INTO avis_core_v2.fin_terminal_debits(uetr,message_id,draft_id,profile_id,booking_account_id,nostro_cash_account_id,nostro_ledger_account_id,
     token_wallet_account_id,asset,network,wallet_holder,wallet_address,rate,rate_source,rate_observed_at,amount,currency_code,debtor_name,debtor_account,mandate_id,
-    mandate_signed,four_eyes,checkers,sent_by,sent_by_name) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
+    mandate_signed,four_eyes,checkers,sent_by,sent_by_name,bank_fee) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26::numeric)`,
     [form.uetr,messageId,draftId,peer.profile_id,selection.bookingAccountId,selection.nostroAccountId,kept.nostroLedger,selection.tokenWalletId,
      wallet?.currency_code??null,wallet?.network??null,wallet?.full_name??null,wallet?.public_address??null,quote?.rate??null,quote?.source??null,
      quote?quote.observedAt.toISOString():null,form.amount,form.currency,form.debtorName,form.debtorIban,form.mandateId,form.mandateSignatureDate,
-     check.fourEyes,check.checkers,String(actor.id),person.name]);
+     check.fourEyes,check.checkers,String(actor.id),person.name,message.bankFee??null]);
    await db.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_DEBIT_SENT',form.uetr]);
   });
   const {received,error}=await this.#deliver(peer,xml,credentials);

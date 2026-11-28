@@ -39,7 +39,11 @@ before(async()=>{
  longNumber=await register.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example Long NOSTRO',bic:'EXMPNL2AXXX',accountNumber:'NOSTRO-'+'0'.repeat(40),currency:'EUR'},randomUUID());
  holder=(await pool.query('SELECT user_id FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[sender.accountId])).rows[0].user_id;
  wallets={usdc:await cryptoLedgerAccount(pool,{userId:holder,currency:'USDC',network:'ETHEREUM'}),ag:await cryptoLedgerAccount(pool,{userId:holder,currency:'AG',network:'ETHEREUM'}),
-  agi:await cryptoLedgerAccount(pool,{userId:holder,currency:'AGi',network:'ETHEREUM'}),custody:await cryptoLedgerAccount(pool,{userId:holder,currency:'USDC',network:'SOLANA',scope:'CUSTODY'})};
+  agi:await cryptoLedgerAccount(pool,{userId:holder,currency:'AGi',network:'ETHEREUM'}),custody:await cryptoLedgerAccount(pool,{userId:holder,currency:'USDC',network:'SOLANA',scope:'CUSTODY'}),
+  // Operative, a wallet has a receiving address on its chain and is in one of the converter's assets: USDC on Solana has no address
+  // there, USDT is not converted into.
+  unaddressed:await cryptoLedgerAccount(pool,{userId:holder,currency:'USDC',network:'SOLANA'}),unconverted:await cryptoLedgerAccount(pool,{userId:holder,currency:'USDT',network:'ETHEREUM'})};
+ await pool.query("INSERT INTO avis_core_v2.user_deposit_addresses(user_id,network,public_address,is_primary) VALUES($1,'ETHEREUM','0x1111111111111111111111111111111111111111',true)",[holder]);
 });
 after(async()=>{if(db)await db.close();else await pool.end()});
 
@@ -139,7 +143,8 @@ test('only a bank administrator: a customer, or an administrator in a customer\'
  }
 });
 
-test('the accounts to choose: the Common and Suspense accounts, the NOSTRO register and the "+" wallets - never AG or AGi',async()=>{
+// The bank owner: "the wallet selector is active and calls the wallets they are in the crypto section wallet scroller operative".
+test('the accounts to choose: the Common and Suspense accounts, the NOSTRO register and the operative "+" wallets - never AG or AGi',async()=>{
  const listed=await fin.accounts(admin),booking=Object.fromEntries(listed.bookingAccounts.map(account=>[account.accountId,account]));
  assert.deepEqual([commonEur.id,commonUsd.id,suspense.id].map(id=>[booking[id].type,booking[id].label,booking[id].currency]),
   [['COMMON','Example Common','EUR'],['COMMON','Example Common','USD'],['SUSPENSE','Example Suspense','EUR']]);
@@ -154,7 +159,7 @@ test('the accounts to choose: the Common and Suspense accounts, the NOSTRO regis
  assert.equal(nostros[longNumber.id].settles,false);
  const offered=listed.tokenWallets.map(wallet=>wallet.accountId);
  assert.deepEqual(listed.tokenWallets.find(wallet=>wallet.accountId===wallets.usdc),{accountId:wallets.usdc,holder:'Example Sender',currency:'USDC',network:'ETHEREUM',name:'USDC'});
- for(const excluded of [wallets.ag,wallets.agi,wallets.custody,commonEur.id])assert.ok(!offered.includes(excluded),excluded);
+ for(const excluded of [wallets.ag,wallets.agi,wallets.custody,wallets.unaddressed,wallets.unconverted,commonEur.id])assert.ok(!offered.includes(excluded),excluded);
  assert.ok(listed.tokenWallets.every(wallet=>!['AG','AGi'].includes(wallet.currency)));
  for(const actor of [guest,{id:admin.id+':customer:'+holder,admin:false,customerUserId:String(holder)}])await assert.rejects(fin.accounts(actor),refused('FORBIDDEN'));
 });
@@ -178,7 +183,8 @@ test('a draft keeps its chosen accounts; each must be one the terminal offers, i
  for(const [choice,code] of [
   [{bookingAccountId:commonUsd.id},'FIN_BOOKING_ACCOUNT'],[{bookingAccountId:sender.accountId},'FIN_BOOKING_ACCOUNT'],[{bookingAccountId:randomUUID()},'FIN_BOOKING_ACCOUNT'],
   [{nostroAccountId:closed.id},'FIN_NOSTRO_ACCOUNT'],[{nostroAccountId:nostroUsd.id},'FIN_NOSTRO_ACCOUNT'],[{nostroAccountId:longNumber.id},'FIN_NOSTRO_ACCOUNT'],
-  [{tokenWalletId:wallets.ag},'FIN_TOKEN_WALLET'],[{tokenWalletId:wallets.agi},'FIN_TOKEN_WALLET'],[{tokenWalletId:wallets.custody},'FIN_TOKEN_WALLET'],[{tokenWalletId:commonEur.id},'FIN_TOKEN_WALLET']])
+  [{tokenWalletId:wallets.ag},'FIN_TOKEN_WALLET'],[{tokenWalletId:wallets.agi},'FIN_TOKEN_WALLET'],[{tokenWalletId:wallets.custody},'FIN_TOKEN_WALLET'],[{tokenWalletId:commonEur.id},'FIN_TOKEN_WALLET'],
+  [{tokenWalletId:wallets.unaddressed},'FIN_TOKEN_WALLET'],[{tokenWalletId:wallets.unconverted},'FIN_TOKEN_WALLET']])
   await assert.rejects(fin.save(admin,{form:form(),selection:choice}),e=>e.code===code&&e.status===409&&e.field===Object.keys(choice)[0],JSON.stringify(choice));
  for(const [choice,field] of [[{bookingAccountId:'not-an-account'},'bookingAccountId'],[[],'selection'],['selection','selection']])
   await assert.rejects(fin.save(admin,{form:form(),selection:choice}),e=>e.code==='INVALID_FIELD'&&e.field===field,field);

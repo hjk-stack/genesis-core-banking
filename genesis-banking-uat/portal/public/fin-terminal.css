@@ -55,6 +55,15 @@ html,body{margin:0;min-height:100%;background:var(--fin-ground);color:var(--fin-
 .fin-pair input,.fin-pair select{flex:1 1 0}
 .fin-with-button button{flex:0 0 32px;border:1px solid var(--fin-line);border-radius:6px;background:none;color:var(--fin-orange);font:inherit;font-size:15px;cursor:pointer}
 .fin-panel textarea{min-height:64px;resize:vertical}
+/* Page 1's FIAT Converter (the bank owner: "missing the button with clear statement for "FIAT Converter" activation"): switched on,
+   it is filled and the "+" wallet beside it is chosen; under the accounts, the live rate - or, not converting, the bank fee. */
+.fin-converter-choice{display:grid;grid-template-columns:minmax(96px,38%) minmax(0,1fr);align-items:center;gap:8px}
+.fin-switch{justify-self:start;padding:6px 12px;border:1px solid var(--fin-orange);border-radius:7px;background:none;color:var(--fin-orange);font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.fin-switch[aria-pressed=true]{background:var(--fin-orange);color:#1a1205}
+.fin-rate{grid-column:1/-1;margin:0;font-size:12.5px;color:var(--fin-right);overflow-wrap:anywhere}
+.fin-rate[data-state=error]{color:var(--fin-wrong)}
+.fin-with-unit{display:flex;align-items:center;gap:6px;min-width:0}
+.fin-with-unit span{flex:0 0 auto;font-size:12.5px}
 .fin-xml{grid-column:2;grid-row:2;display:flex;flex-direction:column;gap:8px;min-height:0;min-width:0;padding:10px 12px;border:1px solid var(--fin-line);border-radius:8px;background:var(--fin-panel)}
 .fin-xml h2{margin:0;font-size:13px;font-weight:650;color:var(--fin-orange)}
 .fin-xml textarea{flex:1;min-height:120px;resize:none;overflow:auto;white-space:pre;font-size:12px;line-height:1.5;color:#cfe0f5;tab-size:2}

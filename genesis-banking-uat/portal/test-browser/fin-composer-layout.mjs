@@ -27,7 +27,9 @@ before(async()=>{
  common=(await bank.openAccount(admin,{accountType:'COMMON',fullName:'Example Common',currencies:['EUR']},randomUUID())).managedAccounts[0];
  nostro=await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example NOSTRO',bic:'EXMPCHZZXXX',accountNumber:'NOSTRO-EXAMPLE-1',currency:'EUR'},randomUUID());
  const holder=(await bank.openCustomer(admin,{fullName:'Example Holder',accountType:'PERSONAL',currencies:['EUR']},randomUUID())).userId;
- wallet=await cryptoLedgerAccount(pool,{userId:holder,currency:'USDC',network:'ETHEREUM'});await cryptoLedgerAccount(pool,{userId:holder,currency:'AG',network:'ETHEREUM'});
+ wallet=await cryptoLedgerAccount(pool,{userId:holder,currency:'EURC',network:'SOLANA'});await cryptoLedgerAccount(pool,{userId:holder,currency:'AG',network:'ETHEREUM'});
+ // The FIAT Converter loads a "+" wallet with a receiving address on its chain.
+ await pool.query("INSERT INTO avis_core_v2.user_deposit_addresses(user_id,network,public_address,is_primary) VALUES($1,'SOLANA','ExampleSolanaBrowserAddress555555555555555',true)",[holder]);
  server=createBankServer({pool,authenticate:async()=>admin,finTerminalAccess:async()=>finTerminalOwner,secureCookies:false});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base='http://127.0.0.1:'+server.address().port;
  browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
@@ -49,11 +51,11 @@ for(const width of [260,390,820,1440])test('the composer on '+(width<500?'a phon
   assert.deepEqual(await page.locator('[data-fin-mandate]').isVisible(),false);
   assert.match(await xml.inputValue(),/<Nm>Example Creditor SARL<\/Nm>/);assert.match(await xml.inputValue(),/<IntrBkSttlmAmt Ccy="EUR">1250000\.00<\/IntrBkSttlmAmt>/);
   // The accounts: the Common account is the debtor's, the NOSTRO account settles the transfer - never writing the Receiver BIC (the
-  // bank owner: "the nostro is selected by the currency not by the BIC") - and the "+" wallet is kept.
+  // bank owner: "the nostro is selected by the currency not by the BIC"). The money leaves: no FIAT Converter, no bank fee.
   const choice=name=>page.locator('[data-fin-choice="'+name+'"]');
   await page.waitForFunction(()=>document.querySelector('[data-fin-choice="tokenWalletId"]').options.length>1);
-  assert.deepEqual(await choice('tokenWalletId').locator('option').allTextContents(),['—','Example Holder · USDC · ETHEREUM']);
-  await choice('bookingAccountId').selectOption(common.id);await choice('nostroAccountId').selectOption(nostro.id);await choice('tokenWalletId').selectOption(wallet);
+  assert.deepEqual([await page.locator('[data-fin-converter-row]').isVisible(),await page.locator('[data-fin-fee-row]').isVisible()],[false,false]);
+  await choice('bookingAccountId').selectOption(common.id);await choice('nostroAccountId').selectOption(nostro.id);
   assert.deepEqual([await field('debtorIban').inputValue(),await field('receiverBic').inputValue(),await field('settlement').inputValue(),await field('settlementAccount').inputValue()],
    [common.abiqIban,'SMPLFRPPXXX','INDA','NOSTRO-EXAMPLE-1']);
   // The XML writes the form.
@@ -86,7 +88,7 @@ for(const width of [260,390,820,1440])test('the composer on '+(width<500?'a phon
   await page.locator('[data-fin-drafts]').selectOption(draftId);
   await page.waitForFunction(()=>document.querySelector('[data-fin-xsd]').textContent==='XSD: PASSED');
   assert.equal(await field('uetr').inputValue(),uetr);assert.equal(await field('amount').inputValue(),'990.50');assert.equal(await state.textContent(),'Draft saved · revision 1');
-  assert.deepEqual([await choice('bookingAccountId').inputValue(),await choice('nostroAccountId').inputValue(),await choice('tokenWalletId').inputValue()],[common.id,nostro.id,wallet]);
+  assert.deepEqual([await choice('bookingAccountId').inputValue(),await choice('nostroAccountId').inputValue()],[common.id,nostro.id]);
   // A new message given the saved message's UETR is refused, the UETR marked.
   await page.getByRole('button',{name:'New',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[data-fin-draft-state]').textContent==='New message');
   await field('debtorName').fill('Example Debtor GmbH');
@@ -95,6 +97,46 @@ for(const width of [260,390,820,1440])test('the composer on '+(width<500?'a phon
   await page.waitForFunction(()=>document.querySelector('[data-fin-xsd]').textContent.startsWith('This UETR is already used'));
   assert.equal(await field('uetr').getAttribute('aria-invalid'),'true');assert.equal(await verdict.getAttribute('data-state'),'error');
   await page.screenshot({path:'test-results/fin-composer-refused-'+width+'.png'});
+  assert.deepEqual(errors,[]);
+ }finally{await context.close();}
+});
+
+// The bank owner: "missing the button with clear statement for "FIAT Converter" activation and then the wallet selector is active",
+// "install a second row below the selected accounts the live change rate", and the bank fee for the transfers not converted.
+for(const width of [260,390,820,1440])test('the FIAT Converter on '+(width<500?'a phone':width<1000?'an iPad':'a computer')+' ('+width+'px): with the Bank fee off, the "+" wallet and the live rate under the accounts on, inside the window',async()=>{
+ const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage(),errors=[];
+ page.on('pageerror',error=>errors.push(error.message));
+ try{
+  assert.equal((await context.request.post(base+'/api/login',{headers:{origin:base},data:{username:admin.username,password:'fixture'}})).status(),200);
+  await page.goto(base+'/fin-terminal');await page.locator('[data-fin-composer]').waitFor();
+  await page.waitForFunction(()=>document.querySelector('[data-fin-choice="tokenWalletId"]').options.length>1);
+  await page.locator('[data-fin-direction]').selectOption('INCOMING');await page.locator('[data-fin-field="amount"]').fill('1000.00');
+  const inside=async()=>page.evaluate(()=>{
+   const parts=['[data-fin-choice="bookingAccountId"]','[data-fin-convert-switch]','[data-fin-choice="tokenWalletId"]','[data-fin-rate]','[data-fin-fee]'];
+   return {sideways:document.documentElement.scrollWidth>innerWidth,parts:parts.flatMap(part=>{const node=document.querySelector(part);if(!node.offsetParent)return [];
+    const box=node.getBoundingClientRect();return [{part,top:box.top,bottom:box.bottom,left:box.left,right:box.right,height:box.height}];})};
+  });
+  // Off: the Bank fee, in the message's currency, under the accounts.
+  const fee=page.locator('[data-fin-fee]'),converter=page.locator('[data-fin-convert-switch]');
+  await fee.scrollIntoViewIfNeeded();
+  assert.deepEqual([await converter.textContent(),await converter.getAttribute('aria-pressed'),await page.locator('[data-fin-fee-currency]').textContent()],['FIAT Converter','false','EUR']);
+  let seen=await inside();
+  assert.deepEqual(seen.parts.map(part=>part.part),['[data-fin-choice="bookingAccountId"]','[data-fin-convert-switch]','[data-fin-fee]']);
+  for(const part of seen.parts)assert.ok(part.left>=0&&part.right<=width+0.5&&part.height>=28,JSON.stringify(part)+' '+width);
+  assert.ok(seen.parts[2].top>=seen.parts[0].bottom,'the fee under the accounts, '+width);assert.equal(seen.sideways,false);
+  await page.screenshot({path:'test-results/fin-converter-off-'+width+'.png'});
+  // On: pressed, the "+" wallet beside it; the live rate in the row under the accounts.
+  await converter.click();assert.equal(await converter.getAttribute('aria-pressed'),'true');
+  await page.locator('[data-fin-choice="tokenWalletId"]').selectOption(wallet);
+  await page.waitForFunction(()=>!document.querySelector('[data-fin-rate]').hidden);
+  assert.equal(await page.locator('[data-fin-rate]').textContent(),'1 EUR = 1 EURC · MiCA 1:1 · 1,000.00 EUR → 999.5000 EURC');
+  const look=await page.evaluate(()=>({pressed:getComputedStyle(document.querySelector('[data-fin-convert-switch]')).backgroundColor,rate:getComputedStyle(document.querySelector('[data-fin-rate]')).color}));
+  assert.deepEqual(look,{pressed:'rgb(245, 159, 11)',rate:'rgb(52, 211, 153)'});
+  seen=await inside();
+  assert.deepEqual(seen.parts.map(part=>part.part),['[data-fin-choice="bookingAccountId"]','[data-fin-convert-switch]','[data-fin-choice="tokenWalletId"]','[data-fin-rate]']);
+  for(const part of seen.parts)assert.ok(part.left>=0&&part.right<=width+0.5,JSON.stringify(part)+' '+width);
+  assert.ok(seen.parts[3].top>=Math.max(seen.parts[0].bottom,seen.parts[2].bottom),'the rate under the accounts, '+width);assert.equal(seen.sideways,false);
+  await page.locator('[data-fin-rate]').scrollIntoViewIfNeeded();await page.screenshot({path:'test-results/fin-converter-on-'+width+'.png'});
   assert.deepEqual(errors,[]);
  }finally{await context.close();}
 });
