@@ -27,7 +27,7 @@ import {startFinTerminal} from '../public/fin-terminal.mjs';
 const admin={id:'fin-peer-register-admin',username:'fin-peer-register',admin:true},guest={id:'guest',admin:false};
 const NS='urn:iso:std:iso:20022:tech:xsd:',VAULT='https://gbank-peers-example.vault.azure.net',PEER_BIC='SMPLFRPPXXX',OWN_BIC='AVIPTN64XXX';
 const VAULT_ENV={AVIS_PEER_VAULT:VAULT+'/',IDENTITY_ENDPOINT:'http://identity.example.test/msi/token',IDENTITY_HEADER:'example-identity-header'};
-let pool,db,dir,certs,nostro,plainNostro,noBicNostro,tlsServer,httpsServer,received,secrets,asked,vaultDown;
+let pool,db,dir,certs,nostro,plainNostro,noBicNostro,tlsServer,httpsServer,received,secrets,asked,vaultDown,states=new Map(),onLastPage=null;
 const refused=(code,field,status)=>error=>error.code===code&&(field===undefined||error.field===field)&&(status===undefined||error.status===status);
 // Azure as the bank app reaches it with its own identity: the token service, then the vault's secrets.
 async function azure(url,init={}){
@@ -42,10 +42,15 @@ async function azure(url,init={}){
  const name=decodeURIComponent(address.pathname.split('/secrets/')[1]||'');
  if(init.method==='PUT'){const body=JSON.parse(init.body);secrets.set(name,body.value);return Response.json({id:VAULT+'/secrets/'+name+'/v1',value:body.value});}
  if(!name){
-  // One secret on each page, as Azure pages them; a next link elsewhere is never followed.
-  const names=[...secrets.keys(),'other-app-secret'],at=Number(address.searchParams.get('skip')||0);
-  return Response.json({value:names.slice(at,at+1).map(item=>({id:VAULT+'/secrets/'+item})),nextLink:at+1<names.length?VAULT+'/secrets?api-version=7.4&skip='+(at+1):'https://elsewhere.example.test/secrets'});
+  // One secret on each page, as Azure pages them, a disabled one marked so; a next link elsewhere is never followed.
+  const names=[...secrets.keys(),'other-app-secret'],at=Number(address.searchParams.get('skip')||0),last=at+1>=names.length;
+  const page={value:names.slice(at,at+1).map(item=>({id:VAULT+'/secrets/'+item,attributes:{enabled:states.get(item)!=='disabled'}})),
+   nextLink:last?'https://elsewhere.example.test/secrets':VAULT+'/secrets?api-version=7.4&skip='+(at+1)};
+  // Something written once the last page is read, before the answer arrives.
+  if(last&&onLastPage){const then=onLastPage;onLastPage=null;await then();}
+  return Response.json(page);
  }
+ if(states.has(name))return new Response('{}',{status:403});
  return secrets.has(name)?Response.json({id:VAULT+'/secrets/'+name+'/v1',value:secrets.get(name)}):new Response('{}',{status:404});
 }
 const vault=()=>new PeerVault({env:VAULT_ENV,fetcher:azure});
@@ -174,6 +179,27 @@ test('a login in Key Vault is a connector\'s credentials: a certificate or a use
  await assert.rejects(authenticateMessage(pool,'EXAMPLE',"POST",'/network/EXAMPLE/iso20022','<x/>',{},undefined),refused('MESSAGE_AUTHENTICATION',undefined,401));
  // Over TLS a user name and password never go.
  await assert.rejects(sendBankMessage({endpoint_url:'tls://127.0.0.1:'+tlsServer.address().port},'<x/>',{kind:'password',user:'u',password:'p'}),refused('CONNECTOR_CONFIGURATION'));
+});
+
+test('a refresh read to its end is what the bank holds: a login deleted, disabled, unreadable or broken in Key Vault goes; a failed refresh or a login written meanwhile changes nothing (review finding)',async()=>{
+ const peers=new FinPeers(pool,{vault:vault()}),secretOf=profileId=>'fin-peer-'+profileId.toLowerCase().replaceAll('_','-');
+ const register=async name=>secretOf((await peers.register(admin,{name,protocol:'SWIFT_ISO20022',address:'127.0.0.1:443',cashAccountId:nostro.id,login:certificateLogin()})).profileId);
+ const known=name=>{try{connectorCredentials('KEYVAULT:'+name);return true;}catch{return false;}};
+ const kept=await register('Example Kept Bank'),deleted=await register('Example Deleted Bank'),disabled=await register('Example Disabled Bank');
+ const forbidden=await register('Example Forbidden Bank'),broken=await register('Example Broken Bank');
+ assert.ok([kept,deleted,disabled,forbidden,broken].every(known));
+ // A refresh that fails changes nothing.
+ secrets.delete(deleted);vaultDown=true;
+ try{await assert.rejects(vault().load(),refused('PEER_VAULT',undefined,503));}finally{vaultDown=false;}
+ assert.equal(known(deleted),true);
+ // Read to its end: what is gone from the vault, disabled, no longer readable or no login goes; its connector is refused.
+ states.set(disabled,'disabled');states.set(forbidden,'forbidden');secrets.set(broken,'not a login');
+ try{await vault().load();}finally{states.clear();}
+ assert.deepEqual([kept,deleted,disabled,forbidden,broken].map(known),[true,false,false,false,false]);
+ // A login written while a refresh was reading the vault stays as written.
+ let racing;onLastPage=async()=>{racing=await register('Example Racing Bank');};
+ await vault().load();
+ assert.ok(racing&&known(racing)&&known(kept));
 });
 
 test('over HTTP: a signed-in bank administrator with FinTerminal access registers with the CSRF token, and the listening port knows the new IP address',async()=>{
