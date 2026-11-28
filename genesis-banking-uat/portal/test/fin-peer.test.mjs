@@ -71,7 +71,8 @@ before(async()=>{
  });
  await new Promise(resolve=>tlsServer.listen(0,'127.0.0.1',resolve));await new Promise(resolve=>httpsServer.listen(0,'127.0.0.1',resolve));
  const gone=tls.createServer();await new Promise(resolve=>gone.listen(0,'127.0.0.1',resolve));closedPort=gone.address().port;await new Promise(resolve=>gone.close(resolve));
- // The peers as the bank registers them (Administration, "Add bank connector"); a SWIFT gateway and a disabled connector are no IP-to-IP peers.
+ // The peers as the bank registers them (Administration, "Add bank connector"), of every type - the bank owner: "Peer server is only
+ // our form or connection IP-IP, API, ISO20022" - a SWIFT ISO 20022 gateway too; a disabled connector is no peer.
  const bank=new AccountManagement(pool,{directory:{env:{}}});
  const nostro=await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example NOSTRO',bic:'SMPLFRPPXXX',accountNumber:'NOSTRO-EXAMPLE-1',currency:'EUR'},randomUUID());
  const connector=(profileId,name,endpoint,{protocol='IP_TO_IP',peerBic='SMPLFRPPXXX',credentialReference=CREDENTIAL}={})=>bank.registerBankConnector(admin,
@@ -91,17 +92,18 @@ after(async()=>{
 });
 const rows=async profileId=>(await pool.query('SELECT * FROM avis_core_v2.fin_terminal_peer_messages WHERE profile_id=$1 ORDER BY sequence',[profileId])).rows;
 
-test('the peers are the bank\'s IP-to-IP connectors to peer banks, shown to bank administrators only',async()=>{
+test('the peers are the bank\'s connectors to peer banks of every type, with their NOSTRO\'s currency, shown to bank administrators only',async()=>{
  const port=name=>String(name==='TLS'?tlsServer.address().port:httpsServer.address().port);
+ const peer=(profileId,name,protocol,address,transport,peerBic='SMPLFRPPXXX')=>({profileId,name,protocol,address,transport,localBic:'EXMPDEFFXXX',peerBic,currency:'EUR',addresses:[]});
  assert.deepEqual(await peers.list(admin),[
-  {profileId:'EXAMPLE_TLS_PEER',name:'EXAMPLE-GW01',address:'localhost:'+port('TLS'),transport:'TLS',localBic:'EXMPDEFFXXX',peerBic:'SMPLFRPPXXX',addresses:[]},
-  {profileId:'EXAMPLE_HTTPS_PEER',name:'EXAMPLE-GW02',address:'localhost:'+port('HTTPS'),transport:'HTTPS',localBic:'EXMPDEFFXXX',peerBic:'SMPLGB2L',addresses:[]},
-  {profileId:'EXAMPLE_CLOSED_PEER',name:'EXAMPLE-GW03',address:'localhost:'+closedPort,transport:'TLS',localBic:'EXMPDEFFXXX',peerBic:'SMPLFRPPXXX',addresses:[]},
-  {profileId:'EXAMPLE_NO_CERT',name:'EXAMPLE-GW04',address:'localhost:'+port('TLS'),transport:'TLS',localBic:'EXMPDEFFXXX',peerBic:'SMPLFRPPXXX',addresses:[]}]);
+  peer('EXAMPLE_TLS_PEER','EXAMPLE-GW01','IP_TO_IP','localhost:'+port('TLS'),'TLS'),peer('EXAMPLE_HTTPS_PEER','EXAMPLE-GW02','IP_TO_IP','localhost:'+port('HTTPS'),'HTTPS','SMPLGB2L'),
+  peer('EXAMPLE_CLOSED_PEER','EXAMPLE-GW03','IP_TO_IP','localhost:'+closedPort,'TLS'),peer('EXAMPLE_NO_CERT','EXAMPLE-GW04','IP_TO_IP','localhost:'+port('TLS'),'TLS'),
+  peer('EXAMPLE_SWIFT','EXAMPLE-SWIFT','SWIFT_ISO20022','localhost:'+port('HTTPS'),'HTTPS')]);
  // A peer nothing was sent to yet is not connected.
  const first=await peers.messages(admin,'EXAMPLE_CLOSED_PEER');
  assert.deepEqual(first.messages,[]);assert.equal(first.link.state,'NOT_CONNECTED');assert.equal(first.link.since,null);assert.equal(first.link.error,null);
- for(const profileId of ['EXAMPLE_SWIFT','EXAMPLE_OFF','EXAMPLE_UNKNOWN','example_tls_peer',null])
+ assert.deepEqual((await peers.messages(admin,'EXAMPLE_SWIFT')).messages,[]);
+ for(const profileId of ['EXAMPLE_OFF','EXAMPLE_UNKNOWN','example_tls_peer',null])
   await assert.rejects(peers.messages(admin,profileId),refused('CONNECTOR_NOT_FOUND',404));
  await assert.rejects(peers.list(guest),refused('FORBIDDEN',403));await assert.rejects(peers.messages(guest,'EXAMPLE_TLS_PEER'),refused('FORBIDDEN',403));
  await assert.rejects(peers.send(guest,'EXAMPLE_TLS_PEER',{event:'INIT',text:'HELLO'}),refused('FORBIDDEN',403));
@@ -209,7 +211,7 @@ test('nothing is sent or kept for a connector without its certificate in place, 
  for(const [body,field] of [[{event:'WELCOME',text:'HELLO'},'event'],[{text:'HELLO'},'event'],[null,'event'],[{event:'INIT',text:'x'.repeat(1001)},'text'],
   [{event:'INIT',text:'HELLO\u0007'},'text'],[{event:'INIT',text:42},'text']])
   await assert.rejects(peers.send(admin,'EXAMPLE_TLS_PEER',body),error=>error.code==='INVALID_FIELD'&&error.field===field);
- await assert.rejects(peers.send(admin,'EXAMPLE_SWIFT',{event:'INIT',text:'HELLO'}),refused('CONNECTOR_NOT_FOUND',404));
+ await assert.rejects(peers.send(admin,'EXAMPLE_OFF',{event:'INIT',text:'HELLO'}),refused('CONNECTOR_NOT_FOUND',404));
  assert.deepEqual(received,[]);
  assert.equal((await pool.query('SELECT count(*)::int AS n FROM avis_core_v2.fin_terminal_peer_messages')).rows[0].n,before);
  // A thousand characters, the system event's longest description, go.
@@ -238,7 +240,7 @@ test('the bank serves the peers and their streams to its administrators, and sen
   const listed=await ask('/api/fin-terminal/peers');assert.equal(listed.status,200);assert.deepEqual((await listed.json()).peers,await peers.list(admin));
   const stream=await ask('/api/fin-terminal/peers/EXAMPLE_TLS_PEER/messages');assert.equal(stream.status,200);
   assert.deepEqual((await stream.json()).messages.map(m=>m.messageId),(await peers.messages(admin,'EXAMPLE_TLS_PEER')).messages.map(m=>m.messageId));
-  assert.equal((await ask('/api/fin-terminal/peers/EXAMPLE_SWIFT/messages')).status,404);
+  assert.equal((await ask('/api/fin-terminal/peers/EXAMPLE_OFF/messages')).status,404);
   received.length=0;reply=()=>peerEvent();
   const post=body=>({method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   assert.equal((await ask('/api/fin-terminal/peers/EXAMPLE_TLS_PEER/messages',post({event:'INIT',text:'HELLO'}))).status,403);assert.deepEqual(received,[]);

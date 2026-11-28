@@ -1,5 +1,5 @@
 // Screen A's peer panel in the FinTerminal (fin-terminal.mjs), "Peer Server Handshake & Direct IP Interaction" of the bank owner's
-// specification: the peer banks' servers the bank has an IP-to-IP connector to (Administration, "Add bank connector"), the welcome
+// specification: the peer banks' servers the bank has a connector to (Administration, "Add bank connector"), the welcome
 // or session message sent to one (src/fin-peer.mjs) and the stream of what was sent and what the peer answered. Only a peer's own
 // answer is shown as its answer; a peer that does not answer is not connected. Step 5: the listening port opened for a chosen time
 // (src/fin-listener.mjs) to each peer's whitelisted IP addresses, a peer's own messages and the bank's answers in the stream; while
@@ -17,6 +17,10 @@ const REASONS={NOT_ISO20022:'not an admi.004 or admi.002 message',SCHEMA:'it doe
 const TAKEN={NOT_ISO20022:'not an ISO 20022 message',SCHEMA:'it does not pass its official schema',HEADER:'its header names other banks or another message',
  OTHER_EVENT:'another event than INIT, HBT or END',BATCH:'more than one credit transfer in one message'};
 const untaken=message=>message.error==='NOT_SUPPORTED'?'a '+message.type+' message is not taken on this connection':TAKEN[message.error]||message.error||'';
+// The connector types the bank registers (Administration, "Add bank connector"); the bank owner: "Peer server is only our form or
+// connection IP-IP, API, ISO20022".
+export const PROTOCOLS=Object.freeze({IP_TO_IP:'IP-to-IP',BANK_API:'Bank API',SWIFT_ISO20022:'ISO 20022'});
+export const peerLabel=peer=>[peer.name,PROTOCOLS[peer.protocol],peer.address,peer.peerBic].filter(Boolean).join(' · ');
 // The stream is looked at again every few seconds while it is shown: another operator's messages come in too.
 const LOOK=5;
 
@@ -27,9 +31,10 @@ export function streamLine(message){
  const when='['+clock(message.at)+']',text=message.text?['·',message.text]:[],seq='(Seq #'+String(message.sequence).padStart(6,'0')+')';
  // What the bank sent: its own message, or its answer to a peer's message - the same event, a refusal with its reason, or a
  // transfer's status (pacs.002: ACSC, or RJCT with its reason code).
+ // A credit transfer the bank sent (Screen B's Cash Wire) as the specification's terminal writes it: "IP pacs.008 SENT".
  if(message.direction==='OUT'){
-  const answer=Boolean(message.answerTo),refusal=message.type==='admi.002.001.01',status=message.type==='pacs.002.001.10';
-  return ['>>>',when,...(answer?['ANSWER']:[]),refusal?'REJECT':status?['pacs.002',message.event,...message.parameters.slice(1)].join(' '):EVENTS[message.event]||message.event,
+  const answer=Boolean(message.answerTo),refusal=message.type==='admi.002.001.01',status=message.type==='pacs.002.001.10',transfer=message.type==='pacs.008.001.08';
+  return ['>>>',when,...(answer?['ANSWER']:[]),refusal?'REJECT':status?['pacs.002',message.event,...message.parameters.slice(1)].join(' '):transfer?'IP pacs.008':EVENTS[message.event]||message.event,
    SENT[message.status]||message.status,seq,
    ...(message.status==='FAILED'?['·',failure(message.error)]:[]),...(message.status==='DELIVERED'&&!answer&&!message.answered?['· no answer message']:[]),
    ...(refusal?['·',message.event]:[]),...text].join(' ');
@@ -38,6 +43,8 @@ export function streamLine(message){
  // "RECEIVED <amount> -> <settlement>".
  if(!message.answerTo)return message.status==='RECEIVED'?['<<<',when,'PEER',...(message.type==='pacs.008.001.08'?['pacs.008']:[EVENTS[message.event]||message.event,'RECEIVED']),seq,...text].join(' ')
   :['<<<',when,'PEER MESSAGE NOT READ',seq,'·',untaken(message)].join(' ');
+ // The peer's status of a transfer the bank sent: settled, refused with its reason, or another status (pacs.002).
+ if(message.type==='pacs.002.001.10'&&message.status==='ACK')return ['<<<',when,'PEER pacs.002',message.event,...message.parameters.slice(1),...text].join(' ');
  // What the peer said: its event, or its refusal with the message it names. Said, but not of the message sent, it does not count.
  const said=message.type==='admi.002.001.01'?[message.type,message.event,...text,...(message.parameters[0]?['(ref '+message.parameters[0]+')']:[])]
   :[message.type,[message.event,...message.parameters].join(' '),...text];
@@ -89,7 +96,7 @@ export function createFinPeer({root=document,request,view=root.defaultView||glob
   if(at===looks&&profileId===server.value)take(result);
  }
  function paintPeers(){
-  server.replaceChildren(...(peers.length?peers.map(peer=>option(peer.profileId,[peer.name,peer.address,peer.peerBic].join(' · '))):[option('','No peer server registered')]));
+  server.replaceChildren(...(peers.length?peers.map(peer=>option(peer.profileId,peerLabel(peer))):[option('','No peer server registered')]));
   server.disabled=!peers.length;node.textContent=chosen()?.name||'—';paintSend();paintAddresses();
  }
  // Nothing goes out while the listening port is open (the bank owner: "not both working at the same time").

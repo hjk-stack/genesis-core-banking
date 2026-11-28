@@ -86,10 +86,12 @@ test('a new message: its own UETR and message ID, the spec\'s defaults, and its 
   // One press makes a new UETR, in the form and in the XML.
   page.$('[data-fin-new-uetr]').click();
   assert.notEqual(page.field('uetr').value,uetr);assert.equal(uetrOf(page.xml.value),page.field('uetr').value);
-  // Only what is real: with no peer bank registered here, no connection or session is shown (screen A, step 4), and no dispatch
-  // before its step (3b); the 4-Eyes switch has its own (3a, fin-terminal-access.test.mjs).
+  // Only what is real: with no peer bank registered here, no connection or session is shown (screen A, step 4), and nothing is
+  // dispatched - Execute & Dispatch (step 3b, fin-cash-wire.test.mjs) waits for a peer server; the 4-Eyes switch has its own (3a,
+  // fin-terminal-access.test.mjs).
   assert.equal(page.$('[data-fin-peer-link]').textContent,'Peer link: NOT CONNECTED');
-  assert.doesNotMatch(page.doc.body.textContent,/(?<!NOT )CONNECTED|mTLS|PEER_ACK|UNLOCKED|Dispatch/i);
+  assert.doesNotMatch(page.doc.body.textContent,/(?<!NOT )CONNECTED|mTLS|PEER_ACK|UNLOCKED|pacs\.008 SENT|NOSTRO & Core Synced/i);
+  assert.equal(page.$('[data-fin-wire-send]').disabled,true);assert.equal(page.$('[data-fin-wire-peer]').textContent,'No peer server registered');
  }finally{page.close();}
 });
 

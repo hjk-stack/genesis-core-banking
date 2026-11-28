@@ -4,7 +4,8 @@
 // must be directly on the GUI for both PINs" and "Login se the GUI must sow my name on it".
 const LOOK=30000;
 
-export function createFinAccess({root=document,request,view=root.defaultView||globalThis}){
+// onState: the 4-Eyes switch and the PINs' holders for the Cash Wire's Execute & Dispatch (fin-wire.mjs), each time they are read.
+export function createFinAccess({root=document,request,view=root.defaultView||globalThis,onState=()=>{}}){
  const section=root.querySelector('[data-fin-access]'),names=root.querySelector('[data-fin-access-names]'),fourEyes=root.querySelector('[data-fin-four-eyes]');
  const pins=root.querySelector('[data-fin-pins]'),problem=root.querySelector('[data-fin-access-problem]');
  if(!section||!names||!fourEyes||!pins)return null;
@@ -32,7 +33,7 @@ export function createFinAccess({root=document,request,view=root.defaultView||gl
   fourEyes.disabled=data.you?.owner!==true;
   // A PIN being typed is not painted over.
   if(!busy&&!pins.contains(root.activeElement))pins.replaceChildren(...(data.pins||[]).map(pinForm));
-  section.hidden=false;
+  section.hidden=false;onState(data);
  }
  function say(text){if(problem){problem.textContent=text||'';problem.hidden=!text;}}
  async function refresh(){let data;try{data=await request('GET','/api/fin-terminal/access');}catch{return;}paint(data);}

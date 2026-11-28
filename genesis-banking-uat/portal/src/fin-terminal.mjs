@@ -6,7 +6,7 @@ import {SovereignCore,fault,money,decimal} from './core.mjs';
 import {RECEIVING_OWNERS} from './checkout-ip-settlement.mjs';
 import {cryptoLedgerAccount} from './crypto/rolling-ledger.mjs';
 import {MetaMaskPricing} from './metamask-pricing.mjs';
-import {FIELDS,LIMITS,HEAD,PACS008,buildFinMessage,normalizeForm,fieldProblems} from '../public/fin-message.mjs';
+import {FIELDS,LIMITS,HEAD,PACS008,blankForm,buildFinMessage,normalizeForm,fieldProblems} from '../public/fin-message.mjs';
 
 // The FinTerminal's composer on the server: requested by the bank owner with the FinTerminal ISO 20022 specification,
 // screen 1 "FIN - ISO 20022 Composer". A message is checked against the official schemas (schemas/head.001.001.02.xsd from
@@ -52,12 +52,15 @@ export async function validateFinMessage(xml){
 // The accounts a message is booked against, as the bank's own pages list them. Requested by the bank owner: "Connected to Common
 // and Suspense Accounts selectors and the NOSTRO accounts and the Wallet scroller in crypto for booking the converted tokens" -
 // the Common and Suspense accounts of the Manual IP-Handler, the NOSTRO register, and the "+" wallets ("Add currency" in the
-// wallet scroller), "not to AG and AGi". Nothing is booked here: the choices are kept with the draft.
+// wallet scroller), "not to AG and AGi". Nothing is booked here: the choices are kept with the draft. The suspense account holding
+// the Cash Wire's money on its way (WIRE_SUSPENSE) is the wires' own: no account to book against or pay from.
+const WIRE_SUSPENSE='FIN:WIRES';
 const BOOKING=`SELECT a.account_id,a.owner_type,a.currency_code,b.abiq_iban,p.abiq_bic,p.institution_name,a.available_balance::text AS balance,
  COALESCE(a.display_name,CASE WHEN a.owner_type='COMMON_POOL' THEN 'Common Account' ELSE 'Suspense Account' END) AS label
  FROM avis_core_v2.ledger_accounts a JOIN avis_core_v2.abiq_account_identifiers b ON b.ledger_account_id=a.account_id
  JOIN avis_core_v2.abiq_network_participants p ON p.participant_code=b.participant_code
- WHERE a.owner_type=ANY($1::text[]) AND b.status='ACTIVE' AND a.wallet_scope='FUNDING' AND a.account_category='LIABILITY' AND a.network IS NULL`;
+ WHERE a.owner_type=ANY($1::text[]) AND b.status='ACTIVE' AND a.wallet_scope='FUNDING' AND a.account_category='LIABILITY' AND a.network IS NULL
+  AND a.sub_account_code<>'${WIRE_SUSPENSE}'`;
 const NOSTRO=`SELECT cash_account_id,institution_name,bic_code,iban_or_account_no,account_name,currency_code,is_active
  FROM avis_core_v2.external_cash_accounts`;
 const WALLETS=`SELECT l.account_id,l.user_id,u.full_name,l.currency_code,l.network,a.name
@@ -211,6 +214,7 @@ export class FinTerminal{
  // A UETR already given to another draft, an IP-to-IP transfer or a bank payment is refused.
  async #uetrTaken(db,uetr,draftId){
   return (await db.query(`SELECT 1 FROM avis_core_v2.fin_terminal_drafts WHERE uetr=$1 AND draft_id IS DISTINCT FROM $2::uuid
+   UNION ALL SELECT 1 FROM avis_core_v2.fin_terminal_wires WHERE uetr=$1
    UNION ALL SELECT 1 FROM avis_core_v2.interbank_ip_transfers WHERE uetr=$1
    UNION ALL SELECT 1 FROM avis_core_v2.payment_requests WHERE uetr=$1 LIMIT 1`,[uetr,draftId])).rows.length>0;
  }
@@ -358,16 +362,63 @@ export class FinTerminal{
   if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
   await this.#checkSelection(client,selection,form,'INCOMING');
   if(draftId!==null)await this.#opened(client,draftId,revision);
-  // The NOSTRO's own ledger account: an asset of the bank at its correspondent, in the transfer's currency.
-  const nostro=(await client.query(`SELECT a.account_id FROM avis_core_v2.external_cash_accounts c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.ledger_account_id
-   WHERE c.cash_account_id=$1 AND c.is_active AND a.currency_code=$2 AND a.account_category='ASSET' AND a.network IS NULL AND a.wallet_scope='FUNDING'
-    AND a.owner_type IN ('CORRESPONDENT_NOSTRO','CENTRAL_BANK_RESERVE') FOR SHARE OF c`,[selection.nostroAccountId,form.currency])).rows[0];
+  const nostro=await this.#nostroLedger(client,selection.nostroAccountId,form.currency);
   if(!nostro)fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
   const journalId=await new SovereignCore(null).post(client,actor,'fin-incoming:'+form.uetr,'FIN_INCOMING_BOOKED',form.businessMessageId,
    [{accountId:nostro.account_id,direction:'DEBIT',amount:form.amount},{accountId:selection.bookingAccountId,direction:'CREDIT',amount:form.amount}]);
   const row=await this.#keep(client,actor,draftId,{form,xml,valid:true,selection,direction:'INCOMING'},journalId);
   await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_INCOMING_BOOKED',journalId]);
   return row;
+ }
+ // The NOSTRO's own ledger account: an asset of the bank at its correspondent, in the transfer's currency.
+ async #nostroLedger(db,cashAccountId,currency){
+  return (await db.query(`SELECT a.account_id FROM avis_core_v2.external_cash_accounts c JOIN avis_core_v2.ledger_accounts a ON a.account_id=c.ledger_account_id
+   WHERE c.cash_account_id=$1 AND c.is_active AND a.currency_code=$2 AND a.account_category='ASSET' AND a.network IS NULL AND a.wallet_scope='FUNDING'
+    AND a.owner_type IN ('CORRESPONDENT_NOSTRO','CENTRAL_BANK_RESERVE') FOR SHARE OF c`,[cashAccountId,currency])).rows[0]||null;
+ }
+ // Screen B's Cash Wire (NOSTRO) (the specification v3's dispatch_manual_transfer, CASH_NOSTRO; src/fin-peer.mjs): a credit transfer
+ // in euros from AVISPay PLC's account at the bank to the beneficiary at the peer bank, settled on the bank's NOSTRO there - the
+ // connector's clearing account (INDA). The message the composer writes for an outgoing transfer on that account and that NOSTRO,
+ // under the connector's BICs; the beneficiary's bank is the peer.
+ async cashWire(peer,{uetr,bookingAccountId,amount,creditorName,creditorIban},at=new Date()){
+  const account=(await this.pool.query(BOOKING+' AND a.account_id=$2 AND a.currency_code=$3',[RECEIVING_OWNERS,bookingAccountId,'EUR'])).rows[0];
+  if(!account)fault('FIN_BOOKING_ACCOUNT','bookingAccountId',409);
+  const nostro=(await this.pool.query(NOSTRO+' WHERE cash_account_id=$1 AND currency_code=$2 AND is_active',[peer.cash_account_id,'EUR'])).rows[0];
+  if(!nostro||!fitsSettlement(nostro)||nostro.bic_code&&nostro.bic_code.toUpperCase()!==peer.peer_bic)fault('FIN_WIRE_NOSTRO','profileId',409);
+  const form=normalizeForm({...blankForm(at),uetr,senderBic:peer.local_bic,receiverBic:peer.peer_bic,currency:'EUR',amount,settlement:'INDA',
+   settlementAccount:settlementNumber(nostro.iban_or_account_no),debtorName:account.institution_name,debtorIban:account.abiq_iban,debtorAgentBic:account.abiq_bic,
+   creditorName,creditorIban,creditorAgentBic:peer.peer_bic,unstructuredRemittance:'INTERBANK-IP-DISPATCH'});
+  const xml=buildFinMessage(form);
+  if(fieldProblems(form).length||!(await validateFinMessage(xml)).valid)fault('FIN_WIRE_INVALID','form');
+  return {form,xml};
+ }
+ // Executed, the wire's money leaves AVISPay PLC's account at once for the wires' suspense account, and the NOSTRO's cash is
+ // reserved for it, as a bank payment reserves it (src/payments.mjs): both balances locked in the order post_journal locks them, the
+ // account paying only what it holds free. The peer's answer settles it on the NOSTRO or returns it (finishWire).
+ async reserveWire(client,actor,{form,bookingAccountId,nostroAccountId}){
+  if(await this.#uetrTaken(client,form.uetr,null))fault('FIN_UETR_DUPLICATE','uetr',409);
+  await this.#checkSelection(client,{bookingAccountId,nostroAccountId,tokenWalletId:null},form,'OUTGOING');
+  const nostro=await this.#nostroLedger(client,nostroAccountId,form.currency);
+  if(!nostro)fault('FIN_WIRE_NOSTRO','profileId',409);
+  const core=new SovereignCore(null),suspense=await core.system(client,'SUSPENSE_OUTBOUND',form.currency,WIRE_SUSPENSE);
+  const free=new Map((await client.query(`SELECT account_id,available_balance-locked_balance>=$2::numeric AS covered FROM avis_core_v2.ledger_accounts
+   WHERE account_id=ANY($1::uuid[]) ORDER BY account_id FOR UPDATE`,[[bookingAccountId,nostro.account_id],form.amount])).rows.map(row=>[row.account_id,row.covered]));
+  if(!free.get(bookingAccountId))fault('INSUFFICIENT_FUNDS','amount',409);
+  if(!free.get(nostro.account_id))fault('INSUFFICIENT_CLEARING_FUNDS','profileId',409);
+  await client.query('UPDATE avis_core_v2.ledger_accounts SET locked_balance=locked_balance+$2::numeric WHERE account_id=$1',[nostro.account_id,form.amount]);
+  const journalId=await core.post(client,actor,'fin-outgoing:'+form.uetr,'FIN_OUTGOING_RESERVED',form.businessMessageId,
+   [{accountId:bookingAccountId,direction:'DEBIT',amount:form.amount},{accountId:suspense,direction:'CREDIT',amount:form.amount}]);
+  return {journalId,suspense};
+ }
+ // The peer's answer to a wire: settled (ACSC, ACCC), its money goes from the suspense account to the NOSTRO, whose cash it reserved;
+ // refused (RJCT), or never delivered, back to the account it was paid from.
+ async finishWire(client,actor,wire,settled,reference){
+  const nostro=(await client.query('SELECT ledger_account_id FROM avis_core_v2.external_cash_accounts WHERE cash_account_id=$1',[wire.nostro_cash_account_id])).rows[0].ledger_account_id;
+  await client.query('SELECT 1 FROM avis_core_v2.ledger_accounts WHERE account_id=ANY($1::uuid[]) ORDER BY account_id FOR UPDATE',[[nostro,wire.booking_account_id,wire.suspense_account_id]]);
+  await client.query('UPDATE avis_core_v2.ledger_accounts SET locked_balance=locked_balance-$2::numeric WHERE account_id=$1',[nostro,wire.amount]);
+  return new SovereignCore(null).post(client,actor,'fin-outgoing-'+(settled?'settled:':'returned:')+wire.uetr,settled?'FIN_OUTGOING_SETTLED':'FIN_OUTGOING_RETURNED',reference,
+   [{accountId:wire.suspense_account_id,direction:'DEBIT',amount:wire.amount},{accountId:settled?nostro:wire.booking_account_id,direction:'CREDIT',amount:wire.amount}],
+   settled?null:wire.reserve_journal_id);
  }
  // Under MANUAL INTERVENTION a peer's transfer is checked as one registered and held for the operator: kept as an incoming draft
  // on AVISPay PLC's account and the NOSTRO it names, nothing booked; the operator registers it in the composer.
