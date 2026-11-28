@@ -62,6 +62,7 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  SECURITY_CATALOGUE_READ:'The Green Bond catalogue could not be refreshed. Try Refresh catalogue again.',
  SECURITY_TERMS_CHANGED:'The security denomination or currency changed. Select the security again.',
  SECURITY_NOT_FOUND:'Select a registered security.',POSITION_CHANGED:'This holding changed. Reopen it before saving.',
+ TREASURY_SOURCE_ALREADY_BOOKED:'Select the existing Treasury booking rather than recording it twice.',
  TREASURY_SECURITY_SOURCE:'Select an existing institution Treasury security source.',
  TREASURY_SECURITY_IDENTITY:'Select the security registered for this Treasury source.',
  TREASURY_SECURITY_LINKED:'This Portfolio position is already linked to another Treasury source.',
@@ -190,7 +191,7 @@ FIN_DRAFT_REGISTERED:'This incoming transfer is registered and is not changed an
 // the owner gave them FinTerminal access; tests give their own.
 export function createBankServer({pool,authenticate,release='local',secureCookies=true,transferOptions={},finTerminalAccess=(_req,admission)=>admission?.person??null}) {
  const core=new TradingRobotCore(pool,transferOptions),customerAccess=new CustomerAccess(core),attempts=new Map(),indexService=new IndexServiceAuthenticator(pool,{env:core.secretEnv,fetcher:transferOptions.indexServiceFetcher||core.cryptoFetch});
- const rollingConverter=createRollingConverterAdminClient({env:core.secretEnv,fetcher:transferOptions.rollingConverterFetcher||fetch,readPositions:actor=>core.list(actor,'securitypositions')});
+ const rollingConverter=createRollingConverterAdminClient({env:core.secretEnv,fetcher:transferOptions.rollingConverterFetcher||fetch,readPositions:actor=>core.list(actor,'securitypositions'),readTreasury:actor=>core.list(actor,'treasurypositions')});
  const stripePos=transferOptions.stripePos||new StripeWebPos(pool,{env:transferOptions.secretEnv||process.env,fetcher:transferOptions.stripeFetch||fetch});
  const basket=new CryptoBasket(core,stripePos),storeWallet=new StoreWallet(basket);
  const posControl=new CheckoutPosControl(pool),ipControl=new CheckoutIpControl(pool),posAuth=new CheckoutPosAuthenticator(pool,{fetcher:transferOptions.posServiceFetcher||fetch});
@@ -652,7 +653,7 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
     'checkouts/capture':'captureCheckout','checkouts/release':'releaseCheckout','checkouts/refund':'refundCheckout',
     cards:'registerCard',terminals:'registerTerminal','cards/authorize':'authorizeCard','cards/capture':'settleCard','cards/reverse':'settleCard'};
    routes['accounts/open']='openAccount';
-   Object.assign(routes,{'portfolio/exchange-security':'resolveExchangeSecurity','portfolio/catalogue/sync':'syncSecurities','portfolio/securities':'addSecurity','portfolio/positions':'recordPosition','portfolio/treasury-source':'registerTreasurySecuritySource','portfolio/treasury-source/edit':'editTreasurySecuritySource','portfolio/orders/review':'reviewSecurityOrder','portfolio/orders/submit':'submitSecurityOrder','portfolio/orders/cancel':'cancelSecurityOrder'});
+   Object.assign(routes,{'portfolio/exchange-security':'resolveExchangeSecurity','portfolio/catalogue/sync':'syncSecurities','portfolio/securities':'addSecurity','portfolio/positions':'recordPosition','portfolio/treasury-book':'bookTreasurySecurity','portfolio/treasury-source':'registerTreasurySecuritySource','portfolio/treasury-source/edit':'editTreasurySecuritySource','portfolio/orders/review':'reviewSecurityOrder','portfolio/orders/submit':'submitSecurityOrder','portfolio/orders/cancel':'cancelSecurityOrder'});
    Object.assign(routes,{'crypto/trading/index-policy':'saveIndexPolicy','crypto/trading/validate-providers':'validateRobotProviders','crypto/trading/configure':'configureRobot','crypto/trading/toggle':'toggleRobot','crypto/trading/delegate-wallet':'delegateWalletTrading','crypto/trading/select-wallet':'selectWalletTrading','crypto/trading/revoke-wallet':'revokeWalletTrading','crypto/approve':'approveCrypto','crypto/activate':'activateCrypto','crypto/wallet/visibility':'setCryptoWalletVisibility','crypto/wallet':'cryptoWallet','crypto/balance':'cryptoChainBalance','crypto/check-network':'checkCryptoNetwork','crypto/markets/refresh':'refreshCryptoMarkets','crypto/securities/demo-convert':'convertDemoSecurity','crypto/securities/prepare':'prepareRealSecurity','crypto/securities/wallet':'createSecurityWallet','crypto/securities/package':'cryptoContractPackage','crypto/robot/channels':'createRollingChannel','crypto/actions/cancel':'cancelCryptoReview','crypto/actions/review':'prepareCryptoAction','crypto/actions/submit':'submitCryptoAction','crypto/actions/broadcast':'broadcastCryptoAction','crypto/actions/confirm':'confirmCryptoAction'});
    routes['crypto/deposits/reconcile']='reconcileCryptoDeposit';
    routes['crypto/trading/tests']='runTradingTest';

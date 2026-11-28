@@ -4,7 +4,7 @@ export const BANK_CONVERTER_PREFIX='/api/crypto/rolling-converter';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const invalid=(status,message)=>({status,data:{code:'ROLLING_CONVERTER_REQUEST',message}});
 export function legacyConversionAction(action){return ['HUB','DEPLOY','CAP','MINT'].includes(action);}
-export function createRollingConverterAdminClient({env=process.env,fetcher=fetch,readPositions=async()=>{throw Error('Portfolio source is not configured');}}={}){
+export function createRollingConverterAdminClient({env=process.env,fetcher=fetch,readPositions=async()=>{throw Error('Portfolio source is not configured');},readTreasury=async()=>{throw Error('Treasury source is not configured');}}={}){
  async function upstreamRequest({method,upstream,actor,body,idempotencyKey}){
   try{
    const raw=converterBody(method,body);
@@ -30,17 +30,18 @@ export function createRollingConverterAdminClient({env=process.env,fetcher=fetch
   if(method==='POST'&&!UUID.test(idempotencyKey||''))return invalid(400,'Converter request identity is required.');
   if(upstream===CONVERTER_ADMIN_PREFIX+'/assets'||upstream===CONVERTER_ADMIN_PREFIX+'/records'){
    const writing=method==='POST';
-   if(writing&&(!body||Object.keys(body).some(k=>!['asset','revision'].includes(k))||!/^portfolio:[0-9a-f]{64}$/.test(body.asset||'')||!/^[0-9a-f]{64}$/.test(body.revision||'')))return invalid(400,'Select a current Portfolio Management holding.');
+   if(writing&&(!body||Object.keys(body).some(k=>!['asset','revision'].includes(k))||!/^portfolio:[0-9a-f]{64}$/.test(body.asset||'')||!/^[0-9a-f]{64}$/.test(body.revision||'')))return invalid(400,'Select a current Treasury security.');
    try{
-    const [positions,registry]=await Promise.all([readPositions(actor),upstreamRequest({method:'GET',upstream:CONVERTER_ADMIN_PREFIX+'/assets',actor})]);
+    const [positions,treasury,registry]=await Promise.all([readPositions(actor),readTreasury(actor),upstreamRequest({method:'GET',upstream:CONVERTER_ADMIN_PREFIX+'/assets',actor})]);
     if(registry.status!==200||!Array.isArray(registry.data.metadata))return invalid(502,'The instrument metadata could not be read.');
-    const assets=portfolioConverterAssets(positions,registry.data.metadata);
+    const assets=portfolioConverterAssets(positions,registry.data.metadata,treasury);
     if(!writing)return {status:200,data:{assets}};
     const asset=assets.find(a=>a.key===body.asset);
-    if(!asset)return invalid(404,'Select a registered securities portfolio holding.');
-    if(asset.revision!==body.revision)return invalid(409,'The portfolio position changed. Refresh the asset selection.');
+    if(!asset)return invalid(404,'Select a registered Treasury security.');
+    if(!asset.linked)return invalid(422,'Register the selected Treasury source in Portfolio Management.');
+    if(asset.revision!==body.revision)return invalid(409,'The Treasury portfolio holding changed. Refresh the asset selection.');
     return upstreamRequest({method,upstream,actor,body:{portfolio:portfolioSnapshot(asset)},idempotencyKey});
-   }catch{return invalid(502,'The securities portfolio could not be read.');}
+   }catch{return invalid(502,'The Treasury securities register could not be read.');}
   }
   return upstreamRequest({method,upstream,actor,body,idempotencyKey});
  };
