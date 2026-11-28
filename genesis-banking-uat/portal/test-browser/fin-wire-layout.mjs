@@ -109,3 +109,34 @@ test('4-Eyes on: PIN 1 and PIN 2 with their holders, inside the window - one und
   }
  }finally{await access.fourEyes(admin,finTerminalOwner,{on:false});}
 });
+
+// The bank owner: "the header referencing PIN make it in a klap menu, with default closed". One sign-in for every width: the
+// bank answers too many sign-ins at once with 429.
+test('the PIN menu on a phone, an iPad and a computer: closed when the terminal opens, the PINs folding out under it inside the window',async()=>{
+ const context=await browser.newContext({viewport:{width:1440,height:900}}),page=await context.newPage(),errors=[];
+ page.on('pageerror',error=>errors.push(error.message));
+ try{
+  assert.equal((await context.request.post(base+'/api/login',{headers:{origin:base},data:{username:admin.username,password:'fixture'}})).status(),200);
+  const open=page.locator('[data-fin-pins-open]'),pins=page.locator('[data-fin-pins]');
+  for(const width of [260,390,820,1440]){
+   await page.setViewportSize({width,height:900});await page.goto(base+'/fin-terminal');
+   await page.waitForFunction(()=>document.querySelector('[data-fin-access]')?.hidden===false&&document.querySelectorAll('[data-fin-pins] form[data-fin-pin]').length===2);
+   assert.equal(await open.getAttribute('aria-expanded'),'false');assert.equal(await pins.isVisible(),false,'closed when the terminal opens, '+width);
+   const place=await page.evaluate(()=>{
+    const box=document.querySelector('[data-fin-pins-open]').getBoundingClientRect(),bar=document.querySelector('.fin-terminal-bar').getBoundingClientRect();
+    return {left:box.left,right:box.right,top:box.top,under:box.top>=bar.bottom};
+   });
+   assert.ok(place.left>=0&&place.right<=width+0.5&&place.under,'inside the window, under the bar: never in an upper corner, '+width);
+   await open.click();await pins.waitFor({state:'visible'});
+   assert.equal(await open.getAttribute('aria-expanded'),'true');
+   const boxes=await page.locator('[data-fin-pins] input,[data-fin-pins] button').evaluateAll(nodes=>nodes.map(node=>{const box=node.getBoundingClientRect();return {left:box.left,right:box.right,top:box.top};}));
+   assert.ok(boxes.length>=4);
+   for(const box of boxes)assert.ok(box.left>=0&&box.right<=width+0.5&&box.top>place.top,JSON.stringify(box)+' inside '+width+', under the menu');
+   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no sideways scrolling, '+width);
+   await page.screenshot({path:'test-results/fin-pins-'+width+'.png'});
+   await open.click();
+   assert.equal(await open.getAttribute('aria-expanded'),'false');assert.equal(await pins.isVisible(),false,'closed again, '+width);
+  }
+  assert.deepEqual(errors,[]);
+ }finally{await context.close();}
+});

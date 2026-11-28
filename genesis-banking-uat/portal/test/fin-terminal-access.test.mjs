@@ -194,3 +194,23 @@ test('the terminal\'s Access & 4-Eyes: the names, each PIN with its holder, the 
  assert.equal(doc.querySelector('[data-fin-access-problem]').textContent,'Only the super administrator switches 4-Eyes on or off.');
  dom.window.close();
 });
+
+// The bank owner: "the header referencing PIN make it in a klap menu, with default closed".
+test('the PINs fold out of their menu: closed when the terminal opens, opened and closed again by it',async()=>{
+ const html=await readFile(new URL('../public/fin-terminal.html',import.meta.url),'utf8');
+ const dom=new JSDOM(html,{url:'https://bank.example/fin-terminal'}),doc=dom.window.document;
+ const state={you:{name:'Example Owner',owner:true},administrators:[{name:'Example Owner',owner:true}],fourEyes:{on:false,by:null,at:null},
+  pins:[{slot:1,holder:'Example Owner',setAt:'2026-11-27T22:00:00.000Z',locked:false},{slot:2,holder:null,setAt:null,locked:false}]};
+ const access=createFinAccess({root:doc,request:async()=>state,view:{setInterval(){}}});
+ await access.refresh();
+ const open=doc.querySelector('[data-fin-pins-open]'),pins=doc.querySelector('[data-fin-pins]');
+ assert.equal(open.textContent,'PIN');assert.equal(open.getAttribute('aria-controls'),pins.id);
+ assert.equal(open.getAttribute('aria-expanded'),'false');assert.equal(pins.hidden,true,'closed when the terminal opens');
+ assert.equal(pins.querySelectorAll('form[data-fin-pin]').length,2,'both PINs are in the menu');
+ open.click();
+ assert.equal(open.getAttribute('aria-expanded'),'true');assert.equal(pins.hidden,false);
+ await access.refresh();assert.equal(pins.hidden,false,'open while the bank is read again');
+ open.click();
+ assert.equal(open.getAttribute('aria-expanded'),'false');assert.equal(pins.hidden,true);
+ dom.window.close();
+});

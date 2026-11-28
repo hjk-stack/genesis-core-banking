@@ -7,8 +7,8 @@ const LOOK=30000;
 // onState: the 4-Eyes switch and the PINs' holders for the Cash Wire's Execute & Dispatch (fin-wire.mjs), each time they are read.
 export function createFinAccess({root=document,request,view=root.defaultView||globalThis,onState=()=>{}}){
  const section=root.querySelector('[data-fin-access]'),names=root.querySelector('[data-fin-access-names]'),fourEyes=root.querySelector('[data-fin-four-eyes]');
- const pins=root.querySelector('[data-fin-pins]'),problem=root.querySelector('[data-fin-access-problem]');
- if(!section||!names||!fourEyes||!pins)return null;
+ const pins=root.querySelector('[data-fin-pins]'),pinsOpen=root.querySelector('[data-fin-pins-open]'),problem=root.querySelector('[data-fin-access-problem]');
+ if(!section||!names||!fourEyes||!pins||!pinsOpen)return null;
  let busy=false;
  const make=(tag,text)=>{const node=root.createElement(tag);if(text!==undefined)node.textContent=text;return node;};
  function pinInput(label,autocomplete,role){
@@ -50,5 +50,8 @@ export function createFinAccess({root=document,request,view=root.defaultView||gl
   void save('/api/fin-terminal/pins',{slot:Number(form.dataset.finPin),pin,...(current===undefined?{}:{currentPin:current})});
  });
  fourEyes.addEventListener('click',()=>{if(!fourEyes.disabled)void save('/api/fin-terminal/four-eyes',{on:fourEyes.dataset.state!=='ON'});});
+ // The bank owner: "the header referencing PIN make it in a klap menu, with default closed" - the PINs fold out under their menu
+ // only while it is open; the terminal always opens with it closed.
+ pinsOpen.addEventListener('click',()=>{const open=pinsOpen.getAttribute('aria-expanded')!=='true';pinsOpen.setAttribute('aria-expanded',String(open));pins.hidden=!open;});
  return {start(){void refresh();view.setInterval(()=>void refresh(),LOOK);},refresh};
 }
