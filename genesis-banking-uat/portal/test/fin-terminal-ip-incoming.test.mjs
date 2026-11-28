@@ -233,6 +233,14 @@ test('with no NOSTRO of the bank in its currency, or several and none at the Tun
  }finally{await pool.query('UPDATE avis_core_v2.external_cash_accounts SET is_active=false WHERE cash_account_id=ANY($1::uuid[])',[[london.id,tunis?.id].filter(Boolean)]);}
 });
 
+test('a NOSTRO whose number is longer than a message\'s settlement account counts for its currency: of two in pounds, the Tunisian one with a long number books it (review finding)',async()=>{
+ const pounds=await openIn('GBP');await cashAccount('Example London NOSTRO','EXMPGB2LXXX','NOSTRO-EXAMPLE-GBP','GBP');
+ const tunis=await cashAccount('Example Tunis NOSTRO','EXMPTNTTXXX','TN-NOSTRO-'+'0'.repeat(40),'GBP');
+ const form=toAccount(pounds,{currency:'GBP',amount:'800.00'}),[answer]=await exchange([buildFinMessage(form)]);
+ assert.deepEqual([value(answer,'TxSts'),await balance(await ledgerOf(tunis)),await balance(pounds.accountId)],['ACSC','800.00','800.00']);
+ await delivered();
+});
+
 test('a peer server registered without a NOSTRO, as the FinTerminal\'s register keeps it: its IP address is whitelisted, and its transfer is booked on the NOSTRO of its currency',async()=>{
  await pool.query(`INSERT INTO avis_core_v2.platform_connectors(connector_code,display_name,is_enabled,endpoint_url,credential_reference)
   VALUES('EXAMPLE_BIC_PEER','EXAMPLE-BIC',true,'tls://localhost:1','AVIS_CONNECTOR_PEER')`);

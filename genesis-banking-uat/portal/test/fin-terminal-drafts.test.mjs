@@ -148,9 +148,10 @@ test('the accounts to choose: the Common and Suspense accounts, the NOSTRO regis
  assert.match(booking[commonEur.id].bic,/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/);assert.ok(booking[commonEur.id].institution);
  assert.equal(booking[sender.accountId],undefined,'a customer account is not booked against here');
  const nostros=Object.fromEntries(listed.nostroAccounts.map(account=>[account.accountId,account]));
- assert.deepEqual(nostros[nostro.id],{accountId:nostro.id,institution:'Example NOSTRO',bic:'EXMPDEFFXXX',account:'NOSTRO-EXAMPLE-1',accountName:'',currency:'EUR',active:true});
+ assert.deepEqual(nostros[nostro.id],{accountId:nostro.id,institution:'Example NOSTRO',bic:'EXMPDEFFXXX',account:'NOSTRO-EXAMPLE-1',accountName:'',currency:'EUR',active:true,settles:true});
  assert.equal(nostros[nostroUsd.id].currency,'USD');assert.equal(nostros[closed.id].active,false);
- assert.equal(nostros[longNumber.id],undefined,'a number longer than the settlement account holds is not offered');
+ // A number longer than the settlement account holds is offered for an incoming transfer only: nothing of it is written in the message.
+ assert.equal(nostros[longNumber.id].settles,false);
  const offered=listed.tokenWallets.map(wallet=>wallet.accountId);
  assert.deepEqual(listed.tokenWallets.find(wallet=>wallet.accountId===wallets.usdc),{accountId:wallets.usdc,holder:'Example Sender',currency:'USDC',network:'ETHEREUM',name:'USDC'});
  for(const excluded of [wallets.ag,wallets.agi,wallets.custody,commonEur.id])assert.ok(!offered.includes(excluded),excluded);

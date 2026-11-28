@@ -348,6 +348,7 @@ test('the NOSTRO by default: the currency\'s only one, or of several the one at 
  const nostro=(institutionName,bic,accountNumber,currency)=>bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName,bic,accountNumber,currency},randomUUID());
  await nostro('Example Pound NOSTRO','EXMPGB2LXXX','NOSTRO-EXAMPLE-GBP-1','GBP');const tunis=await nostro('Example Tunis NOSTRO','EXMPTNTTXXX','NOSTRO-EXAMPLE-GBP-2','GBP');
  await nostro('Example Franc NOSTRO','EXMPCHZZXXX','NOSTRO-EXAMPLE-CHF-1','CHF');await nostro('Example Other Franc NOSTRO','EXMPDEFFXXX','NOSTRO-EXAMPLE-CHF-2','CHF');
+ const long=await nostro('Example Krone NOSTRO','EXMPNOKKXXX','NOSTRO-'+'0'.repeat(40),'NOK');
  const page=await composer();try{
   const select=page.$('[data-fin-choice="nostroAccountId"]'),values=()=>[select.value,...['receiverBic','settlement','settlementAccount'].map(name=>page.field(name).value)];
   await until(()=>select.value===nostroEur.id,'the default NOSTRO');
@@ -359,5 +360,12 @@ test('the NOSTRO by default: the currency\'s only one, or of several the one at 
   // Back in euros, the one there; let go by hand, it stays let go.
   page.type('currency','EUR');assert.equal(select.value,nostroEur.id);
   page.pick('nostroAccountId','');page.type('amount','10.00');assert.equal(select.value,'');
+  // A NOSTRO whose number a message cannot name as its settlement account: offered for an incoming transfer only, and let go when the
+  // message turns outgoing (review finding).
+  const turn=page.$('[data-fin-direction]'),offered=()=>[...select.options].map(option=>option.value).filter(Boolean);
+  page.type('currency','NOK');assert.deepEqual([select.value,offered()],['',[]]);
+  turn.value='INCOMING';turn.dispatchEvent(new page.dom.window.Event('change',{bubbles:true}));assert.deepEqual(offered(),[long.id]);
+  page.pick('nostroAccountId',long.id);assert.equal(page.field('settlementAccount').value,'');
+  turn.value='OUTGOING';turn.dispatchEvent(new page.dom.window.Event('change',{bubbles:true}));assert.deepEqual([select.value,offered()],['',[]]);
  }finally{page.close();}
 });

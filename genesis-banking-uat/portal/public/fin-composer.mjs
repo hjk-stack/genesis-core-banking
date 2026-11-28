@@ -78,10 +78,13 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  const named=(code,name)=>name&&name!==code?code+' · '+name:code;
  for(const [field,items] of [['regulatoryCountry',COUNTRIES.map(code=>[code,regions?.of(code)])],['regulatoryCode',REPORTING_CODES]])
   $('[data-fin-field="'+field+'"]')?.replaceChildren(option('','—'),...items.map(([code,name])=>option(code,named(code,name))));
+ // The NOSTRO accounts a message can go with: incoming, any - it is where the bank books what arrived; outgoing and for a Debit,
+ // one whose number the message can name as its settlement account (review finding).
+ const usable=()=>accounts.nostroAccounts.filter(account=>direction==='INCOMING'||account.settles!==false);
  function paintChoices(){
   const currency=normalizeForm(form).currency,lists={
    bookingAccountId:accounts.bookingAccounts.filter(account=>account.currency===currency).map(account=>[account.accountId,[account.label,account.iban,account.currency].join(' · ')]),
-   nostroAccountId:accounts.nostroAccounts.filter(account=>account.currency===currency).map(account=>[account.accountId,[account.institution,account.account,account.currency].join(' · ')+(account.active?'':' · inactive'),account.active]),
+   nostroAccountId:usable().filter(account=>account.currency===currency).map(account=>[account.accountId,[account.institution,account.account,account.currency].join(' · ')+(account.active?'':' · inactive'),account.active]),
    tokenWalletId:accounts.tokenWallets.map(wallet=>[wallet.accountId,[wallet.holder,wallet.currency,wallet.network].join(' · ')])};
   for(const select of choices){
    const name=select.dataset.finChoice,items=lists[name];
@@ -126,7 +129,7 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  // Tunisia"): for a new message, and for another currency, the currency's only NOSTRO account or, of several, the one at the
  // Tunisian bank (defaultNostro) - as if chosen by hand. One chosen or let go by hand stays so.
  function preselect(){
-  const account=registered||selection.nostroAccountId?null:defaultNostro(accounts.nostroAccounts,normalizeForm(form).currency);
+  const account=registered||selection.nostroAccountId?null:defaultNostro(usable(),normalizeForm(form).currency);
   if(!account)return false;
   selection={...selection,nostroAccountId:account.accountId};form={...form,...fills.nostroAccountId(account.accountId)};
   return true;
@@ -163,6 +166,9 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   const now=normalizeForm(form);let clear={messageType:next==='DEBIT'?PACS003:PACS008,...(direction==='DEBIT'?{mandateId:'',mandateSignatureDate:''}:{})};
   for(const name of ['bookingAccountId','nostroAccountId']){if(bound(name,now)===false)selection={...selection,[name]:''};else clear={...clear,...unwritten(name,now)};}
   direction=next;
+  // A NOSTRO the message cannot name goes when it is no longer incoming (review finding).
+  if(selection.nostroAccountId&&accounts.nostroAccounts.some(account=>account.accountId===selection.nostroAccountId)&&
+   !usable().some(account=>account.accountId===selection.nostroAccountId))selection={...selection,nostroAccountId:''};
   for(const name of ['bookingAccountId','nostroAccountId'])if(selection[name])clear={...clear,...fills[name](selection[name])};
   form={...form,...clear};broken=null;paint();paintChoices();write();paintDirection();changed();
  }

@@ -95,6 +95,14 @@ test('the NOSTRO chosen books an incoming transfer whatever the message says of 
  }
  const after=await balances();
  assert.deepEqual([after.nostro-before.nostro,after.account-before.account],[375000000n,375000000n]);
+ // A NOSTRO whose number is longer than a message's settlement account books an incoming transfer too (review finding); an outgoing
+ // message cannot settle through it.
+ const long=await new AccountManagement(pool,{directory:{env:{}}}).registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example Long NOSTRO',
+  bic:'EXMPNL2AXXX',accountNumber:'NOSTRO-'+'0'.repeat(40),currency:'EUR'},randomUUID());
+ try{
+  assert.equal((await fin.register(admin,{form:incoming(),selection:{...selection,nostroAccountId:long.id}})).selection.nostroAccountId,long.id);
+  await assert.rejects(fin.save(admin,{form:{...incoming(),settlement:'INDA'},selection:{nostroAccountId:long.id}}),refused('FIN_NOSTRO_ACCOUNT','nostroAccountId'));
+ }finally{await pool.query('UPDATE avis_core_v2.external_cash_accounts SET is_active=false WHERE cash_account_id=$1',[long.id]);}
 });
 
 test('nothing is booked or kept for an incoming transfer that does not name its accounts as chosen or does not pass its check',async()=>{

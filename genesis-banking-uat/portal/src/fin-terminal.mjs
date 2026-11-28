@@ -205,8 +205,9 @@ export class FinTerminal{
   }
   if(selection.nostroAccountId){
    const row=(await db.query(NOSTRO+' WHERE cash_account_id=$1 AND currency_code=$2 AND is_active',[selection.nostroAccountId,form.currency])).rows[0];
-   if(!row||!fitsSettlement(row))fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
-   // Incoming, the NOSTRO is where the bank books what arrived: the message stays as the sender wrote it.
+   // Incoming, the NOSTRO is where the bank books what arrived: the message stays as the sender wrote it, and the NOSTRO's number
+   // need not fit in it (review finding).
+   if(!row||!incoming&&!fitsSettlement(row))fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
    if(!incoming&&(form.settlement!=='INDA'||form.settlementAccount!==settlementNumber(row.iban_or_account_no)))fault('FIN_NOSTRO_MISMATCH','nostroAccountId',409);
   }
   if(selection.tokenWalletId&&!(await db.query(WALLETS+' AND l.account_id=$1',[selection.tokenWalletId])).rows.length)fault('FIN_TOKEN_WALLET','tokenWalletId',409);
@@ -219,8 +220,10 @@ export class FinTerminal{
   return {
    bookingAccounts:booking.map(row=>({accountId:row.account_id,type:row.owner_type==='COMMON_POOL'?'COMMON':'SUSPENSE',label:row.label,
     currency:row.currency_code,iban:row.abiq_iban,bic:row.abiq_bic,institution:row.institution_name})),
-   nostroAccounts:nostro.filter(fitsSettlement).map(row=>({accountId:row.cash_account_id,institution:row.institution_name,bic:row.bic_code||'',
-    account:row.iban_or_account_no,accountName:row.account_name||'',currency:row.currency_code,active:row.is_active===true})),
+   // Every NOSTRO, and whether a message can name it as its settlement account (settles): an outgoing message or a Debit settles
+   // through one it can name; an incoming transfer is booked on any, nothing of it written in the message (review finding).
+   nostroAccounts:nostro.map(row=>({accountId:row.cash_account_id,institution:row.institution_name,bic:row.bic_code||'',
+    account:row.iban_or_account_no,accountName:row.account_name||'',currency:row.currency_code,active:row.is_active===true,settles:fitsSettlement(row)})),
    tokenWallets:wallets.map(row=>({accountId:row.account_id,holder:row.full_name,currency:row.currency_code,network:row.network,name:row.name||row.currency_code}))
   };
  }
@@ -544,7 +547,7 @@ export class FinTerminal{
  // only one there, or of several the one at the Tunisian bank (defaultNostro). None: the transfer waits for Register incoming,
  // where the operator chooses it.
  async #currencyNostro(db,form){
-  const rows=(await db.query(NOSTRO+' WHERE currency_code=$1 AND is_active ORDER BY cash_account_id',[form.currency])).rows.filter(fitsSettlement);
+  const rows=(await db.query(NOSTRO+' WHERE currency_code=$1 AND is_active ORDER BY cash_account_id',[form.currency])).rows;
   return defaultNostro(rows.map(row=>({accountId:row.cash_account_id,bic:row.bic_code,currency:row.currency_code,active:row.is_active})),form.currency)?.accountId??null;
  }
  // A transfer taken before is answered as it was - booked or converted, or held - when every field that makes the payment is the
