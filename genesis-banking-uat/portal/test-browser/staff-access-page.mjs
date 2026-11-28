@@ -29,6 +29,12 @@ test(`private bank homepage reaches the secure AVIS sign-in handoff at ${viewpor
    const request=route.request(),url=new URL(request.url());
    requests.push(url.href);
    if(url.origin==='https://avis.land'){
+    if(url.pathname==='/bank/workstations/client.js'){
+     // The actual AVIS sign-in document loads this same-origin client script.
+     // Replace it in CI so the browser remains entirely network-isolated.
+     await route.fulfill({status:200,contentType:'application/javascript',body:'/* bank sign-in is exercised separately */'});
+     return;
+    }
     assert.equal(url.pathname,'/bank/workstations/connect');
     assert.match(url.searchParams.get('state')||'',/^[A-Za-z0-9_-]{43}$/);
     assert.match(url.searchParams.get('code_challenge')||'',/^[A-Za-z0-9_-]{43}$/);
