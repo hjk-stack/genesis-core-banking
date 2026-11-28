@@ -63,7 +63,10 @@ test(`private bank homepage reaches the secure AVIS sign-in handoff at ${viewpor
   const result=await page.goto('https://bank.avispay.online/',{waitUntil:'domcontentloaded',timeout:15000});
   assert.equal(result.status(),200);
   assert.equal(new URL(page.url()).origin,'https://avis.land');
-  assert.equal(await page.getByRole('heading',{name:'AVIS identity sign-in'}).isVisible(),true);
+  assert.equal(new URL(page.url()).pathname,'/bank/workstations/connect',
+   'the browser must arrive at the signed AVIS account handoff, not a local device-approval page');
+  assert.equal(await page.locator('body').count(),1,
+   'the redirected AVIS account handoff renders a document');
   assert.equal(requests.filter(url=>new URL(url).pathname==='/').length,1);
   assert.ok(requests.some(url=>new URL(url).pathname==='/access/start'));
   assert.ok(requests.some(url=>new URL(url).origin==='https://avis.land'));
