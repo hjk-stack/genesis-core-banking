@@ -1,0 +1,38 @@
+name: Verify bank.avispay.online login entry
+on:
+  pull_request:
+    paths:
+      - "genesis-banking-uat/portal/server.mjs"
+      - "genesis-banking-uat/portal/src/workstation-admission.mjs"
+      - "genesis-banking-uat/portal/test/staff-access-page.test.mjs"
+      - "genesis-banking-uat/portal/test/workstation-admission.test.mjs"
+      - "genesis-banking-uat/portal/test-browser/staff-access-page.mjs"
+      - ".github/workflows/verify-bank-login-entry.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bank-login-entry:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+          cache-dependency-path: genesis-banking-uat/portal/package-lock.json
+      - name: Install bank test dependencies
+        working-directory: genesis-banking-uat/portal
+        run: npm ci --no-audit --no-fund
+      - name: Syntax check
+        working-directory: genesis-banking-uat/portal
+        run: |
+          node --check server.mjs
+          node --check src/workstation-admission.mjs
+          node --check test/staff-access-page.test.mjs
+          node --check test/workstation-admission.test.mjs
+          node --check test-browser/staff-access-page.mjs
+      - name: Verify bank homepage navigation and private admission
+        working-directory: genesis-banking-uat/portal
+        run: node --test --test-concurrency=1 test/staff-access-page.test.mjs test/workstation-admission.test.mjs
