@@ -1,0 +1,28 @@
+name: Port 8443 reachability (read-only)
+
+# Requested by the bank owner: "Yes, test it" - whether other banks' servers can reach the FinTerminal's listening port 8443
+# at the bank's address from the internet. From a GitHub machine: the address the name gives, whether the port takes a
+# connection, and what it shows before TLS - with port 443 beside it for comparison. It sends no message, uses no secret
+# and changes nothing. A one-time check on its own branch, never merged into main.
+on:
+  push:
+    branches: [claude/port-8443-probe]
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Port 443 and port 8443 of bank.avispay.online from the internet
+        run: |
+          set +e
+          host=bank.avispay.online
+          echo "Addresses of $host:"; getent ahosts "$host" | awk '{print $1}' | sort -u
+          for port in 443 8443; do
+            echo; echo "== $host:$port"
+            start=$(date +%s%N); timeout 10 bash -c "exec 3<>/dev/tcp/$host/$port" 2>/dev/null; rc=$?; ms=$(( ($(date +%s%N)-start)/1000000 ))
+            case $rc in 0) echo "TCP: connection taken (${ms} ms)";; 124) echo "TCP: no answer within 10 s";; *) echo "TCP: refused (${ms} ms)";; esac
+            echo "TLS:"; timeout 15 openssl s_client -connect "$host:$port" -servername "$host" -brief </dev/null 2>&1 | grep -v '^[[:space:]]*$' | head -15
+          done
