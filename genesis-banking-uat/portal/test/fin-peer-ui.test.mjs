@@ -68,7 +68,7 @@ async function terminal(){
  const fetcher=async(path,init={})=>{asked.push({path,method:init.method||'GET',headers:init.headers||{}});return fetch(base+path,{...init,headers:{...init.headers,cookie,origin:base}});};
  await startFinTerminal({root:doc,fetcher,windowApi:{BroadcastChannel:class{close(){}},addEventListener(){},close(){}}});
  const $=selector=>doc.querySelector(selector),panel={dom,doc,$,asked,
-  peers:()=>[...doc.querySelectorAll('[data-fin-peer-server] option')].map(option=>option.textContent),
+  peers:()=>[...doc.querySelectorAll('[data-fin-peer-server] option')].filter(option=>!option.disabled).map(option=>option.textContent),
   lines:()=>[...doc.querySelectorAll('[data-fin-peer-stream] li')].map(item=>item.textContent),
   link:()=>$('[data-fin-peer-link]').textContent,text:$('[data-fin-peer-text]'),problem:$('[data-fin-peer-problem]'),button:$('[data-fin-peer-send]'),
   pick(selector,value){const select=$(selector);select.value=value;select.dispatchEvent(new dom.window.Event('change',{bubbles:true}));},
@@ -82,8 +82,11 @@ const STAMP=String.raw`\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC\]`;
 test('screen A offers the registered peers; INIT_SESSION goes to the peer, its acknowledgement comes back and the link is ready, counting its uptime',async()=>{
  const page=await terminal();try{
   const port=peerServer.address().port;
-  assert.deepEqual(page.peers(),['EXAMPLE-GW01 · IP-to-IP · localhost:'+port+' · SMPLFRPPXXX','EXAMPLE-GW02 · IP-to-IP · localhost:'+closedPort+' · SMPLFRPPXXX',
-   'EXAMPLE-GW03 · IP-to-IP · localhost:'+port+' · SMPLFRPPXXX']);
+  assert.deepEqual(page.peers(),['EXAMPLE-GW01 · localhost:'+port+' · SMPLFRPPXXX','EXAMPLE-GW02 · localhost:'+closedPort+' · SMPLFRPPXXX',
+   'EXAMPLE-GW03 · localhost:'+port+' · SMPLFRPPXXX']);
+  // The three types, each with its peer servers or none (the bank owner: "Peer service selector is missing IP to IP, API, ISO20022").
+  assert.deepEqual([...page.doc.querySelectorAll('[data-fin-peer-server] optgroup')].map(group=>[group.label,group.children.length,group.children[0].textContent]),
+   [['IP-to-IP',3,'EXAMPLE-GW01 · localhost:'+port+' · SMPLFRPPXXX'],['API',1,'None registered'],['ISO 20022',1,'None registered']]);
   assert.equal(page.$('[data-fin-peer-node]').textContent,'EXAMPLE-GW01');assert.equal(page.$('#fin-peer-title').textContent,'Peer Server Handshake & Direct IP Interaction — NODE: EXAMPLE-GW01');
   assert.equal(page.text.value,'HELLO EXAMPLE-GW01 // SESSION INIT EXMPDEFFXXX -> SMPLFRPPXXX // READY FOR MANUAL PACS.008 DISPATCH');
   assert.equal(page.link(),'Peer link: NOT CONNECTED');assert.deepEqual(page.lines(),[]);assert.equal(page.button.disabled,false);

@@ -88,8 +88,8 @@ const DIRECTIONS=['OUTGOING','INCOMING'];
 // Why a peer's credit transfer is not booked, as its status answer says it (pacs.002 RJCT): the ISO 20022 status reason code and
 // the bank's words for it.
 const REJECTED={
- FIN_INCOMING_INVALID:{reason:'NARR',text:'The transfer does not pass as the FinTerminal writes it: its fields or check digits.'},
- FIN_BOOKING_ACCOUNT:{reason:'AC03',text:'The creditor\'s IBAN is not an AVISPay PLC account in this currency.'},
+ FIN_INCOMING_INVALID:{reason:'NARR',text:'The transfer does not pass as the FinTerminal writes it: its fields or its amount.'},
+ FIN_BOOKING_ACCOUNT:{reason:'AC03',text:'The creditor\'s account is not an AVISPay PLC account in this currency.'},
  FIN_CREDITOR_MISMATCH:{reason:'AC03',text:'The creditor\'s agent and the receiver are not the bank of the creditor\'s account.'},
  FIN_NOSTRO_ACCOUNT:{reason:'NARR',text:'The bank holds no active NOSTRO account at this peer in this currency.'},
  FIN_NOSTRO_SENDER_MISMATCH:{reason:'NARR',text:'Not settled INGA on the bank\'s NOSTRO account at this peer, sent by this peer.'},
@@ -177,9 +177,10 @@ export class FinTerminal{
   return input;
  }
  // A chosen account is one of the lists the terminal offers, in the message's currency where it holds money in one, and the
- // message says it (review finding): outgoing, the debtor's IBAN and BIC are the Common or Suspense account's, the receiver,
- // INDA and the settlement account the NOSTRO account's; incoming, the creditor's IBAN and BIC, the sender, INGA and the
- // settlement account.
+ // message says it (review finding): outgoing, the debtor's account and BIC are the Common or Suspense account's, the receiver,
+ // INDA and the settlement account the NOSTRO account's; incoming, the creditor's account and BIC, the sender, INGA and the
+ // settlement account. The NOSTRO's number is used as the register keeps it, without a further check (the bank owner: "Nostro
+ // accounts are registered and must select via the listed NOSTROS and no need any further check").
  async #checkSelection(db,selection,form,direction='OUTGOING'){
   const incoming=direction==='INCOMING';
   if(selection.bookingAccountId){

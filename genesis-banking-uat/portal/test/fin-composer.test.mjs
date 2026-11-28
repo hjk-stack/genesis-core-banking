@@ -91,7 +91,9 @@ test('a new message: its own UETR and message ID, the spec\'s defaults, and its 
   // fin-terminal-access.test.mjs).
   assert.equal(page.$('[data-fin-peer-link]').textContent,'Peer link: NOT CONNECTED');
   assert.doesNotMatch(page.doc.body.textContent,/(?<!NOT )CONNECTED|mTLS|PEER_ACK|UNLOCKED|pacs\.008 SENT|NOSTRO & Core Synced/i);
-  assert.equal(page.$('[data-fin-wire-send]').disabled,true);assert.equal(page.$('[data-fin-wire-peer]').textContent,'No peer server registered');
+  const wirePeer=page.$('[data-fin-wire-peer]');await until(()=>wirePeer.querySelectorAll('optgroup').length===3,'the Cash Wire panel');
+  assert.equal(page.$('[data-fin-wire-send]').disabled,true);assert.deepEqual([wirePeer.value,wirePeer.selectedOptions[0]?.textContent],['','None registered']);
+  assert.deepEqual([...wirePeer.querySelectorAll('optgroup')].map(group=>group.label+': '+group.textContent),['IP-to-IP: None registered','API: None registered','ISO 20022: None registered']);
  }finally{page.close();}
 });
 
@@ -126,21 +128,62 @@ test('Validate XML: the official schemas\' findings, and a field\'s own finding 
   page.fill(exampleForm());
   await page.press('[data-fin-validate]');
   assert.equal(page.verdict(),'XSD: PASSED');assert.deepEqual(page.errors(),[]);assert.equal(page.$('[data-fin-xsd]').dataset.state,'passed');
-  page.type('senderBic','BAD');const iban=exampleForm().debtorIban;page.type('debtorIban',iban.slice(0,-1)+((Number(iban.at(-1))+1)%10));
+  page.type('senderBic','BAD');page.type('amount','0.00');const iban=exampleForm().debtorIban;page.type('debtorIban',iban.slice(0,-1)+((Number(iban.at(-1))+1)%10));
   assert.equal(page.verdict(),'XSD: not checked');
   await page.press('[data-fin-validate]');
   assert.equal(page.verdict(),'XSD: FAILED');
-  assert.ok(page.errors().includes('Debtor IBAN: The IBAN\'s check digits do not match.'),page.errors().join('\n'));
+  assert.ok(page.errors().includes('Interbank Settlement Amount: The amount is a number above zero with at most five decimals.'),page.errors().join('\n'));
   assert.ok(page.errors().some(error=>/^AppHdr: Element 'BICFI': \[facet 'pattern'\] The value 'BAD'/.test(error)),page.errors().join('\n'));
-  assert.equal(page.field('debtorIban').getAttribute('aria-invalid'),'true');assert.equal(page.field('creditorIban').hasAttribute('aria-invalid'),false);
+  // Any account number is taken (the bank owner: "Accept all account numbers"): an IBAN whose check digits do not match is no finding.
+  assert.ok(!page.errors().some(error=>/Debtor Account|IBAN/.test(error)),page.errors().join('\n'));
+  assert.equal(page.field('amount').getAttribute('aria-invalid'),'true');assert.equal(page.field('debtorIban').hasAttribute('aria-invalid'),false);
   // Only part of a message - the transfer without its header - is no message (reported directly: "XSD: PASSED" for a part).
-  page.type('senderBic','EXMPDEFFXXX');page.type('debtorIban',iban);const whole=page.xml.value;
+  page.type('senderBic','EXMPDEFFXXX');page.type('debtorIban',iban);page.type('amount',exampleForm().amount);const whole=page.xml.value;
   await page.writeXml(whole.slice(whole.indexOf('<Document'),whole.indexOf('</Document>')+'</Document>'.length));
   await page.press('[data-fin-validate]');
   assert.equal(page.verdict(),'XSD: FAILED');
   assert.deepEqual(page.errors(),["XML: Element 'Document': Not the message's envelope. Expected is ( Envelope ), with the AppHdr and the Document inside."]);
   // Every change asks the window's own requests to carry the bank's CSRF token.
   assert.ok(sent.filter(request=>request.method==='POST').every(request=>request.headers['x-csrf-token']));
+ }finally{page.close();}
+});
+
+// The bank owner's amendments: "Remove LEI register ... instead must be address", "Authority Country both fields must be selectors",
+// "Reporting codes are a selector", "Accept all account numbers".
+test('addresses instead of LEIs, any account number, and the Authority Country\'s two selectors: every country and the 26 reporting codes',async()=>{
+ const page=await composer();try{
+  const label=name=>page.field(name).closest('label').querySelector('span').textContent;
+  assert.deepEqual(['debtorIban','creditorIban','intermediaryAddress','ultimateDebtorAddress','ultimateCreditorAddress'].map(label),
+   ['Debtor Account','Creditor Account','Intermediary Agent Address','Ultimate Debtor Address','Ultimate Creditor Address']);
+  assert.equal(page.doc.querySelector('[data-fin-field$="Lei"]'),null);
+  const country=page.field('regulatoryCountry'),code=page.field('regulatoryCode');
+  assert.deepEqual([country.tagName,code.tagName,country.options.length,code.options.length],['SELECT','SELECT',251,27]);
+  assert.deepEqual([...code.options].slice(0,3).map(option=>option.textContent),['—','SALA · Salary Payment','PENS · Pension Payment']);
+  assert.equal(code.options[26].textContent,'OTHR · Other');
+  assert.deepEqual(['CH','TN','XK'].map(value=>[...country.options].find(option=>option.value===value).textContent),['CH · Switzerland','TN · Tunisia','XK · Kosovo']);
+  page.fill({...exampleForm(),regulatoryCountry:'CH',regulatoryCode:'TREA',creditorIban:'0012-345678-90'});
+  const flat=page.xml.value.replace(/\n\s*/g,'');
+  assert.ok(flat.includes('<Authrty><Ctry>CH</Ctry></Authrty><Dtls><Cd>TREA</Cd>'),flat);
+  assert.ok(flat.includes('<CdtrAcct><Id><Othr><Id>0012-345678-90</Id></Othr></Id></CdtrAcct>'),flat);
+  assert.ok(flat.includes('<UltmtDbtr><Nm>Example Holding AG</Nm><PstlAdr><AdrLine>Examplestrasse 2, 8000 Example Town, Switzerland</AdrLine></PstlAdr></UltmtDbtr>'),flat);
+  await page.press('[data-fin-validate]');assert.equal(page.verdict(),'XSD: PASSED',page.errors().join('\n'));
+  // A code the XML holds that the list does not offer is shown as it is.
+  await page.writeXml(page.xml.value.replace('<Cd>TREA</Cd>','<Cd>INF</Cd>'));
+  assert.deepEqual([code.value,code.selectedOptions[0].textContent],['INF','INF']);
+ }finally{page.close();}
+});
+
+test('the settlement account is the chosen NOSTRO\'s only: read-only, written by the NOSTRO account chosen and gone with it',async()=>{
+ // The bank owner: "Nostro accounts are registered and must select via the listed NOSTROS and no need any further check".
+ const page=await composer();try{
+  const nostro=page.$('[data-fin-choice="nostroAccountId"]'),values=()=>['receiverBic','settlement','settlementAccount'].map(name=>page.field(name).value);
+  await until(()=>nostro.options.length>1,'the accounts');
+  assert.equal(page.field('settlementAccount').readOnly,true);
+  page.fill(exampleForm());page.pick('nostroAccountId',nostroEur.id);
+  assert.deepEqual(values(),['EXMPCHZZXXX','INDA','NOSTRO-EXAMPLE-1']);
+  page.pick('nostroAccountId','');
+  assert.deepEqual(values(),['','INDA','']);assert.doesNotMatch(page.xml.value,/NOSTRO-EXAMPLE-1|<SttlmAcct>/);
+  assert.equal(page.state(),'New message · not saved');
  }finally{page.close();}
 });
 

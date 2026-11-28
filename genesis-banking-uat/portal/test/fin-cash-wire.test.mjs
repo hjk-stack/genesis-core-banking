@@ -144,6 +144,18 @@ test('Execute & Dispatch: the pacs.008 reaches the peer, settled on the NOSTRO; 
  assert.equal(received.length,1);assert.deepEqual(moved(again,await money()),{account:'0.00',nostro:'0.00',held:'0.00',suspense:'0.00'});
 });
 
+test('the beneficiary\'s account is any account number: an IBAN whose check digits do not match, or a bank\'s own number, goes as written (Othr)',async()=>{
+ // The bank owner: "Sender - Receiver IBAN is only an option most banks have not IBAN numbers. Accept all account numbers".
+ const wrongDigits=BENEFICIARY.slice(0,2)+(BENEFICIARY.slice(2,4)==='00'?'01':'00')+BENEFICIARY.slice(4);
+ for(const number of [wrongDigits,'0012-345678-90']){
+  received.length=0;reply=xml=>status(xml,'ACSC');
+  const result=await peers.dispatch(admin,owner,'EXAMPLE_TLS_PEER',wire({amount:'10.00',creditorIban:' '+number+' '}));
+  assert.deepEqual([result.wire.status,result.wire.creditorIban],['SETTLED',number]);
+  const [{xml}]=received;assert.ok(xml.replace(/\n\s*/g,'').includes('<CdtrAcct><Id><Othr><Id>'+number+'</Id></Othr></Id></CdtrAcct>'),xml);
+  assert.deepEqual(await validateFinMessage(xml),{valid:true,errors:[]});
+ }
+});
+
 test('a transfer the peer refuses - its pacs.002 RJCT with the reason, or its reject of the message - goes back to the paying account; the NOSTRO keeps its money',async()=>{
  const rejected=xml=>buildReject({localBic:PEER,peerBic:BANK,businessMessageId:'PEERREJ0001',at:new Date(),reference:readFinMessage(xml,ServerDOMParser).form.businessMessageId,
   reason:'SCHEMA',description:'The message does not pass its official schema.'});
@@ -237,11 +249,11 @@ test('a status report naming the message within the transfer\'s own status, or o
 test('nothing is sent or booked without the money, with a wrong field, to a peer without a EUR NOSTRO, while the listening port is open, or for anyone but a FinTerminal administrator',async()=>{
  received.length=0;reply=xml=>status(xml,'ACSC');
  const start=await money(),wires=await count('fin_terminal_wires'),messages=await count('fin_terminal_peer_messages');
- const wrongDigits=BENEFICIARY.slice(0,2)+(BENEFICIARY.slice(2,4)==='00'?'01':'00')+BENEFICIARY.slice(4);
  for(const [changes,code,field] of [[{amount:'1000000000.00'},'INSUFFICIENT_FUNDS','amount'],[{amount:'0.00'},'FIN_WIRE_AMOUNT','amount'],[{amount:'1.234'},'FIN_WIRE_AMOUNT','amount'],
   [{amount:'-5'},'FIN_WIRE_AMOUNT','amount'],[{amount:'1e5'},'FIN_WIRE_AMOUNT','amount'],[{amount:5},'FIN_WIRE_AMOUNT','amount'],[{creditorName:'  '},'FIN_WIRE_BENEFICIARY','creditorName'],
   [{creditorName:'Example\nCreditor'},'FIN_WIRE_BENEFICIARY','creditorName'],[{creditorName:'x'.repeat(141)},'FIN_WIRE_BENEFICIARY','creditorName'],
-  [{creditorIban:wrongDigits},'FIN_WIRE_IBAN','creditorIban'],[{creditorIban:''},'FIN_WIRE_IBAN','creditorIban'],[{uetr:'not-a-uetr'},'INVALID_FIELD','uetr'],
+  [{creditorIban:''},'FIN_WIRE_ACCOUNT','creditorIban'],[{creditorIban:'x'.repeat(35)},'FIN_WIRE_ACCOUNT','creditorIban'],[{creditorIban:'0012\n345'},'FIN_WIRE_ACCOUNT','creditorIban'],
+  [{uetr:'not-a-uetr'},'INVALID_FIELD','uetr'],
   [{bookingAccountId:nostro.ledger},'FIN_BOOKING_ACCOUNT','bookingAccountId'],[{bookingAccountId:'x'},'FIN_BOOKING_ACCOUNT','bookingAccountId']])
   await assert.rejects(peers.dispatch(admin,owner,'EXAMPLE_TLS_PEER',wire(changes)),error=>error.code===code&&error.field===field,code+' '+JSON.stringify(changes));
  await assert.rejects(peers.dispatch(admin,owner,'EXAMPLE_USD_PEER',wire()),refused('FIN_WIRE_NOSTRO',409));
@@ -331,8 +343,11 @@ test('Screen B\'s Cash Wire: the peer servers of every type and the EUR accounts
   const lines=()=>[...doc.querySelectorAll('[data-fin-wire-stream] li')].map(item=>item.textContent),button=$('[data-fin-wire-send]');
   const fill=values=>{for(const [selector,value] of Object.entries(values)){const input=$(selector);input.value=value;}};
   await until(()=>options('[data-fin-wire-peer]').length===5&&!button.disabled,'the Cash Wire panel');
-  assert.deepEqual(options('[data-fin-wire-peer]'),['EXAMPLE-API · Bank API · SMPLFRPPXXX · EUR','EXAMPLE-GW01 · IP-to-IP · SMPLFRPPXXX · EUR','EXAMPLE-GW04 · IP-to-IP · SMPLFRPPXXX · EUR',
-   'EXAMPLE-ISO · ISO 20022 · SMPLFRPPXXX · EUR','EXAMPLE-USD · IP-to-IP · SMPLFRPPXXX · USD']);
+  // The three types, each with its peer servers (the bank owner: "Peer service selector is missing IP to IP, API, ISO20022").
+  assert.deepEqual([...doc.querySelectorAll('[data-fin-wire-peer] optgroup')].map(group=>[group.label,[...group.children].map(option=>option.textContent)]),
+   [['IP-to-IP',['EXAMPLE-GW01 · SMPLFRPPXXX · EUR','EXAMPLE-GW04 · SMPLFRPPXXX · EUR','EXAMPLE-USD · SMPLFRPPXXX · USD']],['API',['EXAMPLE-API · SMPLFRPPXXX · EUR']],
+    ['ISO 20022',['EXAMPLE-ISO · SMPLFRPPXXX · EUR']]]);
+  assert.equal($('[data-fin-wire-iban]').closest('label').querySelector('span').textContent,'Beneficiary Name & Account');
   assert.deepEqual(options('[data-fin-wire-account]'),[[account.label,account.iban,'EUR'].join(' · ')]);
   assert.equal($('[data-fin-wire-pins]').hidden,true);assert.equal($('[data-fin-wire-stream]').hidden,true);
   // Sent: the pacs.008 and the peer's pacs.002 under the button, and the order's fields cleared.

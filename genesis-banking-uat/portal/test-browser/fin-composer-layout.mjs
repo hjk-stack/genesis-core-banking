@@ -35,7 +35,7 @@ before(async()=>{
 });
 after(async()=>{await browser?.close();await new Promise(resolve=>server?.close(resolve));await db?.close();});
 
-const SELECTS=new Set(['messageType','priority','chargeBearer','settlement']);
+const SELECTS=new Set(['messageType','priority','chargeBearer','settlement','regulatoryCountry','regulatoryCode']);
 for(const width of [260,390,820,1440])test('the composer on '+(width<500?'a phone':width<1000?'an iPad':'a computer')+' ('+width+'px): form and XML in step, accounts chosen, checked, saved, opened again, a used UETR refused',async()=>{
  const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
@@ -45,7 +45,7 @@ for(const width of [260,390,820,1440])test('the composer on '+(width<500?'a phon
   const field=name=>page.locator('[data-fin-field="'+name+'"]'),xml=page.locator('[data-fin-xml]'),verdict=page.locator('[data-fin-xsd]'),state=page.locator('[data-fin-draft-state]');
   await page.locator('[data-fin-composer]').waitFor();await page.waitForFunction(()=>document.querySelector('[data-fin-xml]').value.includes('<UETR>'));
   // The form writes the XML.
-  for(const [name,value] of Object.entries(exampleForm()))if(!['uetr','businessMessageId','createdAt'].includes(name))await (SELECTS.has(name)?field(name).selectOption(value):field(name).fill(value));
+  for(const [name,value] of Object.entries(exampleForm()))if(!['uetr','businessMessageId','createdAt','settlementAccount'].includes(name))await (SELECTS.has(name)?field(name).selectOption(value):field(name).fill(value));
   assert.match(await xml.inputValue(),/<Nm>Example Creditor SARL<\/Nm>/);assert.match(await xml.inputValue(),/<IntrBkSttlmAmt Ccy="EUR">1250000\.00<\/IntrBkSttlmAmt>/);
   // The accounts: the Common account is the debtor's, the NOSTRO account settles the transfer, the "+" wallet is kept.
   const choice=name=>page.locator('[data-fin-choice="'+name+'"]');

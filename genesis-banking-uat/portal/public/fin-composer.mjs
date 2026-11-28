@@ -1,4 +1,4 @@
-import {FIELDS,PACS008,blankForm,buildFinMessage,readFinMessage,normalizeForm,newUetr} from './fin-message.mjs';
+import {FIELDS,PACS008,COUNTRIES,REPORTING_CODES,blankForm,buildFinMessage,readFinMessage,normalizeForm,newUetr} from './fin-message.mjs';
 
 // Screen 1 of the FinTerminal (fin-terminal.mjs), the "FIN - ISO 20022 Composer" of the bank owner's specification: the form
 // and its XML kept in step both ways (fin-message.mjs), the XML checked against the official schemas on the server
@@ -54,6 +54,12 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  // The Common and Suspense accounts and the NOSTRO accounts in the message's currency; the "+" wallets, never AG or AGi
  // (the server lists them so). A choice a draft keeps that the lists no longer hold is shown as not available.
  const option=(value,text,enabled=true)=>{const item=root.createElement('option');item.value=value;item.textContent=text;item.disabled=!enabled;return item;};
+ // The Authority Country's country and reporting code are chosen from their lists (fin-message.mjs), each with its name; a code
+ // the XML holds that the lists do not offer is shown as a choice of its own (choose).
+ const regions=(()=>{try{return new Intl.DisplayNames(['en'],{type:'region'});}catch{return null;}})();
+ const named=(code,name)=>name&&name!==code?code+' · '+name:code;
+ for(const [field,items] of [['regulatoryCountry',COUNTRIES.map(code=>[code,regions?.of(code)])],['regulatoryCode',REPORTING_CODES]])
+  $('[data-fin-field="'+field+'"]')?.replaceChildren(option('','—'),...items.map(([code,name])=>option(code,named(code,name))));
  function paintChoices(){
   const currency=normalizeForm(form).currency,lists={
    bookingAccountId:accounts.bookingAccounts.filter(account=>account.currency===currency).map(account=>[account.accountId,[account.label,account.iban,account.currency].join(' · ')]),
@@ -95,11 +101,14 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   if(fill)for(const field of wrote[direction][name])if(field in fill&&normalizeForm({...form,...fill})[field]===now[field])clear[field]='';
   return clear;
  };
+ // The settlement account is written by the NOSTRO account chosen only (the bank owner: "Nostro accounts are registered and must
+ // select via the listed NOSTROS"): none chosen, what the former one wrote that still says so goes with it.
  for(const select of choices)select.addEventListener('change',()=>{
   const name=select.dataset.finChoice;if(selection[name]===select.value)return;
+  const clear=name==='nostroAccountId'&&!select.value?unwritten(name,normalizeForm(form)):{};
   selection={...selection,[name]:select.value};
   const fill=select.value&&fills[name](select.value);
-  if(fill){form={...form,...fill};paint();broken=null;write();}
+  if(fill||Object.keys(clear).length){form={...form,...clear,...fill};paint();broken=null;write();}
   changed();
  });
  // After the form changed: in another currency, the accounts chosen in the former one are let go, and the fields they wrote
