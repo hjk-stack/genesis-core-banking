@@ -12,9 +12,10 @@ const pathOf=value=>{const url=new URL(value);return url.pathname+url.search;};
 const json=response=>JSON.parse(response.body);
 const denied=response=>{assert.equal(response.status,403);assert.equal(json(response).code,'BANK_WORKSTATION_REQUIRED');};
 
-test('public denial, JSON APIs, health, and other host behavior stay intact',async()=>{
+test('bank hostname starts authorized login while JSON APIs, health, and other hosts remain protected',async()=>{
  const document=await fixture.request('/',{headers:navigationHeaders});
- assert.equal(document.status,403);assert.match(document.body,/You are not authorized to access this platform\./);
+ assert.equal(document.status,303);assert.equal(document.headers.location,'/access/start');
+ assert.equal(document.body,'');
  denied(await fixture.request('/api/session'));
  assert.equal((await fixture.request('/healthz')).status,200);
  for(const path of ['/access/start','/access/complete?state=x&code=y',handoffPath]){
