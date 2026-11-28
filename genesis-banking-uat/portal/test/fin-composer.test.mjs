@@ -18,7 +18,7 @@ import {exampleForm} from './helpers/fin-example.mjs';
 // Requested by the bank owner with the FinTerminal ISO 20022 specification, screen 1 "FIN - ISO 20022 Composer": "live two-way
 // XML synchronization", XSD validation, the UETR made and a duplicate refused, drafts. The window talks to the real bank server.
 const admin={id:'fin-composer-admin',username:'fin-composer',admin:true};
-let pool,db,server,base,cookie,commonEur,commonUsd,nostroEur,nostroUsd,walletUsdc;
+let pool,db,server,base,cookie,commonEur,commonUsd,nostroEur,nostroUsd,walletUsdc,walletEurc;
 const sent=[];
 before(async()=>{
  if(process.env.TEST_DATABASE_URL){const url=new URL(process.env.TEST_DATABASE_URL);assert.equal(url.pathname,'/avispay_ci');
@@ -35,7 +35,11 @@ before(async()=>{
  nostroUsd=await bank.registerCashAccount(admin,{institutionType:'CORRESPONDENT_BANK',institutionName:'Example Dollar NOSTRO',bic:'EXMPUS33XXX',accountNumber:'NOSTRO-EXAMPLE-2',currency:'USD'},randomUUID());
  const holder=(await bank.openCustomer(admin,{fullName:'Example Holder',accountType:'PERSONAL',currencies:['EUR']},randomUUID())).userId;
  walletUsdc=await cryptoLedgerAccount(pool,{userId:holder,currency:'USDC',network:'ETHEREUM'});
+ walletEurc=await cryptoLedgerAccount(pool,{userId:holder,currency:'EURC',network:'SOLANA'});
  await cryptoLedgerAccount(pool,{userId:holder,currency:'AG',network:'ETHEREUM'});
+ // The "+" wallets the FIAT Converter loads have a receiving address on their chain.
+ for(const [network,address] of [['ETHEREUM','0x2222222222222222222222222222222222222222'],['SOLANA','ExampleSolanaComposerAddress44444444444444']])
+  await pool.query('INSERT INTO avis_core_v2.user_deposit_addresses(user_id,network,public_address,is_primary) VALUES($1,$2,$3,true)',[holder,network,address]);
  server=createBankServer({pool,authenticate:async()=>admin,finTerminalAccess:async()=>finTerminalOwner,secureCookies:false});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base='http://127.0.0.1:'+server.address().port;
  const login=await fetch(base+'/api/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({username:admin.username,password:'fixture'})});
@@ -262,15 +266,15 @@ test('a UETR another payment or draft already has is refused with its reason at 
  }finally{page.close();}
 });
 
-test('Accounts: a Common or Suspense account and a NOSTRO account write the message\'s fields, the "+" wallet is kept, all three with the draft',async()=>{
+test('Accounts: a Common or Suspense account and a NOSTRO account write the message\'s fields and are kept with the draft; an outgoing message has no FIAT Converter',async()=>{
  const page=await composer();try{
   const select=name=>page.$('[data-fin-choice="'+name+'"]'),texts=name=>[...select(name).options].map(item=>item.textContent);
-  const chosen=()=>['bookingAccountId','nostroAccountId','tokenWalletId'].map(name=>select(name).value);
+  const chosen=()=>['bookingAccountId','nostroAccountId'].map(name=>select(name).value);
   await until(()=>select('bookingAccountId').options.length>1,'the accounts');
-  // In euros: the euro accounts; every "+" wallet but AG and AGi.
+  // In euros: the euro accounts. The money leaves: no conversion and no bank fee.
   assert.deepEqual(texts('bookingAccountId'),['—','Example Common · '+commonEur.abiqIban+' · EUR']);
   assert.deepEqual(texts('nostroAccountId'),['—','Example NOSTRO · NOSTRO-EXAMPLE-1 · EUR']);
-  assert.deepEqual(texts('tokenWalletId'),['—','Example Holder · USDC · ETHEREUM']);
+  assert.deepEqual(['[data-fin-converter-row]','[data-fin-rate]','[data-fin-fee-row]'].map(part=>page.$(part).hidden),[true,true,true]);
   page.fill(exampleForm());
   page.pick('bookingAccountId',commonEur.id);
   const account=(await new FinTerminal(pool).accounts(admin)).bookingAccounts.find(item=>item.accountId===commonEur.id);
@@ -279,21 +283,20 @@ test('Accounts: a Common or Suspense account and a NOSTRO account write the mess
   page.pick('nostroAccountId',nostroEur.id);
   assert.deepEqual(['receiverBic','settlement','settlementAccount'].map(name=>page.field(name).value),['SMPLFRPPXXX','INDA','NOSTRO-EXAMPLE-1']);
   assert.ok(page.xml.value.replace(/\n\s*/g,'').includes('<SttlmInf><SttlmMtd>INDA</SttlmMtd><SttlmAcct><Id><Othr><Id>NOSTRO-EXAMPLE-1</Id></Othr></Id></SttlmAcct></SttlmInf>'));
-  page.pick('tokenWalletId',walletUsdc);
   assert.equal(page.state(),'New message · not saved');
   await page.press('[data-fin-save]');assert.equal(page.state(),'Draft saved · revision 1');assert.equal(page.verdict(),'XSD: PASSED');
   const draftId=page.$('[data-fin-drafts]').value;
   // A new message has the NOSTRO by default only; nothing is written in it, so the draft opened next replaces it as it is.
-  await page.press('[data-fin-new]');assert.deepEqual([...chosen(),page.state()],['',nostroEur.id,'','New message']);
-  await page.choose(draftId);assert.deepEqual(chosen(),[commonEur.id,nostroEur.id,walletUsdc]);
-  // A field that names a chosen account, written otherwise, lets that account go; the others stay (review finding).
-  page.type('debtorAgentBic','EXMPDEFFXXX');assert.deepEqual(chosen(),['',nostroEur.id,walletUsdc]);
-  await page.writeXml(page.xml.value.replace('<Id>NOSTRO-EXAMPLE-1</Id>','<Id>NOSTRO-OTHER-9</Id>'));assert.deepEqual(chosen(),['','',walletUsdc]);
-  page.pick('bookingAccountId',commonEur.id);page.pick('nostroAccountId',nostroEur.id);assert.deepEqual(chosen(),[commonEur.id,nostroEur.id,walletUsdc]);
+  await page.press('[data-fin-new]');assert.deepEqual([...chosen(),page.state()],['',nostroEur.id,'New message']);
+  await page.choose(draftId);assert.deepEqual(chosen(),[commonEur.id,nostroEur.id]);
+  // A field that names a chosen account, written otherwise, lets that account go; the other stays (review finding).
+  page.type('debtorAgentBic','EXMPDEFFXXX');assert.deepEqual(chosen(),['',nostroEur.id]);
+  await page.writeXml(page.xml.value.replace('<Id>NOSTRO-EXAMPLE-1</Id>','<Id>NOSTRO-OTHER-9</Id>'));assert.deepEqual(chosen(),['','']);
+  page.pick('bookingAccountId',commonEur.id);page.pick('nostroAccountId',nostroEur.id);assert.deepEqual(chosen(),[commonEur.id,nostroEur.id]);
   // Another currency: the accounts chosen in euros are let go with the fields they wrote, the dollar ones are offered and the
-  // dollar NOSTRO chosen by default; the wallet stays (review finding).
+  // dollar NOSTRO chosen by default (review finding).
   page.type('currency','USD');
-  assert.deepEqual(chosen(),['',nostroUsd.id,walletUsdc]);
+  assert.deepEqual(chosen(),['',nostroUsd.id]);
   assert.deepEqual(['debtorName','debtorIban','debtorAgentBic','receiverBic','settlementAccount','settlement'].map(name=>page.field(name).value),['','','','SMPLFRPPXXX','NOSTRO-EXAMPLE-2','INDA']);
   assert.doesNotMatch(page.xml.value,/NOSTRO-EXAMPLE-1|EXMPCHZZXXX/);
   assert.deepEqual(texts('bookingAccountId'),['—','Example Common · '+commonUsd.abiqIban+' · USD']);
@@ -367,5 +370,89 @@ test('the NOSTRO by default: the currency\'s only one, or of several the one at 
   turn.value='INCOMING';turn.dispatchEvent(new page.dom.window.Event('change',{bubbles:true}));assert.deepEqual(offered(),[long.id]);
   page.pick('nostroAccountId',long.id);assert.equal(page.field('settlementAccount').value,'');
   turn.value='OUTGOING';turn.dispatchEvent(new page.dom.window.Event('change',{bubbles:true}));assert.deepEqual([select.value,offered()],['',[]]);
+ }finally{page.close();}
+});
+
+// The bank owner: "missing the button with clear statement for "FIAT Converter" activation and then the wallet selector is active and
+// calls the wallets they are in the crypto section wallet scroller operative", and "install a second row below the selected accounts
+// the live change rate".
+test('FIAT Converter: for an incoming transfer and a Debit, off at first with the Bank fee; switched on, the operative "+" wallets and the live rate under the accounts, and no fee',async()=>{
+ const page=await composer();try{
+  const $=page.$,turn=$('[data-fin-direction]'),row=$('[data-fin-converter-row]'),button=$('[data-fin-convert-switch]'),wallet=$('[data-fin-choice="tokenWalletId"]');
+  const rate=$('[data-fin-rate]'),feeRow=$('[data-fin-fee-row]'),fee=$('[data-fin-fee]');
+  const seen=()=>({converter:!row.hidden,pressed:button.getAttribute('aria-pressed'),wallets:!wallet.hidden,rate:rate.hidden?null:rate.textContent,fee:!feeRow.hidden});
+  const turnTo=value=>{turn.value=value;turn.dispatchEvent(new page.dom.window.Event('change',{bubbles:true}));};
+  await until(()=>wallet.options.length>1,'the wallets');
+  // Outgoing, the money leaves: none of it.
+  assert.deepEqual(seen(),{converter:false,pressed:'false',wallets:false,rate:null,fee:false});
+  // The wallets offered: the operative ones of the wallet scroller, never AG or AGi.
+  assert.deepEqual([...wallet.options].map(item=>item.textContent),['+ Wallet','Example Holder · EURC · SOLANA','Example Holder · USDC · ETHEREUM']);
+  for(const direction of ['INCOMING','DEBIT']){
+   turnTo(direction);
+   assert.deepEqual(seen(),{converter:true,pressed:'false',wallets:false,rate:null,fee:true},direction);
+  }
+  assert.equal($('[data-fin-fee-currency]').textContent,'EUR');
+  // Switched on: the "+" wallet beside it, no fee; the live rate under the accounts with what the amount converts to.
+  turnTo('INCOMING');fee.value='10.00';fee.dispatchEvent(new page.dom.window.Event('input',{bubbles:true}));
+  button.click();
+  assert.deepEqual([seen(),fee.value],[{converter:true,pressed:'true',wallets:true,rate:null,fee:false},'']);
+  // On without its wallet, the transfer is not registered as cash instead: nothing is sent.
+  const before=sent.length;await page.press('[data-fin-register]');
+  assert.equal(page.verdict(),'Select a "+" wallet, or switch the FIAT Converter off.');
+  assert.deepEqual(sent.slice(before).filter(request=>request.method==='POST').map(request=>request.path),[]);
+  page.type('amount','1000.00');page.pick('tokenWalletId',walletEurc);
+  await until(()=>!rate.hidden,'the live rate');
+  assert.equal(rate.textContent,'1 EUR = 1 EURC · MiCA 1:1 · 1,000.00 EUR → 999.5000 EURC');
+  page.type('amount','250.00');
+  await until(()=>!rate.hidden&&rate.textContent.endsWith('249.8750 EURC'),'the new amount quoted');
+  // Switched off: no wallet and no rate; the Bank fee again. Outgoing: none of it.
+  button.click();
+  assert.deepEqual([seen(),wallet.value],[{converter:true,pressed:'false',wallets:false,rate:null,fee:true},'']);
+  turnTo('OUTGOING');assert.deepEqual(seen(),{converter:false,pressed:'false',wallets:false,rate:null,fee:false});
+ }finally{page.close();}
+});
+
+// The bank owner: "bank fees is taken from the amount ... and booked into the treasury wallets or account".
+test('Bank fee: typed for an incoming transfer, kept with its draft and booked - the chosen account the amount less the fee, the Treasury account the fee',async()=>{
+ const page=await composer();try{
+  const select=name=>page.$('[data-fin-choice="'+name+'"]'),turn=page.$('[data-fin-direction]'),fee=page.$('[data-fin-fee]');
+  const typeFee=value=>{fee.value=value;fee.dispatchEvent(new page.dom.window.Event('input',{bubbles:true}));};
+  await until(()=>select('bookingAccountId').options.length>1,'the accounts');
+  page.fill(exampleForm());page.pick('bookingAccountId',commonEur.id);page.pick('nostroAccountId',nostroEur.id);
+  turn.value='INCOMING';turn.dispatchEvent(new page.dom.window.Event('change',{bubbles:true}));
+  page.fill({debtorName:'Example Debtor GmbH',debtorIban:exampleForm().debtorIban,debtorAgentBic:'EXMPDEFFXXX',amount:'2000.00'});
+  // At the amount, the fee is refused and its field marked; nothing is booked.
+  typeFee('2000');await page.press('[data-fin-register]');
+  assert.deepEqual([page.verdict(),fee.getAttribute('aria-invalid'),page.state()],
+   ['The bank fee is below the amount, for an incoming transfer or a Debit that is not converted.','true','New message · not saved']);
+  typeFee('12.50');assert.equal(fee.getAttribute('aria-invalid'),null);
+  await page.press('[data-fin-save]');const draftId=page.$('[data-fin-drafts]').value;
+  assert.equal((await new FinTerminal(pool).draft(admin,draftId)).bankFee,'12.50');
+  await page.press('[data-fin-new]');assert.equal(fee.value,'');
+  await page.choose(draftId);assert.equal(fee.value,'12.50');
+  await page.press('[data-fin-register]');
+  assert.deepEqual([page.state(),fee.disabled],['Incoming booked · ACSC',true]);
+  const booked=(await pool.query(`SELECT e.direction,e.amount::numeric(20,2)::text AS amount,a.owner_type FROM avis_core_v2.fin_terminal_drafts d
+   JOIN avis_core_v2.ledger_entries e ON e.journal_id=d.registered_journal_id JOIN avis_core_v2.ledger_accounts a USING(account_id)
+   WHERE d.draft_id=$1 ORDER BY e.direction DESC,e.amount DESC`,[draftId])).rows.map(row=>[row.direction,row.amount,row.owner_type]);
+  assert.deepEqual(booked,[['DEBIT','2000.00','CORRESPONDENT_NOSTRO'],['CREDIT','1987.50','COMMON_POOL'],['CREDIT','12.50','TREASURY']]);
+ }finally{page.close();}
+});
+
+// The bank owner: "when the crypto converter is active then nothing will arrive at the NOSTRO instead will be the wallet loaded".
+test('converted: an incoming transfer registered with the FIAT Converter on is loaded into the "+" wallet; then it shows its tokens, no live rate',async()=>{
+ const page=await composer();try{
+  const select=name=>page.$('[data-fin-choice="'+name+'"]'),turn=page.$('[data-fin-direction]'),button=page.$('[data-fin-convert-switch]'),rate=page.$('[data-fin-rate]');
+  await until(()=>select('bookingAccountId').options.length>1&&select('tokenWalletId').options.length>1,'the accounts');
+  page.fill(exampleForm());page.pick('bookingAccountId',commonEur.id);page.pick('nostroAccountId',nostroEur.id);
+  turn.value='INCOMING';turn.dispatchEvent(new page.dom.window.Event('change',{bubbles:true}));
+  page.fill({debtorName:'Example Debtor GmbH',debtorIban:exampleForm().debtorIban,debtorAgentBic:'EXMPDEFFXXX'});
+  button.click();page.pick('tokenWalletId',walletEurc);
+  await until(()=>!rate.hidden,'the live rate');
+  assert.equal(rate.textContent,'1 EUR = 1 EURC · MiCA 1:1 · 1,250,000.00 EUR → 1249375.0000 EURC');
+  await page.press('[data-fin-register]');
+  assert.equal(page.state(),'Incoming converted · ACSC · 1249375.0000 EURC');
+  assert.deepEqual([rate.hidden,button.getAttribute('aria-pressed'),button.disabled,select('tokenWalletId').value],[true,'true',true,walletEurc]);
+  assert.equal((await pool.query('SELECT available_balance::numeric(38,4)::text AS b FROM avis_core_v2.ledger_accounts WHERE account_id=$1',[walletEurc])).rows[0].b,'1249375.0000');
  }finally{page.close();}
 });

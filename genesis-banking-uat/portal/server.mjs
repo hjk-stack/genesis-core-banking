@@ -160,6 +160,7 @@ const messages={...BASKET_MESSAGES,...ROBOT_MESSAGES,...CRYPTO_MESSAGES,...INDEX
  FIN_MESSAGE_INVALID:'Write the ISO 20022 message as XML, without a document type.',
  FIN_BOOKING_ACCOUNT:'Select a Common or Suspense account in the message\'s currency.',FIN_NOSTRO_ACCOUNT:'Select an active NOSTRO account in the message\'s currency.',
  FIN_TOKEN_WALLET:'Select a "+" wallet; AG and AGi are not booked here.',
+ FIN_BANK_FEE:'The bank fee is below the amount, for an incoming transfer or a Debit that is not converted.',
  FIN_BOOKING_MISMATCH:'The debtor\'s account and BIC are not those of the chosen Common or Suspense account.',
  FIN_NOSTRO_MISMATCH:'INDA and the settlement account are not those of the chosen NOSTRO account.',
  FIN_CREDITOR_MISMATCH:'The creditor\'s account and BIC and the receiver are not those of the chosen Common or Suspense account.',
@@ -560,6 +561,9 @@ export function createBankServer({pool,authenticate,release='local',secureCookie
    if(req.method==='GET'&&path==='/api/fin-terminal/telemetry')return send(res,200,{...await finTerminal.telemetry(actor),listener:await finListener.status(actor)});
    // Screen B's Fiat-to-Crypto/Stablecoin Selector: the accounts' conversion wallets, the live rates and the transfers converted.
    if(req.method==='GET'&&path==='/api/fin-terminal/converter')return send(res,200,await finTerminal.converter(actor));
+   // Page 1's FIAT Converter: the live rate of the "+" wallet chosen and the tokens the amount converts to.
+   if(req.method==='GET'&&path==='/api/fin-terminal/quote')return send(res,200,await finTerminal.quote(actor,
+    {tokenWalletId:url.searchParams.get('tokenWalletId'),currency:url.searchParams.get('currency'),amount:url.searchParams.get('amount')}));
    if(req.method!=='POST')return send(res,405,{code:'METHOD_NOT_ALLOWED'});
    if(digest(req.headers['x-csrf-token']||'')!==session.csrf_hash)fault('CSRF',null,403);
    if(path==='/api/fin-terminal/drafts')return send(res,200,{draft:await finTerminal.save(actor,body)});

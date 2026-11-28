@@ -141,6 +141,15 @@ const WALLET_ADDRESS=`SELECT d.public_address FROM avis_core_v2.user_deposit_add
 const HAS_ADDRESS=` AND EXISTS(SELECT 1 FROM avis_core_v2.user_deposit_addresses d LEFT JOIN avis_core_v2.crypto_asset_wallet_routes r
  ON r.address_id=d.address_id AND r.user_id=d.user_id AND r.network=d.network AND r.asset_id=a.asset_id
  WHERE d.user_id=l.user_id AND d.network=l.network AND (r.address_id IS NOT NULL OR d.is_primary))`;
+// The "+" wallets page 1's FIAT Converter loads (the bank owner: "the wallet selector ... calls the wallets they are in the crypto
+// section wallet scroller operative"): the Payment & exchange wallets in one of the converter's assets, activated with a receiving
+// address on their chain - never AG or AGi.
+const OPERATIVE=WALLETS+' AND l.currency_code=ANY($1::text[])'+HAS_ADDRESS;
+// An amount as the message writes one: above zero, at most five decimals - the bank fee, and the amount a rate is quoted for.
+const AMOUNT=/^[0-9]{1,13}(\.[0-9]{1,5})?$/;
+const amountOf=value=>typeof value==='string'&&AMOUNT.test(value)&&/[1-9]/.test(value);
+// A fee kept as a number is shown as money: two decimals at least, more where it has them.
+const feeText=value=>{if(value==null)return '';const [whole,fraction='']=String(value).split('.');return whole+'.'+fraction.replace(/0+$/,'').padEnd(2,'0');};
 // An outgoing message transacted (FinPeers.transact) is a wire, a Debit sent is a debit: what became of it is their status. A Debit
 // is closed once it is sent.
 const DRAFT_ROWS=`SELECT d.*,c.asset AS converted_asset,c.quantity::text AS converted_quantity,c.tx_hash AS converted_hash,w.status AS wire_status,b.status AS debit_status
@@ -154,7 +163,7 @@ const draftOf=(row,full=true)=>({draftId:row.draft_id,revision:row.revision,uetr
  conversion:row.converted_asset?{asset:row.converted_asset,quantity:four(row.converted_quantity),txHash:row.converted_hash}:null,
  transacted:row.wire_status||row.debit_status||null,
  ...(full?{form:row.form,xml:row.message,selection:Object.fromEntries(Object.entries(CHOICES).map(([name,column])=>[name,row[column]??null])),
-  registeredAt:row.registered_at==null?null:new Date(row.registered_at).toISOString()}:{})});
+  bankFee:feeText(row.bank_fee),registeredAt:row.registered_at==null?null:new Date(row.registered_at).toISOString()}:{})});
 
 export class FinTerminal{
  constructor(pool,{pricing=new MetaMaskPricing()}={}){this.pool=pool;this.pricing=pricing;}
@@ -210,13 +219,29 @@ export class FinTerminal{
    if(!row||!incoming&&!fitsSettlement(row))fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
    if(!incoming&&(form.settlement!=='INDA'||form.settlementAccount!==settlementNumber(row.iban_or_account_no)))fault('FIN_NOSTRO_MISMATCH','nostroAccountId',409);
   }
-  if(selection.tokenWalletId&&!(await db.query(WALLETS+' AND l.account_id=$1',[selection.tokenWalletId])).rows.length)fault('FIN_TOKEN_WALLET','tokenWalletId',409);
+  if(selection.tokenWalletId&&!(await db.query(OPERATIVE+' AND l.account_id=$2',[CONVERT_ASSETS,selection.tokenWalletId])).rows.length)fault('FIN_TOKEN_WALLET','tokenWalletId',409);
+ }
+ // The bank fee typed on page 1 (the bank owner: "bank fees is taken from the amount"): for an incoming transfer or a Debit that is
+ // not converted - "If the conversion is pressed then we will take the fees in the Crypto section" - below the transfer's amount.
+ #fee(input,form,direction,selection){
+  if(input===undefined||input===null||input==='')return null;
+  if(!amountOf(input))fault('INVALID_FIELD','bankFee');
+  if(direction==='OUTGOING'||selection.tokenWalletId||amountOf(form.amount)&&money(input)>=money(form.amount))fault('FIN_BANK_FEE','bankFee',409);
+  return input;
+ }
+ // The bank's Treasury account in the transfer's currency, where its fees are booked (the bank owner: "booked into the treasury
+ // wallets or account").
+ #treasury(db,currency){return new SovereignCore(null).system(db,'TREASURY',currency,'BANK_FEES','REVENUE');}
+ // The money arrived, booked: the chosen account takes it less the bank fee, the Treasury account the fee.
+ async #credited(db,accountId,amount,bankFee,currency){
+  if(!bankFee)return [{accountId,direction:'CREDIT',amount}];
+  return [{accountId,direction:'CREDIT',amount:decimal(money(amount)-money(bankFee))},{accountId:await this.#treasury(db,currency),direction:'CREDIT',amount:bankFee}];
  }
  async accounts(actor){
   this.#administrator(actor);
   const booking=(await this.pool.query(BOOKING+' ORDER BY a.currency_code,a.owner_type,b.abiq_iban',[RECEIVING_OWNERS])).rows;
   const nostro=(await this.pool.query(NOSTRO+' ORDER BY institution_name,currency_code,cash_account_id')).rows;
-  const wallets=(await this.pool.query(WALLETS+' ORDER BY u.full_name,l.currency_code,l.network,l.account_id LIMIT 500')).rows;
+  const wallets=(await this.pool.query(OPERATIVE+' ORDER BY u.full_name,l.currency_code,l.network,l.account_id LIMIT 500',[CONVERT_ASSETS])).rows;
   return {
    bookingAccounts:booking.map(row=>({accountId:row.account_id,type:row.owner_type==='COMMON_POOL'?'COMMON':'SUSPENSE',label:row.label,
     currency:row.currency_code,iban:row.abiq_iban,bic:row.abiq_bic,institution:row.institution_name})),
@@ -275,15 +300,15 @@ export class FinTerminal{
   if(row.registered_journal_id||row.sent)fault(row.direction==='INCOMING'?'FIN_DRAFT_REGISTERED':'FIN_TRANSACTED','draftId',409);
   if(row.revision!==revision)fault('FIN_DRAFT_CHANGED','draftId',409);
  }
- async #keep(db,actor,draftId,{form,xml,valid,selection,direction},journalId=null){
+ async #keep(db,actor,draftId,{form,xml,valid,selection,direction,bankFee=null},journalId=null){
   const values=[form.uetr,form.messageType,JSON.stringify(form),xml,valid,String(actor.id),selection.bookingAccountId,selection.nostroAccountId,
-   selection.tokenWalletId,direction,journalId,journalId&&new Date().toISOString(),journalId&&String(actor.id)];
+   selection.tokenWalletId,direction,journalId,journalId&&new Date().toISOString(),journalId&&String(actor.id),bankFee];
   if(draftId===null)return (await db.query(`INSERT INTO avis_core_v2.fin_terminal_drafts(uetr,message_type,form,message,schema_valid,created_by,updated_by,
-   booking_account_id,nostro_cash_account_id,token_wallet_account_id,direction,registered_journal_id,registered_at,registered_by,draft_id,revision)
-   VALUES($1,$2,$3::jsonb,$4,$5,$6,$6,$7,$8,$9,$10,$11,$12::timestamptz,$13,$14,1) RETURNING *`,[...values,randomUUID()])).rows[0];
+   booking_account_id,nostro_cash_account_id,token_wallet_account_id,direction,registered_journal_id,registered_at,registered_by,bank_fee,draft_id,revision)
+   VALUES($1,$2,$3::jsonb,$4,$5,$6,$6,$7,$8,$9,$10,$11,$12::timestamptz,$13,$14::numeric,$15,1) RETURNING *`,[...values,randomUUID()])).rows[0];
   return (await db.query(`UPDATE avis_core_v2.fin_terminal_drafts SET uetr=$1,message_type=$2,form=$3::jsonb,message=$4,schema_valid=$5,updated_by=$6,
    booking_account_id=$7,nostro_cash_account_id=$8,token_wallet_account_id=$9,direction=$10,registered_journal_id=$11,registered_at=$12::timestamptz,
-   registered_by=$13,revision=revision+1,updated_at=now() WHERE draft_id=$14 RETURNING *`,[...values,draftId])).rows[0];
+   registered_by=$13,bank_fee=$14::numeric,revision=revision+1,updated_at=now() WHERE draft_id=$15 RETURNING *`,[...values,draftId])).rows[0];
  }
  // A draft keeps the form as written and its message as built from it - also unfinished; whether that message passed both
  // schemas is kept with it. Saved again, it needs the revision it was opened at.
@@ -293,12 +318,12 @@ export class FinTerminal{
   this.#typed(form,direction);
   if(draftId!==null&&!UETR.test(String(draftId)))fault('FIN_DRAFT_NOT_FOUND','draftId',404);
   if(draftId!==null&&!Number.isInteger(body?.revision))fault('INVALID_FIELD','revision');
-  const valid=(await validateFinMessage(xml,form.messageType)).valid&&!fieldProblems(form).length;
+  const valid=(await validateFinMessage(xml,form.messageType)).valid&&!fieldProblems(form).length,bankFee=this.#fee(body?.bankFee,form,direction,selection);
   return this.#transaction(async client=>{
    if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
    await this.#checkSelection(client,selection,form,direction);
    if(draftId!==null)await this.#opened(client,draftId,body.revision);
-   return draftOf(await this.#keep(client,actor,draftId,{form,xml,valid,selection,direction}));
+   return draftOf(await this.#keep(client,actor,draftId,{form,xml,valid,selection,direction,bankFee}));
   });
  }
  // The specification v3's mode: ROBOTIC STP, an incoming credit taken and booked by the bank at once, or MANUAL INTERVENTION,
@@ -334,6 +359,7 @@ export class FinTerminal{
   if(!selection.bookingAccountId)fault('FIN_BOOKING_ACCOUNT','bookingAccountId',409);
   if(!selection.nostroAccountId)fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
   if(fieldProblems(form).length||!(await validateFinMessage(xml)).valid)fault('FIN_INCOMING_INVALID','xml');
+  const bankFee=this.#fee(body?.bankFee,form,'INCOMING',selection);
   // A "+" wallet chosen, the converter is active: the transfer is converted into it at the live rate, and nothing arrives at the
   // NOSTRO (the bank owner: "when the crypto converter is active then nothing will arrive at the NOSTRO instead will be the wallet
   // loaded").
@@ -341,7 +367,7 @@ export class FinTerminal{
    const wallet=await this.#wallet(this.pool,selection.tokenWalletId),quote=await this.#rate(form.currency,wallet);
    return this.#transaction(async client=>draftOf((await this.#convert(client,actor,{form,xml,selection,wallet,quote,mode:'MANUAL',draftId,revision:body.revision})).row));
   }
-  return this.#transaction(async client=>draftOf(await this.#book(client,actor,{form,xml,selection,draftId,revision:body.revision})));
+  return this.#transaction(async client=>draftOf(await this.#book(client,actor,{form,xml,selection,draftId,revision:body.revision,bankFee})));
  }
  // A wallet the converter loads: a "+" wallet in one of its assets, with the address its tokens are received at on its chain - none,
  // no conversion (review finding).
@@ -395,15 +421,28 @@ export class FinTerminal{
   if(!/[1-9]/.test(convertedQuantity(form.amount,quote.rate)))fault('FIN_CONVERT_QUANTITY','amount',409);
   return {wallet,quote};
  }
+ // Page 1's second row under the accounts (the bank owner: "install a second row below the selected accounts the live change rate"):
+ // the live rate the chosen "+" wallet is loaded at for one unit of the message's currency and, with the amount written, the tokens
+ // the transfer converts to - as it would be converted now.
+ async quote(actor,input){
+  this.#administrator(actor);
+  const {tokenWalletId}=this.#selection({tokenWalletId:input?.tokenWalletId});
+  if(!tokenWalletId)fault('FIN_TOKEN_WALLET','tokenWalletId',409);
+  if(typeof input?.currency!=='string'||!/^[A-Z]{3}$/.test(input.currency))fault('INVALID_FIELD','currency');
+  const amount=input?.amount===undefined||input?.amount===null||input?.amount===''?null:amountOf(input.amount)?input.amount:fault('INVALID_FIELD','amount');
+  const wallet=await this.#wallet(this.pool,tokenWalletId),quote=await this.#rate(input.currency,wallet);
+  return {asset:wallet.currency_code,network:wallet.network,rate:quote.rate,source:quote.source,observedAt:quote.observedAt.toISOString(),
+   quantity:amount===null?null:convertedQuantity(amount,quote.rate)};
+ }
  // Sent, a Debit's message is kept for good as the draft it was written in, closed by its debit (src/fin-peer.mjs, transact): never
  // changed or sent again. Nothing is booked before the debtor's bank answered (bookDebit); the NOSTRO's ledger account is kept with it.
- async keepDebit(client,actor,{form,xml,selection,draftId,revision}){
+ async keepDebit(client,actor,{form,xml,selection,draftId,revision,bankFee=null}){
   if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
   await this.#checkSelection(client,selection,form,'DEBIT');
   if(draftId!==null)await this.#opened(client,draftId,revision);
   const nostro=await this.#nostroLedger(client,selection.nostroAccountId,form.currency);
   if(!nostro)fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
-  return {draftId:(await this.#keep(client,actor,draftId,{form,xml,valid:true,selection,direction:'DEBIT'})).draft_id,nostroLedger:nostro.account_id};
+  return {draftId:(await this.#keep(client,actor,draftId,{form,xml,valid:true,selection,direction:'DEBIT',bankFee})).draft_id,nostroLedger:nostro.account_id};
  }
  // Settled by the debtor's bank, a Debit's money is the bank's - the bank owner: "A transaction does either book the message monies
  // to our common account and the physical clearing to our NOSTRO selected or convert the monies by all connected gateways into a
@@ -420,22 +459,22 @@ export class FinTerminal{
    const tokens=await this.#tokens(client,actor,{key:'fin-debit:'+debit.uetr,event:'FIN_DEBIT_CONVERTED',form,wallet,quote});
    journalId=tokens.journalId;await this.#converted(client,actor,{form,draftId:debit.draft_id,wallet,quote,...tokens,mode:'MANUAL'});
   }else journalId=await new SovereignCore(null).post(client,actor,'fin-debit:'+debit.uetr,'FIN_DEBIT_BOOKED',form.businessMessageId,
-   [{accountId:debit.nostro_ledger_account_id,direction:'DEBIT',amount:debit.amount},{accountId:debit.booking_account_id,direction:'CREDIT',amount:debit.amount}]);
+   [{accountId:debit.nostro_ledger_account_id,direction:'DEBIT',amount:debit.amount},...await this.#credited(client,debit.booking_account_id,debit.amount,debit.bank_fee,debit.currency_code)]);
   await client.query('UPDATE avis_core_v2.fin_terminal_drafts SET registered_journal_id=$2,registered_at=now(),registered_by=$3,revision=revision+1,updated_at=now() WHERE draft_id=$1',
    [debit.draft_id,journalId,String(actor.id)]);
   await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',
    [String(actor.id),debit.token_wallet_account_id?'FIN_DEBIT_CONVERTED':'FIN_DEBIT_BOOKED',journalId]);
   return journalId;
  }
- async #book(client,actor,{form,xml,selection,draftId=null,revision}){
+ async #book(client,actor,{form,xml,selection,draftId=null,revision,bankFee=null}){
   if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
   await this.#checkSelection(client,selection,form,'INCOMING');
   if(draftId!==null)await this.#opened(client,draftId,revision);
   const nostro=await this.#nostroLedger(client,selection.nostroAccountId,form.currency);
   if(!nostro)fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
   const journalId=await new SovereignCore(null).post(client,actor,'fin-incoming:'+form.uetr,'FIN_INCOMING_BOOKED',form.businessMessageId,
-   [{accountId:nostro.account_id,direction:'DEBIT',amount:form.amount},{accountId:selection.bookingAccountId,direction:'CREDIT',amount:form.amount}]);
-  const row=await this.#keep(client,actor,draftId,{form,xml,valid:true,selection,direction:'INCOMING'},journalId);
+   [{accountId:nostro.account_id,direction:'DEBIT',amount:form.amount},...await this.#credited(client,selection.bookingAccountId,form.amount,bankFee,form.currency)]);
+  const row=await this.#keep(client,actor,draftId,{form,xml,valid:true,selection,direction:'INCOMING',bankFee},journalId);
   await client.query('INSERT INTO avis_core_v2.operation_audit(actor_id,operation,resource_id) VALUES($1,$2,$3)',[String(actor.id),'FIN_INCOMING_BOOKED',journalId]);
   return row;
  }
@@ -496,8 +535,9 @@ export class FinTerminal{
    if(!form.creditorIban)fault('FIN_WIRE_ACCOUNT','creditorIban');
   }
   if(fieldProblems(form).length||!(await validateFinMessage(xml,form.messageType)).valid)fault('FIN_TRANSACT_INVALID','xml');
-  // An outgoing message is paid from the account; a Debit's money may be converted into the wallet chosen.
-  return {form,xml,direction,selection:direction==='DEBIT'?selection:{...selection,tokenWalletId:null},draftId,revision:draftId===null?null:body.revision};
+  // An outgoing message is paid from the account; a Debit's money may be converted into the wallet chosen, or booked less the bank fee.
+  const chosen=direction==='DEBIT'?selection:{...selection,tokenWalletId:null};
+  return {form,xml,direction,selection:chosen,draftId,revision:draftId===null?null:body.revision,bankFee:this.#fee(body?.bankFee,form,direction,chosen)};
  }
  // Transacted, the message is kept for good as the draft it was written in - closed, never changed or sent again: the bank owner,
  // "Multiple pressing are not generating duplicated a transaction" - and its money is reserved as a Cash Wire's is.
