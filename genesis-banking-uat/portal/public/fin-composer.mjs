@@ -11,15 +11,20 @@ const CHOICES=['bookingAccountId','nostroAccountId','tokenWalletId'];
 const noChoice=()=>Object.fromEntries(CHOICES.map(name=>[name,'']));
 const same=(one,two)=>{const a=normalizeForm(one),b=normalizeForm(two);return FIELDS.every(field=>a[field]===b[field]);};
 
-export function createFinComposer({root=document,request,view=root.defaultView||globalThis}){
+// onTransacted: a message transacted shows at once in the ledgers and in the Peer Server's stream (fin-terminal.mjs).
+export function createFinComposer({root=document,request,view=root.defaultView||globalThis,onTransacted=()=>{},onRefused=()=>{}}){
  const screen=root.querySelector('[data-fin-composer]');if(!screen)return null;
  const $=selector=>screen.querySelector(selector),inputs=[...screen.querySelectorAll('[data-fin-field]')];
  const xml=$('[data-fin-xml]'),verdict=$('[data-fin-xsd]'),problems=$('[data-fin-errors]'),state=$('[data-fin-draft-state]'),list=$('[data-fin-drafts]');
  const controls=[...screen.querySelectorAll('.fin-actions button,.fin-actions select,[data-fin-new-uetr]')],choices=[...screen.querySelectorAll('[data-fin-choice]')];
  const turn=$('[data-fin-direction]'),register=$('[data-fin-register]'),keep=$('[data-fin-save]');
+ const transact=$('[data-fin-transact]'),pinBox=$('[data-fin-transact-pins]'),pins=[...screen.querySelectorAll('[data-fin-transact-pin]')];
  let form=blankForm(),draft=null,dirty=false,edits=0,broken=null,pause=null,busy=false,refused=null,selection=noChoice();
  // The bank owner: "We now register an incoming transfer so AVISPay PLC is the receiver".
  let direction='OUTGOING',registered=false,converted=null;
+ // Transact (the bank owner: "When the transaction is filled, then add a button for press Transact for the transaction executed"):
+ // the message as it passed Validate XML (passed, its edit), the Peer Server chosen above it, 4-Eyes, and what became of it.
+ let passed=-1,peer=null,fourEyes=false,transacted=null;
  let accounts={bookingAccounts:[],nostroAccounts:[],tokenWallets:[]};
 
  // A choice the XML holds that the list does not offer is shown as a choice of its own: the form shows what the XML says.
@@ -43,13 +48,19 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   for(const input of inputs)if(named.has(input.dataset.finField))input.setAttribute('aria-invalid','true');else input.removeAttribute('aria-invalid');
  }
  function paintState(){
-  state.textContent=registered?(converted?'Incoming converted · ACSC · '+converted.quantity+' '+converted.asset:'Incoming booked · ACSC'):
+  state.textContent=registered?(direction==='OUTGOING'?'Transacted · '+(transacted||'SENDING'):converted?'Incoming converted · ACSC · '+converted.quantity+' '+converted.asset:'Incoming booked · ACSC'):
    draft?(dirty?'Draft · changes not saved':'Draft saved · revision '+draft.revision):(dirty?'New message · not saved':'New message');
   list.value=draft?.draftId||'';
  }
- // Registered, an incoming transfer is not saved or registered again.
- function paintDirection(){turn.value=direction;turn.disabled=registered;register.hidden=direction!=='INCOMING'||registered;keep.hidden=registered;}
- function changed(){edits++;dirty=true;refused=null;show('unchecked','XSD: not checked');paintState();}
+ // Transact works an outgoing message that passed Validate XML as it stands, with its Common or Suspense account and its NOSTRO
+ // chosen, to a Peer Server chosen; PIN 1 and PIN 2 while 4-Eyes is on.
+ function paintTransact(){
+  transact.hidden=direction!=='OUTGOING'||registered;pinBox.hidden=transact.hidden||!fourEyes;
+  transact.disabled=busy||transact.hidden||passed!==edits||!!broken||!selection.bookingAccountId||!selection.nostroAccountId||!peer;
+ }
+ // Registered, an incoming transfer is not saved or registered again; transacted, an outgoing message is not saved or sent again.
+ function paintDirection(){turn.value=direction;turn.disabled=registered;register.hidden=direction!=='INCOMING'||registered;keep.hidden=registered;paintTransact();}
+ function changed(){edits++;dirty=true;refused=null;show('unchecked','XSD: not checked');paintState();paintTransact();}
 
  // The Common and Suspense accounts and the NOSTRO accounts in the message's currency; the "+" wallets, never AG or AGi
  // (the server lists them so). A choice a draft keeps that the lists no longer hold is shown as not available.
@@ -161,28 +172,31 @@ export function createFinComposer({root=document,request,view=root.defaultView||
  async function listDrafts(){
   let rows;try{rows=(await request('GET','/api/fin-terminal/drafts'))?.rows;}catch{return;}
   if(!Array.isArray(rows))rows=[];
-  // An incoming transfer is listed with its sender, an outgoing one with its creditor.
+  // An incoming transfer is listed with its sender, an outgoing one with its creditor; a transacted one with what became of it.
   const incoming=row=>row.direction==='INCOMING';
-  list.replaceChildren(choice('','New message'),...rows.map(row=>choice(row.draftId,[row.schemaValid?'XSD ✓':'XSD ✗',...(incoming(row)?['·',row.registered?(row.conversion?'Incoming converted':'Incoming booked'):'Incoming']:[]),
+  const status=row=>incoming(row)?['·',row.registered?(row.conversion?'Incoming converted':'Incoming booked'):'Incoming']:row.registered?['·','Transacted',...(row.transacted?[row.transacted]:[])]:[];
+  list.replaceChildren(choice('','New message'),...rows.map(row=>choice(row.draftId,[row.schemaValid?'XSD ✓':'XSD ✗',...status(row),
    '·',row.amount||'—',row.currency,'·',(incoming(row)?row.debtorName:row.creditorName)||'—','·',when(row.updatedAt)].join(' '))));
   list.value=draft?.draftId||'';
  }
- // One action at a time; a refusal is shown with its reason and its field.
- async function act(work){
-  if(busy)return false;busy=true;for(const control of controls)control.disabled=true;
+ // One action at a time; a refusal is shown with its reason and its field. The button pressed shows it is pressed until its action
+ // is done (the bank owner: "all buttons must be interactive, showing that they are pressed").
+ async function act(work,pressed=null){
+  if(busy)return false;busy=true;for(const control of controls)control.disabled=true;pressed?.setAttribute('aria-busy','true');
   try{return await work();}
   catch(error){
    show('error',error?.message||'This action could not be completed.',[],error?.field);
    if(['FIN_DRAFT_CHANGED','FIN_DRAFT_NOT_FOUND'].includes(error?.code))void listDrafts();
    return false;
   }
-  finally{busy=false;for(const control of controls)control.disabled=false;}
+  finally{busy=false;for(const control of controls)control.disabled=false;pressed?.removeAttribute('aria-busy');paintTransact();}
  }
  async function check(){
   flush();const at=edits;
   const result=await request('POST','/api/fin-terminal/validate',{form,xml:xml.value,...(draft?{draftId:draft.draftId}:{})});
   // Changed while it was checked, the message shown is not the one checked: its verdict is not shown (review finding).
   if(edits!==at)return;
+  passed=result.valid?at:-1;
   show(result.valid?'passed':'failed',result.valid?'XSD: PASSED':'XSD: FAILED',Array.isArray(result.errors)?result.errors:[]);
  }
  // A draft keeps the form; saved again it carries the revision it was opened at. What is written while it saves stays.
@@ -204,16 +218,30 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   if(edits===at){form=whole(kept.form);selection=chosen(kept.selection);dirty=false;paint();paintChoices();xml.value=kept.xml;show('passed','XSD: PASSED');}
   await listDrafts();paintState();paintDirection();
  }
+ // Transacted, the message is kept as the bank has it and closed: what was written meanwhile is shown, not kept. Pressed again, it
+ // is refused (the bank owner: "Multiple pressing are not generating duplicated a transaction"). The PINs leave the page at once.
+ async function transactMessage(){
+  flush();
+  if(broken)throw Object.assign(new Error('XML: '+broken),{code:'FIN_MESSAGE_INVALID'});
+  const body={form,selection,direction,...(draft?{draftId:draft.draftId,revision:draft.revision}:{}),...(fourEyes?{pin1:pins[0].value,pin2:pins[1].value}:{})};
+  for(const input of pins)input.value='';
+  const at=edits,to=peer;let result;
+  try{result=await request('POST','/api/fin-terminal/peers/'+encodeURIComponent(to)+'/transact',body);}
+  catch(error){if(['FIN_PIN','FIN_PIN_MISSING'].includes(error?.code))onRefused();throw error;}
+  const kept=result.draft;draft={draftId:kept.draftId,revision:kept.revision};registered=kept.registered===true;transacted=kept.transacted||result.wire?.status||null;
+  if(edits===at){form=whole(kept.form);selection=chosen(kept.selection);dirty=false;paint();paintChoices();xml.value=kept.xml;show('passed','XSD: PASSED');}
+  await listDrafts();paintState();paintDirection();onTransacted(to,result);
+ }
  const chosen=kept=>Object.fromEntries(CHOICES.map(name=>[name,typeof kept?.[name]==='string'?kept[name]:'']));
  function start(){
   form=blankForm(new Date());selection=noChoice();draft=null;dirty=false;broken=null;refused=null;direction='OUTGOING';registered=false;converted=null;
-  paint();paintChoices();write();show('unchecked','XSD: not checked');paintState();paintDirection();
+  passed=-1;transacted=null;paint();paintChoices();write();show('unchecked','XSD: not checked');paintState();paintDirection();
  }
  async function open(draftId){
   const {draft:loaded}=await request('GET','/api/fin-terminal/drafts/'+encodeURIComponent(draftId));
   form=whole(loaded.form);selection=chosen(loaded.selection);draft={draftId:loaded.draftId,revision:loaded.revision};dirty=false;broken=null;refused=null;
   direction=loaded.direction==='INCOMING'?'INCOMING':'OUTGOING';registered=loaded.registered===true;converted=loaded.conversion||null;
-  paint();paintChoices();xml.value=loaded.xml;paintState();paintDirection();await check();
+  passed=-1;transacted=loaded.transacted||null;paint();paintChoices();xml.value=loaded.xml;paintState();paintDirection();await check();
  }
  async function listAccounts(){
   let listed;try{listed=(await request('GET','/api/fin-terminal/accounts'))?.accounts;}catch{return;}
@@ -228,11 +256,20 @@ export function createFinComposer({root=document,request,view=root.defaultView||
   if(target)await open(target);else start();
  }
  list.addEventListener('change',()=>{const target=list.value;list.value=draft?.draftId||'';void act(()=>go(target));});
- $('[data-fin-new]').addEventListener('click',()=>void act(()=>go('')));
+ const fresh=$('[data-fin-new]'),validate=$('[data-fin-validate]');
+ fresh.addEventListener('click',()=>void act(()=>go(''),fresh));
  $('[data-fin-new-uetr]').addEventListener('click',()=>{form={...form,uetr:newUetr()};paint();broken=null;write();changed();});
- $('[data-fin-save]').addEventListener('click',()=>void act(async()=>{await save();await check();}));
- $('[data-fin-validate]').addEventListener('click',()=>void act(check));
- register.addEventListener('click',()=>void act(registerIncoming));
+ keep.addEventListener('click',()=>void act(async()=>{await save();await check();},keep));
+ validate.addEventListener('click',()=>void act(check,validate));
+ register.addEventListener('click',()=>void act(registerIncoming,register));
+ transact.addEventListener('click',()=>{if(!transact.disabled)void act(transactMessage,transact);});
 
- return {start(){start();void listDrafts();void listAccounts();},listDrafts};
+ return {start(){start();void listDrafts();void listAccounts();},listDrafts,
+  // The Peer Server chosen above the composer (fin-peer.mjs), and the 4-Eyes switch with the PINs' holders (fin-access.mjs).
+  peer(chosen){peer=chosen?.profileId||null;paintTransact();},
+  access(state){
+   fourEyes=state?.fourEyes?.on===true;
+   for(const [index,input] of pins.entries()){const holder=state?.pins?.[index]?.holder;input.placeholder='PIN '+(index+1)+(holder?' · '+holder:'');}
+   paintTransact();
+  }};
 }

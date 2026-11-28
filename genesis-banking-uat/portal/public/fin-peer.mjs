@@ -70,7 +70,8 @@ export function streamLine(message){
 const suggestion=(event,peer)=>!peer?'':{INIT:'HELLO '+peer.name+' // SESSION INIT '+peer.localBic+' -> '+peer.peerBic+' // READY FOR MANUAL PACS.008 DISPATCH',
  HEARTBEAT:'HEARTBEAT '+peer.localBic+' -> '+peer.peerBic,END:'END OF SESSION '+peer.localBic+' -> '+peer.peerBic}[event]||'';
 
-export function createFinPeer({root=document,request,view=root.defaultView||globalThis,onRegistered=()=>{}}){
+// onChosen: the Peer Server chosen, whenever it changes - Screen 1's Transact goes to it (fin-composer.mjs).
+export function createFinPeer({root=document,request,view=root.defaultView||globalThis,onRegistered=()=>{},onChosen=()=>{}}){
  const panel=root.querySelector('[data-fin-peer]');if(!panel)return null;
  const $=selector=>panel.querySelector(selector);
  const server=$('[data-fin-peer-server]'),node=$('[data-fin-peer-node]'),text=$('[data-fin-peer-text]'),event=$('[data-fin-peer-event]');
@@ -107,7 +108,10 @@ export function createFinPeer({root=document,request,view=root.defaultView||glob
   let result;try{result=await request('GET','/api/fin-terminal/peers/'+encodeURIComponent(profileId)+'/messages');}catch{return;}
   if(at===looks&&profileId===server.value)take(result);
  }
- function paintPeers(){paintPeerChoice(server,peers,peerLabel);node.textContent=chosen()?.name||'—';paintSend();paintAddresses();}
+ function paintPeers(){paintPeerChoice(server,peers,peerLabel);node.textContent=chosen()?.name||'—';paintSend();paintAddresses();onChosen(chosen());}
+ // A button pressed shows it is pressed until what it started is done (the bank owner: "all buttons must be interactive, showing
+ // that they are pressed"; fin-terminal.css).
+ async function pressing(pressed,work){pressed.setAttribute('aria-busy','true');try{return await work();}finally{pressed.removeAttribute('aria-busy');}}
  // Nothing goes out while the listening port is open (the bank owner: "not both working at the same time").
  const listening=()=>listener?.open===true;
  function paintSend(){button.disabled=busy||!peers.length||listening();}
@@ -128,10 +132,10 @@ export function createFinPeer({root=document,request,view=root.defaultView||glob
  }
  async function listen(){
   if(listenBusy||!listener)return;
-  listenBusy=true;paintListener();say('');
+  listenBusy=true;paintListener();say('');listenButton.setAttribute('aria-busy','true');
   try{const status=await request('POST','/api/fin-terminal/listener',listening()?{open:false}:{open:true,minutes:Number(listenTime.value)});listenLooks++;takeListener(status);}
   catch(error){say(error?.message||'This action could not be completed.');}
-  finally{listenBusy=false;paintListener();}
+  finally{listenBusy=false;listenButton.removeAttribute('aria-busy');paintListener();}
  }
  // The chosen peer's whitelisted IP addresses: added and taken off here.
  function paintAddresses(){
@@ -139,7 +143,7 @@ export function createFinPeer({root=document,request,view=root.defaultView||glob
   addresses.replaceChildren(...list.map(address=>{
    const item=root.createElement('li'),shown=root.createElement('span'),remove=root.createElement('button');
    shown.className='fin-code';shown.textContent=address;remove.type='button';remove.textContent='×';remove.title='Remove';remove.setAttribute('aria-label','Remove '+address);
-   remove.addEventListener('click',()=>void whitelist(address,true));item.append(shown,remove);return item;
+   remove.addEventListener('click',()=>void pressing(remove,()=>whitelist(address,true)));item.append(shown,remove);return item;
   }));
   addressInput.disabled=addressButton.disabled=!peer;
  }
@@ -154,10 +158,10 @@ export function createFinPeer({root=document,request,view=root.defaultView||glob
  }
  async function send(){
   const profileId=server.value;if(busy||!profileId)return;
-  busy=true;button.disabled=true;say('');
+  busy=true;button.disabled=true;say('');button.setAttribute('aria-busy','true');
   try{const result=await request('POST','/api/fin-terminal/peers/'+encodeURIComponent(profileId)+'/messages',{event:event.value,text:text.value});looks++;if(profileId===server.value)take(result);}
   catch(error){say(error?.message||'This action could not be completed.');}
-  finally{busy=false;paintSend();}
+  finally{busy=false;button.removeAttribute('aria-busy');paintSend();}
  }
  // The uptime counts on each second while the session is ready; the stream is looked at again while the screen is shown.
  function tick(){
@@ -165,7 +169,7 @@ export function createFinPeer({root=document,request,view=root.defaultView||glob
   if(ticks%LOOK===0&&!busy&&!panel.closest('[hidden]')&&root.visibilityState!=='hidden'){void look();if(!listenBusy)void lookListener();}
  }
  // Another peer: its own stream and link only, never the former peer's while its own are on their way.
- function chose(){node.textContent=chosen()?.name||'—';say('');suggest();paintAddresses();current=null;paintStream([]);paintLink();void look();}
+ function chose(){node.textContent=chosen()?.name||'—';say('');suggest();paintAddresses();current=null;paintStream([]);paintLink();onChosen(chosen());void look();}
  server.addEventListener('change',chose);
  // The register of a peer server, in its popup (the bank owner: "+IP register ... The register is in a popup with IP and Bank name
  // and login details ... the data gets stored in a drop down for reuse"): its bank, type, address, NOSTRO and login - a certificate
@@ -195,19 +199,19 @@ export function createFinPeer({root=document,request,view=root.defaultView||glob
    const value=name=>field(name).value,kind=value('kind');
    const body={name:value('name'),protocol:value('protocol'),address:value('address'),cashAccountId:value('cashAccountId'),
     login:kind==='password'?{kind,user:value('user'),password:value('password'),ca:value('ca')}:{kind,ca:value('ca'),cert:value('cert'),key:value('key'),secret:value('secret')}};
-   save.disabled=true;tell('');
+   save.disabled=true;save.setAttribute('aria-busy','true');tell('');
    try{
     const result=await request('POST','/api/fin-terminal/peers',body);
     if(Array.isArray(result?.peers))peers=result.peers;
     dialog.close();paintPeers();server.value=result?.profileId||server.value;chose();onRegistered(peers);
    }catch(error){tell(error?.message||'This action could not be completed.',{login:'kind'}[error?.field]||error?.field);}
-   finally{save.disabled=false;}
+   finally{save.disabled=false;save.removeAttribute('aria-busy');}
   });
  }
  event.addEventListener('change',suggest);
  button.addEventListener('click',()=>void send());
  listenButton.addEventListener('click',()=>void listen());
- addressButton.addEventListener('click',()=>void whitelist(addressInput.value));
+ addressButton.addEventListener('click',()=>void pressing(addressButton,()=>whitelist(addressInput.value)));
  addressInput.addEventListener('keydown',keyed=>{if(keyed.key==='Enter'){keyed.preventDefault();void whitelist(addressInput.value);}});
  async function start(){
   let listed;try{listed=(await request('GET','/api/fin-terminal/peers'))?.peers;}catch{listed=null;}

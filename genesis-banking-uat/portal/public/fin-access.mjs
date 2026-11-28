@@ -37,19 +37,21 @@ export function createFinAccess({root=document,request,view=root.defaultView||gl
  }
  function say(text){if(problem){problem.textContent=text||'';problem.hidden=!text;}}
  async function refresh(){let data;try{data=await request('GET','/api/fin-terminal/access');}catch{return;}paint(data);}
- function save(path,body){
-  busy=true;say('');
+ // The button pressed shows it is pressed until the bank answered (the bank owner: "all buttons must be interactive, showing that
+ // they are pressed").
+ function save(path,body,pressed){
+  busy=true;say('');pressed?.setAttribute('aria-busy','true');
   return request('POST',path,body).then(data=>{busy=false;root.activeElement?.blur?.();paint(data);})
-   .catch(error=>{busy=false;say(error?.message||'Not saved.');void refresh();});
+   .catch(error=>{busy=false;say(error?.message||'Not saved.');void refresh();}).finally(()=>pressed?.removeAttribute('aria-busy'));
  }
  pins.addEventListener('submit',event=>{
   const form=event.target.closest?.('form[data-fin-pin]');if(!form)return;event.preventDefault();
   const pin=form.querySelector('[data-pin]')?.value||'',current=form.querySelector('[data-current]')?.value;
   // The PINs leave the page at once: never kept in its fields.
   for(const input of form.querySelectorAll('input'))input.value='';
-  void save('/api/fin-terminal/pins',{slot:Number(form.dataset.finPin),pin,...(current===undefined?{}:{currentPin:current})});
+  void save('/api/fin-terminal/pins',{slot:Number(form.dataset.finPin),pin,...(current===undefined?{}:{currentPin:current})},form.querySelector('button'));
  });
- fourEyes.addEventListener('click',()=>{if(!fourEyes.disabled)void save('/api/fin-terminal/four-eyes',{on:fourEyes.dataset.state!=='ON'});});
+ fourEyes.addEventListener('click',()=>{if(!fourEyes.disabled)void save('/api/fin-terminal/four-eyes',{on:fourEyes.dataset.state!=='ON'},fourEyes);});
  // The bank owner: "the header referencing PIN make it in a klap menu, with default closed" - the PINs fold out under their menu
  // only while it is open; the terminal always opens with it closed.
  pinsOpen.addEventListener('click',()=>{const open=pinsOpen.getAttribute('aria-expanded')!=='true';pinsOpen.setAttribute('aria-expanded',String(open));pins.hidden=!open;});

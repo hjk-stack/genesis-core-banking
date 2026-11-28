@@ -137,13 +137,16 @@ const WALLET_ADDRESS=`SELECT d.public_address FROM avis_core_v2.user_deposit_add
 const HAS_ADDRESS=` AND EXISTS(SELECT 1 FROM avis_core_v2.user_deposit_addresses d LEFT JOIN avis_core_v2.crypto_asset_wallet_routes r
  ON r.address_id=d.address_id AND r.user_id=d.user_id AND r.network=d.network AND r.asset_id=a.asset_id
  WHERE d.user_id=l.user_id AND d.network=l.network AND (r.address_id IS NOT NULL OR d.is_primary))`;
-const DRAFT_ROWS=`SELECT d.*,c.asset AS converted_asset,c.quantity::text AS converted_quantity,c.tx_hash AS converted_hash
- FROM avis_core_v2.fin_terminal_drafts d LEFT JOIN avis_core_v2.fin_terminal_conversions c ON c.draft_id=d.draft_id`;
+// An outgoing message transacted (FinPeers.transact) is a wire: what became of it is the wire's status.
+const DRAFT_ROWS=`SELECT d.*,c.asset AS converted_asset,c.quantity::text AS converted_quantity,c.tx_hash AS converted_hash,w.status AS wire_status
+ FROM avis_core_v2.fin_terminal_drafts d LEFT JOIN avis_core_v2.fin_terminal_conversions c ON c.draft_id=d.draft_id
+ LEFT JOIN avis_core_v2.fin_terminal_wires w ON w.uetr=d.uetr AND d.direction='OUTGOING' AND d.registered_journal_id=w.reserve_journal_id`;
 
 const draftOf=(row,full=true)=>({draftId:row.draft_id,revision:row.revision,uetr:row.uetr,messageType:row.message_type,
  amount:row.form.amount,currency:row.form.currency,creditorName:row.form.creditorName,debtorName:row.form.debtorName,schemaValid:row.schema_valid,
  direction:row.direction,registered:row.registered_journal_id!=null,updatedAt:new Date(row.updated_at).toISOString(),updatedBy:row.updated_by,
  conversion:row.converted_asset?{asset:row.converted_asset,quantity:four(row.converted_quantity),txHash:row.converted_hash}:null,
+ transacted:row.wire_status||null,
  ...(full?{form:row.form,xml:row.message,selection:Object.fromEntries(Object.entries(CHOICES).map(([name,column])=>[name,row[column]??null])),
   registeredAt:row.registered_at==null?null:new Date(row.registered_at).toISOString()}:{})});
 
@@ -248,11 +251,12 @@ export class FinTerminal{
    throw error;
   }finally{client.release?.();}
  }
- // The draft as it was opened: saved meanwhile, it is opened again first; a registered incoming transfer is not changed any more.
+ // The draft as it was opened: saved meanwhile, it is opened again first; a registered incoming transfer, or a transacted
+ // outgoing message, is not changed any more.
  async #opened(db,draftId,revision){
-  const row=(await db.query('SELECT revision,registered_journal_id FROM avis_core_v2.fin_terminal_drafts WHERE draft_id=$1 FOR UPDATE',[draftId])).rows[0];
+  const row=(await db.query('SELECT revision,registered_journal_id,direction FROM avis_core_v2.fin_terminal_drafts WHERE draft_id=$1 FOR UPDATE',[draftId])).rows[0];
   if(!row)fault('FIN_DRAFT_NOT_FOUND','draftId',404);
-  if(row.registered_journal_id)fault('FIN_DRAFT_REGISTERED','draftId',409);
+  if(row.registered_journal_id)fault(row.direction==='OUTGOING'?'FIN_TRANSACTED':'FIN_DRAFT_REGISTERED','draftId',409);
   if(row.revision!==revision)fault('FIN_DRAFT_CHANGED','draftId',409);
  }
  async #keep(db,actor,draftId,{form,xml,valid,selection,direction},journalId=null){
@@ -399,6 +403,37 @@ export class FinTerminal{
  async reserveWire(client,actor,{form,bookingAccountId,nostroAccountId}){
   if(await this.#uetrTaken(client,form.uetr,null))fault('FIN_UETR_DUPLICATE','uetr',409);
   await this.#checkSelection(client,{bookingAccountId,nostroAccountId,tokenWalletId:null},form,'OUTGOING');
+  return this.#reserve(client,actor,{form,bookingAccountId,nostroAccountId});
+ }
+ // Screen 1's Transact (src/fin-peer.mjs, transact). The bank owner: "When the transaction is filled, then add a button for press
+ // Transact for the transaction executed" - an outgoing message as the composer wrote it, one that passes Validate XML, paid from
+ // the Common or Suspense account chosen and cleared through the NOSTRO chosen ("book the message monies to our common account and
+ // the physical clearing to our NOSTRO selected"). Checked here before anything is reserved or sent.
+ async transactable(actor,body){
+  this.#administrator(actor);
+  const form=this.#form(body?.form),selection=this.#selection(body?.selection),xml=buildFinMessage(form),draftId=body?.draftId??null;
+  if(this.#direction(body?.direction)!=='OUTGOING')fault('FIN_TRANSACT_DIRECTION','direction',409);
+  if(draftId!==null&&!UETR.test(String(draftId)))fault('FIN_DRAFT_NOT_FOUND','draftId',404);
+  if(draftId!==null&&!Number.isInteger(body?.revision))fault('INVALID_FIELD','revision');
+  if(!selection.bookingAccountId)fault('FIN_BOOKING_ACCOUNT','bookingAccountId',409);
+  if(!selection.nostroAccountId)fault('FIN_NOSTRO_ACCOUNT','nostroAccountId',409);
+  // A wire pays a beneficiary named, at their account, as the Cash Wire's (src/fin-peer.mjs, #wire).
+  if(!form.creditorName)fault('FIN_WIRE_BENEFICIARY','creditorName');
+  if(!form.creditorIban)fault('FIN_WIRE_ACCOUNT','creditorIban');
+  if(fieldProblems(form).length||!(await validateFinMessage(xml)).valid)fault('FIN_TRANSACT_INVALID','xml');
+  return {form,xml,selection:{...selection,tokenWalletId:null},draftId,revision:draftId===null?null:body.revision};
+ }
+ // Transacted, the message is kept for good as the draft it was written in - closed, never changed or sent again: the bank owner,
+ // "Multiple pressing are not generating duplicated a transaction" - and its money is reserved as a Cash Wire's is.
+ async reserveTransact(client,actor,{form,xml,selection,draftId,revision}){
+  if(await this.#uetrTaken(client,form.uetr,draftId))fault('FIN_UETR_DUPLICATE','uetr',409);
+  await this.#checkSelection(client,selection,form,'OUTGOING');
+  if(draftId!==null)await this.#opened(client,draftId,revision);
+  const reserved=await this.#reserve(client,actor,{form,bookingAccountId:selection.bookingAccountId,nostroAccountId:selection.nostroAccountId});
+  const row=await this.#keep(client,actor,draftId,{form,xml,valid:true,selection,direction:'OUTGOING'},reserved.journalId);
+  return {...reserved,draftId:row.draft_id};
+ }
+ async #reserve(client,actor,{form,bookingAccountId,nostroAccountId}){
   const nostro=await this.#nostroLedger(client,nostroAccountId,form.currency);
   if(!nostro)fault('FIN_WIRE_NOSTRO','profileId',409);
   const core=new SovereignCore(null),suspense=await core.system(client,'SUSPENSE_OUTBOUND',form.currency,WIRE_SUSPENSE);
